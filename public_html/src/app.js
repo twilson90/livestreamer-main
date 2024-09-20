@@ -1,0 +1,10896 @@
+import * as utils from "@hedgehog90/utils";
+import * as dom_utils from "@hedgehog90/utils/dom";
+import "@hedgehog90/utils/dom/style.css";
+import './jquery-global.js';
+import 'jquery-ui/dist/jquery-ui.js';
+import 'jquery-ui/dist/themes/base/jquery-ui.css';
+import '@fortawesome/fontawesome-free/js/all.js';
+
+import { Fancybox } from "@fancyapps/ui";
+import "@fancyapps/ui/dist/fancybox.css";
+import "nouislider/dist/nouislider.css";
+import noUiSlider from 'nouislider';
+import flvjs from 'flv.js';
+import Chart from 'chart.js/auto';
+import Hammer from 'hammerjs';
+import {Sortable, MultiDrag} from 'sortablejs';
+import "./app.scss";
+
+export {utils, dom_utils};
+
+Sortable.mount(new MultiDrag());
+
+export const UI = dom_utils.UI;
+
+// if (window.videojs) window.videojs.options.autoplay = true;
+// export const WS_MIN_WAIT = 1000;
+export const WS_MIN_WAIT = 0;
+
+export const MIN_VIDEO_BUFFER_TIME = 1000; // 1 second
+
+export const IMAGE_DURATION = 0.040;
+export const CROP_LIMIT = 0.4;
+export const IS_ELECTRON = /electron/i.test(navigator.userAgent);
+// console.log("IS_ELECTRON:", IS_ELECTRON);
+
+export const logs_max_length = 512;
+export const ZERO_DURATION = 60;
+export const VOLUME_STEP = 5;
+export const MAX_CLIP_SEGMENTS = 128;
+export const ELFINDER_USE_FILE_PROTOCOL = false;
+export const EMPTY_OBJECT = Object.freeze({});
+export const EMPTY_ARRAY = Object.freeze([]);
+export const ALL_XHRs = new Set();
+
+window.onbeforeunload = (e)=>{
+    if (ALL_XHRs.size) return `Uploads are in progress, leaving will abort the uploads.`;
+    // return "";
+};
+export const YES_OR_NO = [[false,"No"], [true,"Yes"]];
+
+export const ignore_logging_session_$ = new Set([
+    "time",
+    "player/time-pos",
+    "player/estimated-display-fps",
+    "player/estimated-vf-fps",
+    "player/output-frames",
+    "player/output-pts",
+]);
+
+export const UPLOAD_STATUS = { STARTED:1, FINISHED:2, CANCELED:3, ERROR:4 };
+export const PLAYLIST_VIEW = { LIST: "list", TIMELINE: "timeline" };
+export const PLAYLIST_MODE = { NORMAL: 0, MERGED: 1, DUAL_TRACK: 2 };
+
+// --------------------------------------------------------------------
+
+export var moving_average = (points, windowSize)=>{
+    const smoothedPoints = [];
+    for (let i = 0; i < points.length; i++) {
+        let sumX = 0;
+        let sumY = 0;
+        let count = 0;
+        // Calculate the average within the window
+        for (let j = Math.max(0, i - windowSize); j <= Math.min(points.length - 1, i + windowSize); j++) {
+            sumX += points[j].x;
+            sumY += points[j].y;
+            count++;
+        }
+        // Calculate the average point
+        const averageX = sumX / count;
+        const averageY = sumY / count;
+        // Push the average point to the smoothed points array
+        smoothedPoints.push({ x: averageX, y: averageY });
+    }
+    return smoothedPoints;
+}
+
+// --------------------------------------------------------------------
+
+UI.VALIDATORS = (()=>{
+    let media_type = function(type) {
+        var v = this.value;
+        if (!v) return true;
+        var mi = app.get_media_info(v);
+        if (!mi || !mi.exists) return "Media does not exist.";
+        if (type && mi && mi.streams && !mi.streams.find(s=>s.type === type)) return `No ${type} streams detected.`
+        return true;
+    };
+    return {
+        ...UI.VALIDATORS, 
+        media_exists: function() { return media_type.apply(this, []); },
+        media_video: function() { return media_type.apply(this, ["video"]); },
+        media_audio: function() { return media_type.apply(this, ["audio"]); },
+        media_subtitle: function() { return media_type.apply(this, ["subtitle"]); },
+    };
+})();
+
+export var windows = {};
+
+// returns selected file paths
+export var default_file_manager_options = {
+    files: false,
+    folders: false,
+    multiple: false,
+}
+export var mime_ext_map = {
+    "image": ["jpeg", "jpg", "png", "bmp", "webp", "tif", "tiff", "svg", "ico", "gif"],
+    "video": ["mp4", "mkv", "mov", "m4v", "avi", "mpeg", "ogv", "ts", "webm", "3gp", "3g2", "gif"],
+    "audio": ["mp3", "wav", "flac", "m4a", "aac", "oga", "opus", "weba", "3gp", "3g2"],
+}
+
+export var graph_colors = ['#e6194B', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#ffe119', '#f032e6', '#bfef45', '#fabed4', '#469990', '#dcbeff', '#9A6324', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#a9a9a9', '#ffffff', '#000000'];
+
+export var item_colors = {
+    "none":"",
+    "red":"#d76262",
+    "orange":"#fc8d62",
+    "yellow":"#ffd92f",
+    "green":"#a6d854",
+    "blue":"#8da0cb",
+    "turquoise":"#66c2a5",
+    "magenta":"#e78ac3",
+    "beige":"#e5c494",
+};
+(()=>{
+    for (var k in item_colors) {
+        if (!item_colors[k]) continue;
+        item_colors[k] = new utils.Color(item_colors[k]).rgb_mix("#fff",0.5).to_rgb_hex();
+    }
+})();
+
+/* var children_map = new Map();
+export var parent_map = new Map();
+export function toggle_parent(elem, v) {
+    if (v && !elem.parentElement) {
+        var p = parent_map[elem];
+        var new_children = children_map[p].filter(e=>!!e.parentElement || e === elem);
+        dom_utils.insert_at(p, elem, new_children.indexOf(elem));
+        delete parent_map[elem];
+        if (children_map[p].every(e=>!!e.parentElement)) delete children_map[p];
+    } else if (!v && elem.parentElement) {
+        if (!children_map[elem.parentElement]) children_map[elem.parentElement] = Array.from(elem.parentElement.children);
+        parent_map[elem] = elem.parentElement;
+        elem.remove();
+    }
+} */
+
+export const CHUNK_SIZE = 2 * 1024 * 1024;
+export const UploadStatus = {
+    STARTED: 1,
+    FINISHED: 2,
+    CANCELED: 3,
+    // ERROR: 4,
+}
+
+export class UploadFileChunk {
+    constructor() {
+        /** @type {Blob} */
+        this._blob = null;
+        this.id = null;
+        this.path = "";
+        this.last_modified = 0;
+        this.start = 0;
+        this.length = 0;
+    }
+    get end() { return this.start + this.length; }
+    get blob() { return this._blob.slice(this.start, this.end); }
+    split(chunk_size, first_and_last_pieces_first=false) {
+        var chunks = [];
+        var length = this.length;
+        var start = this.start;
+        var end = this.end;
+        var num_chunks = Math.ceil(length/chunk_size);
+        if (num_chunks > 2 && first_and_last_pieces_first) {
+            chunks.push(Object.assign(this.clone(), {start, length: chunk_size}));
+            chunks.push(Object.assign(this.clone(), {start: end - chunk_size, length: chunk_size}));
+            start += chunk_size;
+            end -= chunk_size;
+        }
+        for (var b=start; b<end; b+=chunk_size) {
+            chunks.push(Object.assign(this.clone(), {start:b, length: Math.min(end-b, chunk_size)}));
+        }
+        return chunks;
+    }
+    clone() {
+        return Object.assign(new UploadFileChunk(), this);
+    }
+}
+
+UploadFileChunk.create = function(blob, path=undefined) {
+    var ufc = new UploadFileChunk();
+    ufc._blob = blob;
+    ufc.id = blob.id || dom_utils.uuidv4();
+    ufc.path = path || blob.path || blob.name;
+    ufc.last_modified = +blob.lastModified || 0;
+    ufc.start = 0;
+    ufc.length = blob.size;
+    return ufc;
+}
+
+/** @typedef {{concurrency_limit:number, chunk_size:number}} UploadQueueOptions */
+/** @typedef {{first_and_last_pieces_first:boolean, dir:string, media:boolean}} UploadOptions */
+export class UploadQueue {
+    /** @param {UploadQueueOptions} opts */
+    constructor(opts) {
+        this.opts = Object.assign({
+            concurrency_limit: 4,
+            chunk_size: CHUNK_SIZE,
+        }, opts);
+        /** @type {UploadFileChunk[]} */
+        this.chunks = [];
+        /** @type {Set<XMLHttpRequest>} */
+        this.xhrs = new Set();
+        this.ci = 0;
+    }
+
+    /** @param {string} dest @param {File[]} files @param {UploadOptions} opts */
+    add(files, opts) {
+        if (!Array.isArray(files)) files = [files];
+        let chunks = files.map(f=>UploadFileChunk.create(f));
+        for (var c of chunks) {
+            if (opts.dir) c.path = utils.join_paths(opts.dir, c.path);
+            if (opts.media) c.media = true;
+            if (opts.session) c.session = opts.session;
+        }
+        chunks = chunks.map(f=>f.split(this.opts.chunk_size, opts.first_and_last_pieces_first)).flat()
+        this.chunks.push(...chunks);
+        setTimeout(()=>{
+            for (var i = 0; i < this.opts.concurrency_limit; i++) this.next_chunk();
+        }, 0);
+    }
+
+    async next_chunk() {
+        if (this.xhrs.size >= this.opts.concurrency_limit) return;
+        if (!this.chunks.length) return;
+
+        let done = false;
+        let form_data = new FormData();
+        let c = this.chunks.shift();
+        var ci = this.ci++;
+        
+        form_data.append('files[]', c.blob, JSON.stringify({
+            filename: c.path, 
+            start: c.start, 
+            filesize: c._blob.size, 
+            mtime: c.last_modified, 
+            id: c.id, 
+            session_id: c.session || 0,
+        }));
+
+        while (!done) {
+            let ts = Date.now();
+            let xhr = new XMLHttpRequest();
+            xhr.id = c.id;
+            xhr.progress = 0;
+            this.xhrs.add(xhr);
+            ALL_XHRs.add(xhr);
+            let response = await new Promise((resolve) => {
+                xhr.upload.addEventListener("progress", (e)=>{
+                    if (e.lengthComputable) {
+                        xhr.progress = e.loaded;
+                    }
+                });
+                xhr.addEventListener("loadend", (e) => {
+                    resolve(xhr.readyState == 4 && utils.try(()=>JSON.parse(xhr.responseText)));
+                });
+                let url = new URL(location.origin+"/main/");
+                if (c.media) url.searchParams.set("media", "1");
+                xhr.open("PUT", url.toString(), true);
+                xhr.send(form_data);
+            });
+            this.xhrs.delete(xhr);
+            ALL_XHRs.delete(xhr);
+            let msg = `Chunk ${ci} [${Date.now()-ts}ms]`;
+            done = true;
+            if (xhr.canceled || utils.try(()=>response.uploads[c.id].status === UploadStatus.CANCELED)) {
+                console.warn(`${msg} failed. Canceled.`);
+            } else if (response && !response.err) {
+                console.log(`${msg} succeeded.`);
+            } else {
+                done = false;
+            }
+            if (!done) {
+                console.warn(`${msg} failed for some reason. Retrying in 5 seconds..."}`);
+                await utils.timeout(5000);
+            }
+        }
+        this.next_chunk();
+    }
+
+    cancel(id) {
+        this.chunks = this.chunks.filter(c=>c.id !== id);
+        for (let xhr of this.xhrs) {
+            if (xhr.id === id) {
+                xhr.canceled = true;
+                xhr.abort();
+            }
+        }
+    }
+}
+
+export class FileDrop extends utils.EventEmitter{
+    /** @param {HTMLElement} elem */
+    constructor(elem) {
+        super();
+        var i = 0;
+        var is_files = (e)=>{
+            return [...e.dataTransfer.items].some(i=>i.kind === "file");
+        }
+        elem.classList.add("drop-area");
+        elem.addEventListener("drop", async (e) => {
+            if (!is_files(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            elem.classList.remove("file-over");
+            i--;
+            var entries = await get_entries_from_drag_event(e);
+            var files = await Promise.all(entries.map(e=>new Promise(resolve=>e.file(resolve))));
+            // /** @event FileDrop#drop @param {File[]} files  @param {FileSystemEntry[]} entries */
+            this.emit("drop", files, entries);
+        });
+        elem.addEventListener("dragover", (e) => {
+            if (!is_files(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+        });
+        elem.addEventListener("dragenter", (e) => {
+            if (!is_files(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            i++;
+            elem.classList.add("file-over");
+        });
+        elem.addEventListener("dragleave", (e) => {
+            if (!is_files(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            i--;
+            if (i == 0) elem.classList.remove("file-over")
+        });
+    }
+}
+
+/** @param {DragEvent} ev */
+async function get_entries_from_drag_event(ev) {
+    /** @type {FileSystemEntry[]} */
+    var entries = [];
+    /** @param {FileSystemEntry} entry */
+    var traverse = async (entry) => {
+        if (!entry) return;
+        if (!entry.isFile && !entry.isDirectory) return;
+        entries.push(entry);
+        if (entry.isDirectory) {
+            await new Promise((resolve) => {
+                var dirReader = entry.createReader();
+                dirReader.readEntries((entries) => {
+                    for (var e of entries) {
+                        traverse(e, entry.fullPath);
+                    }
+                    resolve();
+                });
+            });
+        }
+    };
+    for (var i of ev.dataTransfer.items) {
+        await traverse(i.webkitGetAsEntry());
+    }
+    return entries;
+}
+
+export function round_ms(num) {
+    return +num.toFixed(3)
+}
+
+// removes properties from o1 if o2 has exact same property (recursive). If both identical returns null.
+export function cull(o1,o2) {
+    if (typeof o1 === "object" && typeof o2 === "object" && o1 !== null && o2 !== null) {
+        var empty = true;
+        for (var k in o1) {
+            if (cull(o1[k], o2[k]) === null) delete o1[k];
+            else empty = false;
+        }
+        if (empty) return null;
+        return o1;
+    } else {
+        if (o1 === o2 || (o1 === null && o2 === undefined)) return null
+    }
+}
+
+/** @template T @param {new () => T} clazz @return {Record<string,T>} */
+export function create_proxy(clazz) {
+    return new Proxy({}, {
+        set(target, prop, value) {
+            target[prop] = new clazz(value);
+            return true;
+        }
+    });
+}
+
+export function remove_empty_objects_from_tree(obj) {
+    var deletes = 0;
+    var keys = Object.keys(obj);
+    for (var k of keys) {
+        if (obj[k] !== null && typeof obj[k] === "object" && remove_empty_objects_from_tree(obj[k])) {
+            deletes++;
+            delete obj[k];
+        }
+    }
+    return (deletes === keys.length)
+}
+
+export function get_scrollbar_width(el) {
+    return [el.offsetWidth - el.clientWidth, el.offsetHeight - el.clientHeight];
+}
+
+export function pretty_uri_basename(uri) {
+    if (uri.match(/^https?:/)) {
+        return uri;
+    } else {
+        var name = utils.basename(uri);
+        try { name = decodeURI(name); } catch {}
+        return name;
+    }
+}
+export function rect_clamp_point(rect, pt) {
+    return {x:utils.clamp(pt.x, rect.x, rect.x+rect.width), y:utils.clamp(pt.y, rect.y, rect.y+rect.height)};
+}
+
+export function ondrag(elem, handler) {
+    elem.draggable = false;
+    // elem.onpointerdown = ()=>false;
+    elem.addEventListener("pointerdown", (e)=>{
+        var onmove = handler(e);
+        var onup = ()=>{
+            elem.removeEventListener("lostpointercapture", onup);
+            window.removeEventListener("pointermove", onmove);
+        };
+        if (onmove) {
+            elem.setPointerCapture(e.pointerId);
+            window.addEventListener("pointermove", onmove);
+            elem.addEventListener('lostpointercapture', onup);
+            e.preventDefault();
+            e.stopPropagation();
+        }
+    }, true);
+}
+export function get_clip_segments(start, end, duration, offset=0) {
+    if (typeof start == "object") {
+        var o = start;
+        start = o.start;
+        end = o.end;
+        duration = o.duration;
+        offset = o.offset;
+    }
+    var segments = [];
+    var length = Math.max(0,end-start);
+    var t = utils.loop(start + offset, start, end);
+    var n = duration / length;
+    // console.log(n)
+    if (length != 0 && n < MAX_CLIP_SEGMENTS) {
+        while (duration > 1e-6) {
+            var e = Math.min(t + length, t + duration, end);
+            var d = e-t;
+            segments.push({start:t, end:e, duration:d});
+            duration -= d;
+            if (e == end) t = 0;
+        }
+    }
+    return segments;
+}
+
+async function read_file(file, encoding="utf-8") {
+    if (file instanceof File) {
+        return dom_utils.read_file(file, {encoding})
+    } else if (IS_ELECTRON) {
+        return fs.readFileSync(file.path, encoding);
+    }
+    throw new Error(`Cannot read file '${file}'`);
+}
+async function open_file_dialog(options) {
+    if (IS_ELECTRON)  {
+        var paths = await open_file_manager(options);
+        return paths.map(p=>({path:p, name:utils.basename(p)}));
+    } else {
+        var dialog_opts = {};
+        if (options.filter) dialog_opts.accept = options.filter.join(", ");
+        if (options.multiple) dialog_opts.multiple = !!options.multiple;
+        return await dom_utils.open_file_dialog(dialog_opts);
+    }
+}
+async function save_local_file(filename, text) {
+    if (IS_ELECTRON)  {
+        var result = await electron.dialog.showSaveDialog({
+            defaultPath: filename,
+        });
+        if (result.filePath) {
+            fs.writeFileSync(result.filePath, text);
+            return true;
+        }
+        return false;
+    } else {
+        dom_utils.download(filename, text);
+        return true;
+    }
+}
+
+
+export function get_video_size(w,h,interlaced) {
+    var ratio = w / h;
+    var height = Math.round(ratio <= (16/9) ? h : w / (16/9));
+    var text;
+    if (height == 1440) text = "2K";
+    else if (height == 2160) text = "4K";
+    else text = `${height}${interlaced?"i":"p"}`;
+    return {
+        width: height * ratio,
+        height: height,
+        text: text
+    }
+}
+
+export function hash(str) {
+    var hash = 0,
+        i, chr;
+    if (str.length === 0) return hash;
+    for (i = 0; i < str.length; i++) {
+        chr = str.charCodeAt(i);
+        hash = ((hash << 5) - hash) + chr;
+        hash |= 0; // Convert to 32bit integer
+    }
+    return hash;
+}
+
+export function create_background_properties(options, is_session) {
+    options = Object.assign({
+        "name": "background",
+        "label": "Background",
+        "default": "",
+    },options)
+    var name = options["name"];
+
+    var background_mode = new UI.Property(`${name}_mode`, null, `<select></select>`, {
+        "info": ()=>{
+            if (background_mode.value == "embedded") return `Shows the currently playing audio file's embedded artwork.`;
+            if (background_mode.value == "external") return `Shows the external artwork relative to the audio file (a file named AlbumArt.jpg, Cover.jpg, etc.)`;
+        },
+        "label": options["label"],
+        "options": options["options"],
+        "default": options["default"],
+    });
+
+    var background_color = new UI.Property(`${name}_color`, "Color", `<input type="color">`, {
+        "default": "#000000",
+        "hidden": ()=>background_mode.value !== "color"
+    });
+
+    var get_file_duration = ()=>utils.try(()=>app.get_media_info(background_file.value).duration, 0);
+    var is_file_image = ()=>get_file_duration()<=IMAGE_DURATION;
+
+    var background_file = new FileProperty(`${name}_file`, is_session ? "Logo File" : "Replace Video with Image/Video File", {
+        "file.options": { files: true, filter: ["image/*", "video/*"] },
+        // "hidden": ()=>background_mode.value !== "file",
+    });
+    background_file.add_validator(UI.VALIDATORS.media_video);
+    /* background_file.on("change", (e=>{
+        if (e.trigger && e.value) {
+            background_mode.set_value("file");
+        }
+    })) */
+
+    var background_file_start = new UI.TimeSpanProperty(`${name}_file_start`, "Loop Start Time", {
+        "timespan.format": "h:mm:ss.SSS",
+        "min":0,
+        "default": 0,
+        "hidden": ()=>is_file_image(),
+    });
+    
+    var background_file_end = new UI.TimeSpanProperty(`${name}_file_end`, "Loop End Time", {
+        "timespan.format": "h:mm:ss.SSS",
+        "min":0,
+        "default": ()=>get_file_duration(),
+        "hidden": ()=>is_file_image(),
+    });
+
+    return [background_mode, background_color, background_file, background_file_start, background_file_end]
+}
+
+export class TicksBar {
+    get duration() { return this.end - this.start; }
+    constructor(elem, opts) {
+        opts = Object.assign({
+            hover_elem: null,
+            placement: "bottom",
+            show_numbers: true,
+            modifier: (html)=>html,
+        }, opts)
+        this.opts = opts;
+        this.start = 0;
+        this.end = 0;
+        this.elem = elem || $(`<div></div>`)[0];
+        this.elem.classList.add("ticks-bar");
+        this.elem.dataset.placement = opts.placement;
+        if (!opts.hover_elem) opts.hover_elem = elem;
+
+        this.ticks_elem = $(`<div class="ticks"></div>`)[0];
+        var cursor_elem = $(`<div class="cursor"></div>`)[0];
+        var seek_time = $(`<div class="seek-time"></div>`)[0];
+        
+        this.elem.append(this.ticks_elem, cursor_elem, seek_time);
+
+        var update_seek_time = (e)=>{
+            var data = this.parse_event(e);
+            seek_time.style.left = `${data.pt.x}px`;
+            seek_time.style.top = `${data.rect.y}px`;
+            cursor_elem.style.left = `${data.pt.x-data.rect.x}px`;
+            var html = `<div>${utils.seconds_to_timespan_str(data.time, app.user_time_format)}</div>`;
+            seek_time.innerHTML = `<div>${opts.modifier(html, data.time)}</div>`;
+        }
+
+        this.hover_listener = new dom_utils.TouchListener(opts.hover_elem, {
+            mode: "hover",
+            start: (e)=>{
+                // console.log("in")
+                this.elem.classList.toggle("hover", true);
+                update_seek_time(e);
+            },
+            move: (e)=>{
+                // console.log("move")
+                update_seek_time(e);
+            },
+            end: (e)=>{
+                // console.log("end")
+                this.elem.classList.toggle("hover", false);
+            }
+        });
+    }
+    
+    parse_event(e) {
+        var rect = new utils.Rectangle(this.elem.getBoundingClientRect());
+        var pt = {x:e.clientX,y:e.clientY}
+        if (e.touches) pt = {x:e.touches[0].clientX,y:e.touches[0].clientY};
+        var pt = rect_clamp_point(rect, pt);
+        var time = this.start + (pt.x-rect.x)/rect.width * this.duration;
+        return { time, pt, rect };
+    };
+
+    update(start, end) {
+        if (this.start == start && this.end == end) return;
+        this.start = start;
+        this.end = end;
+
+        this.elem.classList.toggle("no-duration", this.duration == 0);
+
+        var ticks = [];
+        var duration = end-start;
+
+        if (duration != 0 && duration < TicksBar.max_tick_time) {
+            var min_i, num_ticks, min_divisor;
+            for (min_i = 0; min_i < TicksBar.tick_times.length; min_i++) {
+                var min_divisor = TicksBar.tick_times[min_i];
+                num_ticks = duration / min_divisor;
+                if (num_ticks < TicksBar.max_ticks) break;
+            }
+            var max_i = utils.clamp(min_i + TicksBar.tick_heights.length-1, 0, TicksBar.tick_times.length-1);
+            // var tis = [];
+            for (var t = start; t <= end; t += min_divisor) {
+                var t_offset = t % min_divisor;
+                var tr = t - t_offset;
+                var tx = ((tr - start)/duration*100).toFixed(3);
+                var ti;
+                for (ti = max_i; ti > min_i; ti--) {
+                    if ((Math.floor(tr/min_divisor)*min_divisor)%TicksBar.tick_times[ti]==0) break;
+                }
+                // tis.push(ti);
+                var ti0 = ti-min_i;
+                var th = TicksBar.tick_heights[ti0];
+                var text = "";
+                if (this.opts.show_numbers) {
+                    if ((ti >= min_i+2) || (num_ticks < TicksBar.max_ticks*0.25 && ti >= min_i+1)) {
+                        text = `<span>${utils.ms_to_shorthand_str(tr*1000, utils.log(Math.ceil(1/TicksBar.tick_times[ti]), 10)).replace(/\s+/g,"")}</span>`;
+                    }
+                }
+                ticks.push(`<div class="tick" style="left:${tx}%;height:${th}">${text}</div>`);
+            }
+        }
+        this.ticks_elem.innerHTML = ticks.join("");
+    }
+}
+TicksBar.tick_times = [0.1, 0.5, 1, 5, 15, 60, 5*60, 15*60, 60*60, 4*60*60, 12*60*60, 24*60*60];
+TicksBar.tick_heights = ["2px", "4px", "6px", "8px"];
+TicksBar.max_tick_time = 8 * TicksBar.tick_times[TicksBar.tick_times.length-1];
+TicksBar.max_ticks = 100;
+
+/**
+ * @param {*} id 
+ * @param {{folders:boolean, files:boolean, multiple:boolean, filter:string[], start:string}} options 
+ */
+async function open_file_manager(options) {
+    options = Object.assign({
+        "new_window" : app.settings.get("open_file_manager_in_new_window")
+    }, default_file_manager_options, options);
+    if (!options.standalone && options.id === undefined) options.id = dom_utils.uuidb64();
+    // if ("start" in options && !Array.isArray(options.start)) options.start = [options.start];
+    
+    var getfile = !!(options.multiple || options.files || options.folders)
+
+    if (IS_ELECTRON) {
+        var electron_options = {
+            properties: []
+        };
+        if (options.start) electron_options.defaultPath = utils.try_file_uri_to_path(options.start); // utils.dirname(options.start[0]);
+        if (options.folders) electron_options.properties.push("openDirectory");
+        if (options.files) electron_options.properties.push("openFile");
+        if (options.multiple) electron_options.properties.push("multiSelections");
+        if (options.filter) {
+            electron_options.filters = [];
+            electron_options.filters.push({name:"All Files", extensions:["*"]});
+            var custom_ext = [];
+            for (var f of options.filter) {
+                var m;
+                if (m = f.match(/^(.+?)\/\*$/)) {
+                    electron_options.filters.push({ name: utils.capitalize(m[1])+"s", extensions: mime_ext_map[m[1]] || ["*"]})
+                } else if (m = f.match(/^\.(\w+)$/)) {
+                    custom_ext.push(m[1]);
+                }
+            }
+            if (custom_ext.length) {
+                custom_ext = utils.array_unique(custom_ext);
+                electron_options.filters.push({ name: "Custom File Type", extensions: custom_ext});
+            }
+        }
+        var results = await electron.dialog.showOpenDialog(electron_options);
+        if (results.canceled) return null;
+        return results.filePaths;
+    } else {
+        /** @type {Window} */
+        var win;
+        var use_window = options.new_window;
+        var on_message;
+        var messenger = new dom_utils.WindowCommunicator();
+        return new Promise((resolve,reject)=>{
+            var elfinder_options = {
+                commandsOptions: {
+                    getfile: {
+                        multiple: !!options.multiple,
+                        // files: !!options.files,
+                        folders: !!options.folders,
+                    }
+                }
+            };
+            if (options.folders) {
+                elfinder_options.onlyMimes = ["directory"];
+            }
+            if (options.start) {
+                var dir = options.start.split("/").slice(0,-1).join("/");
+                elfinder_options.startPathHash = app.filename_to_elfinder_hash(dir);
+                elfinder_options.selectHashes = [app.filename_to_elfinder_hash(options.start)];
+            }
+            if (options.filter) {
+                elfinder_options.fileFilter = options.filter
+            }
+            if (getfile) {
+                elfinder_options.getFileCallback = true;
+            }
+
+            messenger.on("elfinder_options", (id)=>{
+                if (id == options.id) return elfinder_options;
+            });
+            messenger.on("files", ({files,id})=>{
+                if (id != options.id) return;
+                var paths = files.map(f=>ELFINDER_USE_FILE_PROTOCOL ? f.uri : utils.try_file_uri_to_path(f.uri));
+                resolve(paths);
+            });
+
+            var url = new URL("/file-manager/index.html", window.location.origin);
+            if (options.id) url.searchParams.append("id", options.id);
+            if (use_window) {
+                win = windows[options.id];
+                if (!win) {
+                    win = window.open(url.toString(), `File Manager`);
+                    if (options.id) windows[options.id] = win;
+                }
+                win.focus();
+                win.addEventListener("beforeunload", (e)=>{
+                    e.preventDefault();
+                    delete windows[options.id];
+                    resolve();
+                });
+            } else {
+                app.file_manager_menu.show(url.toString());
+                win = app.file_manager_menu.iframe.contentWindow;
+                app.file_manager_menu.once("hide", ()=>{
+                    resolve();
+                });
+            }
+        }).finally(()=>{
+            messenger.destroy();
+            window.removeEventListener("message", on_message);
+            if (use_window) win.close();
+            else app.file_manager_menu.hide();
+        })
+    }
+}
+
+export function create_context_menu(parent, elem, e) {
+    var on_click;
+    var t = dom_utils.tippy(parent, {
+        appendTo: app.elem,
+        content: elem,
+        onHide: (instance) =>{
+            app.root.removeEventListener("click", on_click);
+        },
+        getReferenceClientRect: () => ({
+            width: 0,
+            height: 0,
+            top: e.clientY,
+            bottom: e.clientY,
+            left: e.clientX,
+            right: e.clientX,
+        }),
+        placement: "right-start",
+        trigger: "manual",
+        hideOnClick: true,
+        interactive: true,
+        arrow: false,
+        offset: [0, 0],
+        theme:"list",
+    });
+    t.show();
+    setTimeout(()=>{
+        app.root.addEventListener("click", on_click = (e)=>{
+            if (!dom_utils.closest(e.target, el=>el==t.popper)) t.hide();
+        })
+    },0)
+    return t;
+}
+
+export function create_menu(items, o={}) {
+    var opts = {
+        params: [],
+        click: NOOP,
+    };
+    Object.assign(opts, o);
+    var list = $(`<ul class="list-menu"></ul>`)[0];
+
+
+    var process_item = (item, list)=>{
+        let elem;
+        var is_separator = (typeof item === "string" && item.slice(0,3) === "---");
+        if (is_separator) {
+            elem = $(`<li class="separator"><hr></li>`)[0];
+        } else if (Array.isArray(item)) {
+            elem = $(`<li class="group"><ul></ul></li>`)[0];
+            item.forEach(i=>process_item(i, elem.children[0]));
+        } else {
+            elem = $(`<li class="item"></li>`)[0];
+            var get = (p) => (typeof item[p] === "function") ? item[p].apply(item, [...opts.params, elem]) : item[p];
+            var title = get("title");
+            if (title) elem.title = title;
+            var icon = get("icon");
+            var name = get("name");
+            var disabled = get("disabled");
+            var shortcut = get("shortcut");
+            var visible = get("visible");
+
+            if (icon) elem.append(...$(`<span class="icon">${icon}</span>`));
+            if (name) elem.append(...$(`<span class="name">${name}</span>`));
+            if (shortcut) {
+                shortcut = shortcut.replace("ArrowUp","↑").replace("ArrowDown","↓").replace("ArrowLeft","←").replace("ArrowRight","→")
+                elem.append(...$(`<span class="shortcut"><span>${shortcut}</span></span>`));
+            }
+            if (disabled) {
+                elem.disabled = true;
+                elem.classList.add("disabled");
+            } else {
+                elem.addEventListener("click", (e)=>{
+                    get("click");
+                    opts.click();
+                });
+            }
+            if (visible === false) elem.classList.add("d-none");
+            get("render");
+        }
+        list.appendChild(elem);
+    }
+    items.forEach(i=>process_item(i, list));
+    list.addEventListener("mousedown", (e)=>e.preventDefault());
+    list.addEventListener("mouseup", (e)=>e.preventDefault());
+    return list;
+}
+
+export function fancybox_prompt(title, inputs, settings) {
+    settings = Object.assign({
+        ok:"OK",
+        cancel:"Cancel",
+        valid:()=>true
+    }, settings);
+
+    var modal = new ModalPropertyContainer({
+        "modal.title": title,
+        "modal.footer": true,
+    });
+
+    if (!Array.isArray(inputs)) inputs = [inputs];
+    var props = inputs.map(input=>{
+        var prop;
+        if (input instanceof UI.Property) {
+            prop = input;
+        } else if (dom_utils.is_html(input)) {
+            prop = new UI.Property(null, null, input, { reset: false });
+        } else if (typeof input === "number") {
+            prop = new UI.Property(null, null, `<input type="number"></input>`, { default: input, reset: false });
+        } else if (typeof input === "boolean") {
+            prop = new UI.Property(null, null, `<input type="checkbox"></input>`, { default: input, reset: false });
+        } else {
+            prop = new UI.Property(null, null, `<input type="text"></input>`, { default: input, reset: false });
+        }
+        return prop;
+    });
+    modal.content.append(...props);
+    
+    modal.show();
+    if (props[0]) props[0].input.focus();
+
+    return new Promise((resolve,reject)=>{
+        if (settings.ok) {
+            var ok_button = new UI.Button(settings.ok, {
+                disabled: ()=>!settings.valid(),
+                click: ()=>{
+                    var result = {length:0}
+                    props.forEach((prop, i)=>{
+                        var value = prop.value;
+                        result[i] = value;
+                        result.length++;
+                        // if (input.id) result[input.id] = value
+                    })
+                    if (result.length == 1) result = result[0];
+                    resolve(result);
+                }
+            })
+            modal.footer.append(ok_button)
+        }
+        if (settings.cancel) {
+            var cancel_button = new UI.Button(settings.cancel, {
+                click: ()=>resolve(null)
+            })
+            modal.footer.append(cancel_button)
+        }
+        modal.on("hide", ()=>resolve(null))
+    }).finally(()=>{
+        modal.hide();
+    });
+}
+
+// -----------------------------
+// Sortable bullshit.
+// -----------------------------
+export class CancelSortPlugin {
+    constructor(){
+        this.defaults = {
+            cancelSort: true,
+            revertOnSpill: true
+        };
+    }
+    drop({ cancel, dispatchSortableEvent, originalEvent, dragEl, cloneEl }) {
+        // In case the 'ESC' key was hit,
+        // the origEvent is of type 'dragEnd'.
+        if (originalEvent && originalEvent.type === 'dragend') {
+            // Call revert on spill, to revert the drag
+            // using the existing algorithm.
+            this.sortable.revertOnSpill.onSpill(...arguments);
+            // Undo changes on the drag element.
+            if (dragEl) {
+                // Remove ghost & chosen class.
+                dragEl.classList.remove(this.options.ghostClass);
+                dragEl.classList.remove(this.options.chosenClass);
+                dragEl.removeAttribute('draggable');
+            }
+            // In case of a copy, the cloneEl
+            // has to be removed again.
+            if (cloneEl) {
+                cloneEl.remove();
+            }
+            // Dispatch 'end' event.
+            dispatchSortableEvent('end');
+        }
+    }
+}
+CancelSortPlugin.pluginName = "cancelSort";
+Sortable.mount(CancelSortPlugin);
+
+export var Orientation = {
+    VERTICAL: "vertical",
+    HORIZONTAL: "horizontal"
+}
+export class ResponsiveSortable extends Sortable {
+    constructor(el, options) {
+        options = Object.assign({
+            lastSelectedClass: "sortable-last-selected",
+            lastActiveClass: "sortable-last-active",
+        }, options);
+        
+        super(el, options);
+
+        this.orientation = Orientation.VERTICAL
+        
+        // $(this.el).disableSelection();
+        this.el.classList.add("sortable");
+
+        ResponsiveSortable.instances.push(this);
+
+        this.option("multiDragKey", "Control");
+        this.el.addEventListener("pointerdown", this._on_pointer_down = (e)=>{
+            if (this.options.multiDrag) this.option("multiDragKey", e.pointerType === "touch" ? "" : "Control");
+        });
+
+        // !! fixes multidrag on touch devices !!
+        if (this.options.multiDrag && !this.options.handle) {
+            var moved;
+            var old_triggerDragStart = this._triggerDragStart;
+            var on_touch_move = (e)=>moved=true;
+            var has_touch;
+            this._triggerDragStart = (evt, touch)=>{
+                var item = this.get_item(evt.target);
+                moved = false;
+                has_touch = !!touch;
+                if (touch && !this.is_selected(item)) {
+                    Sortable.utils.on(this.el.getRootNode(), 'touchmove', on_touch_move);
+                    return;
+                }
+                old_triggerDragStart.apply(this, [evt, touch]);
+            }
+            var old_onDrop = this._onDrop;
+            this._onDrop = (evt)=>{
+                Sortable.utils.off(this.el.getRootNode(), 'touchmove', on_touch_move);
+                old_onDrop.apply(this, moved ? [] : [evt]);
+            }
+        }
+        // --------------------------------------
+        
+        window.addEventListener("keydown", this._on_key_down = (e)=>{
+            if (!dom_utils.has_focus(this.el, true)) return;
+            if (!this.options.multiDrag) return;
+            if (!this.is_active_sortable_in_group()) return;
+            var items = this.get_items();
+            var last = this.get_last_active(true);
+            var last_index = items.indexOf(last);
+            var is_last_selected = this.is_selected(last);
+            var next_index;
+            var is_vertical = this.orientation === Orientation.VERTICAL;
+            if (e.key === "Home") {
+                next_index = 0;
+            } else if (e.key === "End") {
+                next_index = items.length - 1;
+            } else if (e.key === "PageUp") {
+                next_index = last_index - 10;
+            } else if (e.key === "PageDown") {
+                next_index = last_index + 10;
+            } else if ((e.key === "ArrowUp" && is_vertical) || (e.key === "ArrowLeft" && !is_vertical)) {
+                if (last_index == -1) next_index = 0;
+                else if (!is_last_selected) next_index = last_index;
+                else next_index = last_index - 1;
+            } else if ((e.key === "ArrowDown" && is_vertical) || (e.key === "ArrowRight" && !is_vertical)) {
+                if (last_index == -1) next_index = items.length - 1;
+                else if (!is_last_selected) next_index = last_index;
+                else next_index = last_index + 1;
+            } else if (e.ctrlKey && e.key === "a") {
+                this.select_all();
+            } else if (e.ctrlKey && e.key === "d") {
+                this.deselect_all();
+            } else {
+                return;
+            }
+            if (next_index !== undefined) {
+                next_index = utils.clamp(next_index, 0, items.length-1);
+                this.click(items[next_index], e.shiftKey, false);
+            }
+            e.preventDefault();
+            e.stopPropagation();
+        });
+        
+        this.el.addEventListener("contextmenu", this._on_contextmenu = (e) => {
+            e.preventDefault();
+            if (this.get_item(e.target) && !this.is_selected(e.target)) {
+                this.simulate_click(e.target, {
+                    screenX: e.screenX,
+                    screenY: e.screenY,
+                    clientX: e.clientX,
+                    clientY: e.clientY,
+                    ctrlKey: e.ctrlKey,
+                    altKey: e.altKey,
+                    shiftKey: e.shiftKey,
+                    metaKey: e.metaKey,
+                    button: 0,
+                });
+            }
+        });
+        this.el.addEventListener("click", this._on_click = (e)=>{
+            this.set_active_sortable_in_group();
+        });
+        this.el.addEventListener("start", this._on_start = ()=>{
+            this.last_drag = new Promise((resolve)=>{
+                var r = ()=> {
+                    this.el.removeEventListener("end", r);
+                    resolve();
+                }
+                this.el.addEventListener("end", r);
+            });
+        })
+        this.el.addEventListener("unchoose", this._on_unchoose = (e)=>{
+            if (!this.options.multiDrag) return;
+            if (!e.item.parentElement) return;
+            var items = e.items.length ? e.items : [e.item];
+            var selected_items = items.filter(i=>Sortable.utils.get(i).is_selected(i));
+            for (var s of this.get_sortables_in_group()) {
+                if (s !== this) s.deselect_all();
+            }
+            var dest = Sortable.get(e.to);
+            dest.set_active_sortable_in_group();
+            if (dest != this) {
+                dest.set_selection(selected_items);
+            }
+            dest.set_last_active(e.item);
+            e.item.scrollIntoView({block:"nearest", inline:"nearest"});
+        });
+        /* sortable.el.addEventListener("choose", (evt)=>{
+        }); */
+    }
+
+    _dispatchEvent(name, props) {
+        var ev = new Event(name);
+        Object.assign(ev, {
+            name: name,
+            sortable: this,
+            rootEl: this.el,
+        }, props);
+        this.el.dispatchEvent(ev);
+    }
+
+    simulate_click(target, e) {
+        var old_drag_key = this.multiDrag.multiDragKeyDown;
+        if (e.ctrlKey) this.multiDrag.multiDragKeyDown = true;
+        // this.options.delay = 10;
+        this.el.focus();
+        [this.options.supportPointer ? "pointerdown" : "mousedown", "mouseup"].forEach((type,i)=>{
+            var evt = new MouseEvent(type, {
+                bubbles:true,
+                cancelable:true,
+                view: target.ownerDocument.defaultView,
+                detail: 0,
+                screenX: e.screenX || 0,
+                screenY: e.screenY || 0,
+                clientX: e.clientX || 0,
+                clientY: e.clientY || 0,
+                ctrlKey: e.ctrlKey || false,
+                altKey: e.altKey || false,
+                shiftKey: e.shiftKey || false,
+                metaKey: e.metaKey || false,
+                button: e.button || 0,
+                relatedTarget: null
+            });
+            var prop = {get:()=>target, set:(v)=>{}};
+            Object.defineProperty(evt, "target", prop);
+            Object.defineProperty(evt, "currentTarget", prop);
+            if (i == 0) this._onTapStart(evt);
+            else this._onDrop(evt);
+        });
+        if (e.ctrlKey) this.multiDrag.multiDragKeyDown = old_drag_key;
+    }
+
+    get_sortables_in_group() {
+        return ResponsiveSortable.instances.filter(s=>s.options.group.name === this.options.group.name);
+    }
+
+    set_active_sortable_in_group() {
+        var old = ResponsiveSortable.active[this.options.group.name];
+        if (old === this) return;
+        ResponsiveSortable.active[this.options.group.name] = this;
+        if (old) old.deselect_all();
+        for (var s of [old, this]) {
+            if (!s) continue;
+            s.el.classList.toggle("active", s===this);
+            s._dispatchEvent("active-change", {active:s===this});
+        }
+    }
+
+    get_active_sortable_in_group() {
+        return ResponsiveSortable.active[this.options.group.name];
+    }
+
+    get_group_index() {
+        return this.get_sortables_in_group().indexOf(this);
+    }
+
+    is_active_sortable_in_group() {
+        return this.get_active_sortable_in_group() === this;
+    }
+
+    get_last_active(use_fallback=false) {
+        var last_active = this.get_item(this.last_active);
+        if (last_active || !use_fallback) return last_active;
+        var items = this.get_items();
+        return items[utils.clamp(this.last_active_index || 0, 0, items.length-1)];
+    }
+
+    set_last_active(e) {
+        e = this.get_item(e);
+        this.get_items().forEach(i=>i.classList.toggle(this.options.lastActiveClass, i === e));
+        this.last_active = e;
+        this.last_active_index = this.get_item_index(e);
+    }
+
+    forget_last_active() {
+        this.last_active = null;
+        this.last_active_index = null;
+    }
+
+    get_items(filter=null) {
+        var items = Array.from(this.el.children).filter(e=>Sortable.utils.closest(e, this.options.draggable, this.el, false));
+        if (filter) {
+            filter = new Set(filter);
+            items = items.filter(item=>filter.has(item));
+        }
+        return items;
+    }
+
+    get_selection() {
+        return this.get_items().filter(e=>this.is_selected(e));
+    }
+
+    deselect_all() {
+        this.get_items().forEach(item=>this.deselect(item));
+        this.set_last_active(null);
+    }
+
+    select_all() {
+        this.get_items().forEach(item=>this.select(item));
+    }
+
+    select(item) {
+        item = this.get_item(item);
+        if (!item || this.is_selected(item)) return;
+        Sortable.utils.select(item);
+        this._dispatchEvent("select", {targetEl:item});
+    }
+
+    deselect(item) {
+        item = this.get_item(item);
+        if (!item || !this.is_selected(item)) return;
+        Sortable.utils.deselect(item);
+        this._dispatchEvent("deselect", {targetEl:item});
+    }
+
+    set_selection(items) {
+        var selection = new Set(items.map(i=>this.get_item(i)));
+        this.get_items().forEach((item,i)=>{
+            if (selection.has(item)) this.select(item);
+            else this.deselect(item);
+        });
+    }
+
+    click(item, shiftKey, ctrlKey) {
+        item = this.get_item(item);
+        if (!item) return;
+        var rect = item.getBoundingClientRect();
+        this.simulate_click(item, {
+            clientX: rect.x + rect.width/2,
+            clientY: rect.y + rect.height/2,
+            ctrlKey: !!ctrlKey,
+            shiftKey: !!shiftKey,
+            button: 0,
+        });
+    }
+
+    /* toggle_select: function(e, value) {
+        e = this.get_item(e);
+        if (!e) return;
+        e.classList.toggle(this.options.selectedClass, value);
+        e.classList.toggle(this.options.lastSelectedClass, value);
+    }, */
+    /* select: function(e) {
+        this.toggle_select(e, true);
+    },
+    deselect: function(e) {
+        this.toggle_select(e, false);
+    }, */
+
+    is_selected(e) {
+        e = this.get_item(e);
+        return e ? e.classList.contains(this.options.selectedClass) : false;
+    }
+
+    get_item(e) {
+        e = Sortable.utils.closest(e, this.options.draggable, this.el, false);
+        return (e && e.parentElement === this.el) ? e : undefined;
+    }
+
+    get_item_index(e) {
+        return this.get_items().indexOf(this.get_item(e));
+    }
+
+    /* dragStartGlobal(e){
+        var item = this.get_item(e.dragEl);
+        if (this.options.multiDrag && !this.options.handle && !this.is_selected(item)) {
+            e.cancel();
+        }
+    } */
+    destroy() {
+        delete ResponsiveSortable.active[this.options.group.name];
+        utils.array_remove(ResponsiveSortable.instances, this);
+        window.removeEventListener("keydown", this._on_key_down);
+        this.el.removeEventListener("click", this._on_click);
+        this.el.removeEventListener("unchoose", this._on_unchoose);
+        this.el.removeEventListener("contextmenu", this._on_contextmenu);
+        this.el.removeEventListener("pointerdown", this._on_pointer_down)
+        super.destroy();
+    }
+}
+ResponsiveSortable.instances = [];
+ResponsiveSortable.active = {};
+// Sortable.mount(ResponsiveSortable);
+
+Sortable.utils.get = function(e) {
+    if (!e) return null;
+    if (e instanceof Sortable) return e;
+    var el = dom_utils.closest(e, c=>Sortable.get(c));
+    return el ? Sortable.get(el) : null;
+}
+
+export const NOOP = ()=>{};
+export var get_or_call = (f, context, params)=>{ return typeof f === "function" ? f.apply(context, params) : f; };
+
+/**
+* @typedef {{
+* name: string | function(PlaylistItem[]):string,
+* icon: string | function(PlaylistItem[]):string,
+* visible: string | function(PlaylistItem[]):boolean,
+* disabled: string | function(PlaylistItem[]):boolean,
+* click: function(PlaylistItem[]):void,
+* shortcut: string | function(PlaylistItem[]):string,
+* mode: string | function(PlaylistItem[]):string,
+* }} PlaylistCommandOptions
+*/
+export class PlaylistCommand {
+    /** @param {PlaylistCommandOptions} options */
+    constructor(options) {
+        this.options = {
+            name: "",
+            icon: null,
+            visible: true,
+            disabled: false,
+            click: NOOP,
+            shortcut: null,
+            view: "list",
+            color: null,
+            title: null
+        }
+        Object.assign(this.options, options);
+    }
+    /** @type {String} */
+    name(items) { return get_or_call(this.options.name, null, [items]); }
+    title(items) { return get_or_call(this.options.title, null, [items]); }
+    color(items) { return get_or_call(this.options.color, null, [items]); }
+    /** @type {String} */
+    description_or_name(items) { return get_or_call(this.options.description || this.options.name, null, [items]); }
+    /** @type {String} */
+    icon(items) { return get_or_call(this.options.icon, null, [items]); }
+    /** @type {boolean} */
+    visible(items) { return get_or_call(this.options.visible, null, [items]); }
+    render(items, elem) { return get_or_call(this.options.render, null, [items, elem]); }
+    /** @type {boolean} */
+    disabled(items) { return get_or_call(this.options.disabled, null, [items]); }
+    click(items) { return get_or_call(this.options.click, null, [items]); }
+    /** @type {String} */
+    shortcut(items) { return get_or_call(this.options.shortcut, null, [items]); }
+    shortcut_alt(items) {
+        var shortcut = this.shortcut(items);
+        return shortcut && shortcut.replace(/\|/g," / ").replace(/\w+/g, (m)=>`[${m}]`).replace(/\s*([\+\|])\s*/g, (_,m)=>` ${m} `).split(/([A-Z][a-z]+)/).filter(a=>a).join(" ");
+    }
+}
+
+// -----------------------------
+
+/** @typedef {{username:string, access:string, suspended:boolean, password:string}} User */
+export class AccessControl {
+    constructor(data) {
+        /** @type {Record<string,User>} */
+        this.data = data || {};
+    }
+    get users() {
+        var users = Object.entries(this.data).map(([username,data])=>{
+            delete data.username; // incase username was accidentally saved
+            return {username, ...data};
+        });
+        return utils.sort(users, v=>(v.username=="*")?0:1, v=>v.access=="owner"?0:1, v=>AccessControl.ACCESS_ORDER[v.access], v=>v.username.toLowerCase());
+    }
+    get owners() { return this.users.filter(d=>d.access==="owner"); }
+    edit(username, data) {
+        var user = this.data[username];
+        if (data == null) {
+            if (user && user.access === "owner" && username === app.$._client.username && this.owners.length > 1) {
+                if (!confirm("Deleting your ownership may revoke your access. Are you sure?")) return false;
+            }
+            delete this.data[username];
+        } else {
+            if (!this.data[username]) this.data[username] = {};
+            Object.assign(this.data[username], data);
+        }
+        if (this.owners.length == 0) {
+            utils.clear(this.data);
+            Object.assign(this.data, { "*": {"access":"allow"} });
+        }
+        return true;
+    }
+    get self_can_edit() { return this.owners.length == 0 || this.self_is_owner_or_admin; }
+    get self_is_owner() { return this.has_ownership(app.$._client.username); }
+    get self_is_owner_or_admin() { return this.self_is_owner || app.$._client.is_admin; }
+    get self_requires_password() { return this.requires_password(app.$._client.username); }
+    self_has_access(password) { return app.$._client.is_admin || this.has_access(app.$._client.username, password); }
+    requires_password(username) { return this.has_ownership(username) || !!(this.data["*"] || EMPTY_OBJECT).password; }
+    has_ownership(username) { return (this.data[username] || EMPTY_OBJECT).access === "owner"; }
+    has_access(username, password) {
+        if (this.data[username] && (this.data[username].access === "allow" || this.has_ownership(username))) return true;
+        if (this.data["*"] && this.data["*"].access === "allow" && (!this.data["*"].password || this.data["*"].password == password)) return true;
+        return false;
+    }
+    claim() {
+        this.data = AccessControl.DEFAULT_ACCESS_FOR_SELF
+    }
+}
+Object.defineProperty(AccessControl, "DEFAULT_ACCESS_FOR_SELF", {
+    get:()=>{
+        return {
+            "*": { access: "allow" },
+            [app.$._client.username] : { access: "owner" },
+        };
+    }
+});
+AccessControl.ACCESS_ORDER = {"owner":1,"allow":2,"deny":3};
+
+// --------------------------------------------
+
+export class Client {
+    is_admin = false;
+    username = null;
+    email = null;
+    constructor(data) {
+        Object.assign(this, data);
+    }
+}
+
+export class Target {
+    get streams() { return Object.values(app.$.streams).filter(s=>s.targets.find(t=>t.id == this.id)); }
+    constructor(data) {
+        this.name = ""
+        this.description = ""
+        this.rtmp_host = ""
+        this.rtmp_key = ""
+        this.url = ""
+        this.access_control = {};
+        this.ts = 0
+        this.limit = 0
+        this.locked = false
+        Object.assign(this, data);
+    }
+}
+
+export class PlaylistItem {
+    /**
+     * @property {Number}
+     * @name PlaylistItem#rnd
+     */
+    /** @property {object} __private */
+    /** @param {Session} session */
+    constructor(data, session) {
+        if (!session) session = NULL_SESSION;
+        this.id = "-1";
+        this.parent_id = null;
+        this.filename = "";
+        this.index = 0;
+        this.track_index = 0;
+        this.props = {};
+        Object.defineProperty(this, "__private", {
+            value: {},
+            enumerable: false,
+        });
+        /* Object.defineProperty(this, "parent_id", {
+            set:(new_parent_id)=>{
+                if (new_parent_id === this.__private.parent_id) return;
+                if (this.parent) {
+                    this.parent.__private.children.remove(this);
+                }
+                this.__private.parent_id = new_parent_id;
+                this.parent.__private.children.add(this);
+                this.parent.__private.children_ordered = null;
+            },
+            get:()=>{
+                return this.__private.parent_id;
+            },
+            enumerable: true,
+        }); */
+        // this.__private.parent_id = null;
+        this.__private.session = session;
+        this.__private.num_updates = 0;
+        this.__private.userdata = null;
+        this.__private.children = new Set();
+        this.__private.children_ordered = null;
+        // this.__private.uid = dom_utils.uuidv4();
+        
+        Object.assign(this, data);
+    }
+    /** @return {Session} */
+    get session() {
+        return this.__private.session;
+    }
+    /** @return {PlaylistUserData} */
+    get userdata() {
+        if (!this.__private.userdata) {
+            this.update_userdata();
+            this.__private.num_updates++;
+        }
+        return this.__private.userdata;
+    }
+    get num_updates() {
+        return this.__private.num_updates;
+    }
+    get hash() {
+        return this.__private.num_updates;
+    }
+    get parent() {
+        return this.session.playlist[this.parent_id];
+    }
+    get info() {
+        return this.session.playlist_info[this.id];
+    }
+    get media_info() {
+        return app.$.media_info[this.filename];
+    }
+    get is_deleted() {
+        return this.id in this.session.playlist_deleted;
+    }
+    get is_playlist() {
+        return this.is_root || this.filename === "livestreamer://playlist" || this.has_children;
+    }
+    get is_current_playing_item() {
+        return this === this.session.current_playing_item;
+    }
+    get is_root() {
+        return this.id == "0";
+    }
+    get is_null() {
+        return this === NULL_PLAYLIST_ITEM;
+    }
+    get detected_crops() {
+        return this.session.detected_crops[this.id]
+    }
+    get is_mergable() {
+        if (this.is_playlist) return true;
+        if (this.filename == "livestreamer://empty" || this.filename == "livestreamer://exit") return true;
+        if (this.url.protocol === "file:") {
+            if ((this.media_info||EMPTY_OBJECT).exists) return true;
+        }
+        return false;
+    }
+    get is_merged() {
+        return this.is_merged_playlist || !!this.root_merged_playlist;
+    }
+    get has_children() {
+        return this.__private.children.size != 0;
+    }
+    calculate_contents_hash() {
+        return hash(JSON.stringify([this.id,this.parent_id,this.filename,this.index,this.track_index,this.props,this.children.map(c=>c.calculate_contents_hash())]))
+        // return hash(JSON.stringify({self:this.props, children:this.children.map(c=>c.calculate_contents_hash())}));
+    }
+    /** @return {Iterable<PlaylistItem>} */
+    *get_children(track_index=null, recursive=false) {
+        var children = this.children;
+        if (track_index != null) children = children.filter(i=>track_index == null || i.track_index == track_index);
+        for (var item of children) {
+            yield item;
+            if (recursive) {
+                for (var c of item.get_children(null, true)) yield c;
+            }
+        }
+    }
+    update_userdata() {
+        /** @type {PlaylistUserData} */
+        let ud = this.__private.userdata = {};
+        let media_info = this.media_info || EMPTY_OBJECT;
+        let download = this.download;
+        let upload = this.upload;
+        let children = this.children;
+        var is_playlist = this.is_playlist;
+        let is_processing = this.is_processing;
+
+        let filenames = new Set();
+        filenames.add(this.filename);
+        if (this.props.background_file) filenames.add(this.props.background_file);
+        if (this.props.audio_file) filenames.add(this.props.audio_file);
+        if (this.props.subtitle_file) filenames.add(this.props.subtitle_file);
+        ud.filenames = [...filenames];
+
+        ud.name = this.get_pretty_name();
+        
+        let media_duration = round_ms(media_info.duration || 0);
+        if (media_duration <= IMAGE_DURATION) media_duration = 0;
+        let children_duration = 0;
+        let timeline_duration = media_duration;
+        if (children.length) {
+            /** @param {PlaylistItem[]} t */
+            var get_track_duration = (t, tl=false)=>{
+                var total = 0;
+                var key = tl ? "timeline_duration" : "duration";
+                for (var i of t) {
+                    if (i.filename === "livestreamer://exit") break;
+                    total += i.userdata[key];
+                }
+                return total;
+            }
+            var track_durations = this.tracks.map((t)=>get_track_duration(t));
+            var track_timeline_durations = this.tracks.map((t)=>get_track_duration(t, true));
+            if (this.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK && this.props.playlist_end_on_shortest_track && track_durations.every(t=>t>0)){
+                children_duration = Math.min(...track_durations);
+                timeline_duration = Math.min(...track_timeline_durations);
+            } else {
+                children_duration = Math.max(...track_durations);
+                timeline_duration = Math.max(...track_timeline_durations);
+            }
+            media_duration = children_duration;
+        } else if (this.filename === "livestreamer://intertitle") {
+            media_duration = this.props.title_duration || app.playlist_item_props_class.title_duration.default;
+        } else if (this.filename === "livestreamer://empty") {
+            media_duration = this.props.empty_duration || app.playlist_item_props_class.empty_duration.default;
+        }
+
+        let start = this.props.clip_start || 0;
+        let end = this.props.clip_end || media_duration;
+        let clip_length = Math.max(0, (end - start));
+        let clip_loops = this.props.clip_loops || 1;
+        let duration = round_ms(Math.max(0, (this.props.clip_duration || clip_length) * clip_loops));
+        timeline_duration = round_ms(Math.max(ZERO_DURATION, (this.props.clip_duration || timeline_duration) * clip_loops));
+        
+        if (download) ud.download = download;
+        if (upload) ud.upload = upload;
+        if (is_processing) ud.is_processing = true;
+
+        var props = new Set(Object.keys(this.props));
+        props.delete("label");
+        props.delete("color");
+        if (props.size) {
+            ud.modified = true;
+        }
+        if ("clip_start" in this.props || "clip_end" in this.props || "clip_loops" in this.props || "clip_duration" in this.props || "clip_offset" in this.props) {
+            let start = this.props.clip_start || 0;
+            let end = this.props.clip_end || media_duration;
+            let length = end-start;
+            let duration = this.props.clip_duration || length;
+            let offset = ((this.props.clip_offset || 0) % length) || 0;
+            let loops = duration / length;
+            ud.clipping = { start, end, length, duration, offset, loops };
+        }
+
+        ud.is_merged = this.is_merged;
+        ud.duration = duration;
+        ud.media_duration = media_duration;
+        ud.children_duration = children_duration;
+        ud.timeline_duration = timeline_duration;
+        ud.num_updates = this.num_updates;
+        /* ud.pending_changes = (()=>{
+            if (!this.session.is_running || !this.is_current_playing_item) return false;
+            if (!this.session.current_item_on_load) return false;
+            var props_on_load = this.session.current_item_on_load.props;
+            if (props_on_load.playlist_mode && !utils.deep_equals(this.descendents, this.session.current_descendents_on_load)) {
+                return true;
+            }
+            var filter = (k,v)=>k !== "label" && k !== "color";
+            var e1 = utils.filter_object(this.props, filter);
+            var e2 = utils.filter_object(props_on_load, filter);
+            if (!utils.deep_equals(e1, e2)) {
+                return true;
+            }
+            return false;
+        })(); */
+        
+        var chapters;
+        if (is_playlist) {
+            chapters = [];
+            for (var items of this.tracks) {
+                var t = 0;
+                var tt = 0;
+                for (var c of items) {
+                    var cud = c.userdata;
+                    cud.start = t;
+                    cud.timeline_start = tt;
+                    t += cud.duration;
+                    tt += cud.timeline_duration;
+                    cud.end = t;
+                    cud.timeline_end = tt;
+                    if (ud.is_merged) {
+                        chapters.push({ id: c.id, start: cud.start, end: cud.end });
+                    }
+                }
+            }
+        } else {
+            chapters = utils.deep_copy(media_info.chapters || EMPTY_ARRAY);
+        }
+        if (chapters) {
+            var min = 0
+            var max = Number.POSITIVE_INFINITY;
+            if (ud.clipping) {
+                var segments = get_clip_segments(ud.clipping);
+                if (segments.length == 1) {
+                    min = segments[0].start;
+                    max = segments[0].end;
+                } else {
+                    var t = 0;
+                    chapters = segments.map((s,index)=>{
+                        var start = t;
+                        t += s.duration;
+                        return {start, end:t, title:`${ud.name}`}
+                        // return {start, end:t, title:`Segment ${index+1}`}
+                    });
+                }
+            }
+            chapters = chapters.filter((c)=>c.end >= min && c.start <= max);
+            chapters.sort((a,b)=>a.start-b.start);
+            chapters.forEach((c,i)=>{
+                c.index = i;
+                c.start = Math.max(0, c.start-min);
+                c.end = Math.min(max-min, c.end-min);
+                if (!c.id && !c.title) c.title = `Chapter ${i+1}`
+            });
+            ud.chapters = chapters;
+        }
+    }
+    /** @return {PlaylistItem[]} */
+    get children() {
+        if (!this.__private.children_ordered) this.__private.children_ordered = [...this.__private.children].sort((a,b)=>a.track_index-b.track_index || a.index-b.index);
+        return [...this.__private.children_ordered];
+    }
+    get descendents() {
+        return [...this.get_children(null, true)];
+    }
+    get is_rtmp() {
+        return this.filename === "livestreamer://rtmp";
+    }
+    get is_rtmp_live() {
+        return !!(this.is_rtmp && this.session.get_connected_nms_session_with_appname("private"));
+    }
+    get media_infos() {
+        return this.info.filenames.map(f=>app.$.media_info[f]).filter(mi=>mi);
+    }
+    get is_processing() {
+        var info = this.info;
+        if (!info) return false;
+        return info.filenames.some(f=>app.$.media_info[f] && app.$.media_info[f].processing) || this.children.some(i=>i.is_processing);
+    }
+    /* get depth() {
+        return this.parents.length;
+    } */
+    get parents() {
+        return [...this.get_parents()].filter(p=>p);
+    }
+    get parent_track() {
+        return this.parent.get_track(this.track_index);
+    }
+    get_track(t) {
+        return [...this.get_children(t)];
+    }
+    /** @return {PlaylistItem[][]} */
+    get tracks() {
+        var tracks = [];
+        if (this.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK) {
+            for (var i = 0; i<2; i++) tracks.push([...this.get_children(i)]);
+        } else {
+            tracks[0] = [...this.get_children()];
+        }
+        return tracks;
+    }
+    get num_tracks() {
+        if (this.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK) return 2;
+        return 1;
+    }
+    get is_merged_playlist() {
+        return this.props.playlist_mode && this.props.playlist_mode != PLAYLIST_MODE.NORMAL;
+    }
+    get root_merged_playlist() {
+        for (var p of this.parents.reverse()) {
+            if (p.is_merged_playlist) return p;
+        }
+    }
+    get is_navigatable() {
+        if (this.filename.match(/^https?:/)) return true;
+        if (this.elfinder_hash) return true;
+        if ((!utils.is_uri(this.filename) || this.filename.startsWith("file://")) && IS_ELECTRON) return true;
+        return false;
+    }
+    get url() {
+        return utils.is_uri(this.filename) ? new URL(this.filename) : new URL("file://"+this.filename);
+    }
+    get download() {
+        return app.$.downloads[this.id];
+    }
+    get upload() {
+        return app.$.uploads[this.id];
+    }
+    get active_upload() {
+        var upload = this.upload;
+        if (upload.status != UPLOAD_STATUS.CANCELED) return upload;
+    }
+    get is_downloadable() {
+        return !this.download && (this.media_info||EMPTY_OBJECT).downloadable && !this.is_playlist;
+    }
+    get is_splittable() {
+        return this.userdata.media_duration > 0 && !this.is_playlist;
+    }
+    get is_scannable() {
+        return !this.filename.startsWith("livestreamer://") || this.is_playlist;
+    }
+    get elfinder_hash() {
+        return app.filename_to_elfinder_hash(this.filename);
+    }
+    get_adjacent_sibling(a=1) {
+        a = a>0?1:-1;
+        var parent = this.parent;
+        return parent && parent.children[this.index+a];
+    }
+    get_adjacent(a=1, skip_playlists=true) {
+        var next;
+        if (a>0) {
+            if (this.has_children && !this.is_merged_playlist) {
+                next = this.children[0];
+            } else {
+                next = this.get_adjacent_sibling(1);
+                if (!next) next = this.parents.map(p=>p.get_adjacent_sibling(1)).find(p=>p);
+            }
+        } else {
+            next = this.get_adjacent_sibling(-1);
+            var parent = this.parent;
+            if (!next && parent) next = parent;
+            else if (next && next.has_children && !next.is_merged_playlist) {
+                next = next.descendents.pop();
+            }
+        }
+        if (skip_playlists && next && next.is_playlist && !next.is_merged_playlist) {
+            next = next.get_adjacent(a, true);
+        }
+        if (next && next.is_root) return;
+        return next;
+    }
+    get next() { return this.get_adjacent(1, false); }
+    get previous() { return this.get_adjacent(-1, false); }
+    get next_sibling() { return this.get_adjacent_sibling(1); }
+    get previous_sibling() { return this.get_adjacent_sibling(-1); }
+
+    get_pretty_name(opts) {
+        opts = Object.assign({
+            label:true,
+            ext:true
+        }, opts);
+        if (opts.label && this.props.label) {
+            return this.props.label;
+        }
+        if (this.is_root) return "[Root]";
+        if (this.is_null) return "[Nothing]";
+        var mi = this.media_info || EMPTY_OBJECT;
+        if (mi.name) return mi.name;
+        var filename = this.filename;
+        if (filename.match(/^livestreamer:/)) {
+            var type = filename.replace("livestreamer://", "");
+            if (type === "intertitle" && this.props.title_text) return (this.props.title_text || "").replace(/\n+/g, " • ");
+            if (type === "macro") {
+                return `[${["macro", this.props.function].filter(p=>p).join(":")}]`;
+            }
+            return `[${type}]`;
+        }
+        filename = pretty_uri_basename(filename);
+        if (!opts.ext) {
+            filename = utils.split_ext(filename)[0];
+        }
+        return filename;
+    }
+    reveal() {
+        if (this.is_null) return;
+        var next = this.parent;
+        if (this.is_root) next = this;
+        app.playlist.open(next, [this]);
+    }
+    /** @return {Iterable<PlaylistItem>} */
+    *get_parents(until=null) {
+        var item = this;
+        while (item && item.parent_id && until !== item.parent) {
+            yield item.parent;
+            item = item.parent;
+        }
+    }
+    copy(include_non_enumerable=false) {
+        if (include_non_enumerable) return Object.fromEntries((utils.get_property_keys(this).map(k=>[k,utils.deep_copy(this[k])])));
+        return utils.deep_copy(this);
+    }
+}
+
+/** @typedef {{index:number,start:number,end:number,id:string}} Chapter */
+/** @typedef {{filenames:string[],modified:boolean}} PlaylistInfo */
+/** @typedef {{duration:Number,media_duration:Number,children_duration:Number}} PlaylistItemDurations */
+/** @typedef {{start:Number,end:Number,duration:Number,offset:Number}} PlaylistItemClipping */
+/** @typedef {{download:Download,is_processing:boolean,color:string,modified:boolean,clipping:PlaylistItemClipping,is_playlist:boolean, is_merged:boolean,display_name:string,chapters:Chapter[],timeline_duration:Number,start:Number,end:Number,timeline_start:Number,timeline_end:Number,parent_ids:string[]} & PlaylistItemDurations} PlaylistUserData */
+
+/** @typedef {{evaluated_target:any[]}} StreamTarget */
+export class Stream {
+    constructor(data) {
+        this.start_time = 0;
+        this.state = "stopped";
+        this.speed_history = {};
+        this.session_id = 0;
+        this.mpv = {
+            props: {},
+        };
+        /** @type {StreamTarget[]} */
+        this.targets = [];
+        this.test = false;
+        Object.assign(this, data);
+    }
+    get session() {
+        return app.$.sessions[this.session_id];
+    }
+    get is_running() {
+        return this.state !== "stopped";
+    }
+    get is_encoding() {
+        return !!this.mpv.is_encoding && this.is_running;
+    }
+}
+export class Session {
+    get connected_nms_sessions() {
+        return Object.values(app.$.nms_sessions).filter(s=>s.publishStreamPath.split("/").pop() === this.id);
+    }
+    get_connected_nms_session_with_appname(appname) {
+        return this.connected_nms_sessions.find(s=>s.appname === appname);
+    }
+    constructor(data) {
+        this.id = "";
+        this.type;
+        this.index = 0;
+        this.logs = {};
+        this.downloads = {};
+        this.access_control = {};
+        this.detected_crops = {};
+        this.player = {};
+        this.player_default_override = {};
+        this.stream_settings = {};
+        this.current_item_on_load = null;
+        this.current_descendents_on_load = null;
+        this.last_stream = null;
+        this.stream_id = null;
+        this.target_configs = {};
+        
+        this.playlist_info = {};
+        /** @type {Record<string,PlaylistItem>} */
+        this.playlist_deleted = {};
+        /** @type {Record<string,PlaylistItem>} */
+        this.playlist = new Proxy({}, {
+            set: (target, prop, value)=>{
+                target[prop] = new PlaylistItem(value, this);
+                return true;
+            },
+            deleteProperty: (target, prop)=>{
+                if (prop == "0") return true;
+                if (prop in target) {
+                    this.playlist_deleted[prop] = target[prop];
+                    delete target[prop];
+                }
+                return true;
+            }
+        });
+
+        Object.assign(this, data);
+        this.playlist["0"] = {id:"0"}; // weird
+    }
+    get current_playing_item() {
+        return app.get_playlist_item(this.playlist_id) || NULL_PLAYLIST_ITEM;
+    }
+    get stream() {
+        return app.$.streams[this.stream_id] || NULL_STREAM;
+    }
+    get is_running() {
+        return !!this.stream.is_running;
+    }
+    /* get movable() {
+        var ac = new AccessControl(this.access_control);
+        return ac.self_is_owner_or_admin || ac.owners.length == 0;
+    } */
+}
+
+export const NULL_CLIENT = Object.freeze(new Client());
+export const NULL_SESSION = Object.freeze(new Session());
+export const NULL_PLAYLIST_ITEM = Object.freeze(new PlaylistItem());
+export const NULL_STREAM = Object.freeze(new Stream());
+
+export class Remote {
+    static init() {
+        app.$ = new Remote();
+        app.$._media.update();
+    }
+    constructor() {
+        this._changes = [];
+
+        this.client_id = null;
+        /** @type {Record<string,Client>} */
+        this.clients = new Proxy({}, {
+            set(target, prop, value) {
+                // if (prop == null || prop == "null") {
+                //     debugger;
+                // }
+                target[prop] = new Client(value);
+                return true;
+            }
+        });
+        /** @type {Record<string,Session>} */
+        this.sessions = new Proxy({}, {
+            set(target, prop, value) {
+                target[prop] = new Session(value);
+                return true;
+            }
+        });
+        /** @type {Record<string,Target>} */
+        this.targets = new Proxy({}, {
+            set(target, prop, value) {
+                target[prop] = new Target(value);
+                return true;
+            }
+        });
+        /** @type {Record<string,Stream>} */
+        this.streams = new Proxy({}, {
+            set(target, prop, value) {
+                target[prop] = new Stream(value);
+                return true;
+            }
+        });
+        this.volumes = {};
+        this.change_log = {};
+        this.plugins = {};
+        this.logs = {};
+        this.nms_sessions = {};
+        this.properties = {};
+        // this.processes = {};
+        this.fonts = {};
+        this.uploads = {};
+        this.downloads = {};
+        this.media_info = {};
+        this.processes = {};
+        this.sysinfo = {};
+        this.process_info = {};
+        this.server_time_diff = 0;
+
+        this.pending_requests = new Set();
+        var $ = this;
+
+        this._media = new class {
+            time = 0;
+            duration = 0;
+            chapters = [];
+            seekable = false;
+            loaded;
+            update() {
+                this.item = $._session.current_playing_item;
+                var started = $._session.is_running;
+                var loaded = !started || !!$._stream.mpv.loaded;
+                var seeking = started && !!$._stream.mpv.seeking;
+                var special_seeking = started && !!$._stream.mpv.is_special && !!$._stream.mpv.seeking;
+                var buffering = !!(seeking || !loaded || $._stream.mpv.props["paused-for-cache"]);
+
+                if (!special_seeking) {
+                    this.time = app.get_current_time_pos();
+                    this.duration = app.get_current_duration();
+                    this.chapters = app.get_current_chapters();
+                    this.seekable = this.duration != 0 && (!started || !!$._stream.mpv.seekable) && this.item.filename !== "livestreamer://empty";
+                    this.loaded = loaded;
+                    this.buffering = buffering;
+                    
+                    if (!loaded) {
+                        this.time = 0;
+                        this.duration = 0;
+                        this.chapters = [];
+                        this.seekable = false;
+                    }
+
+                    this.status = started ? (loaded ? "Playing" : "Loading") : "Pending";
+                    
+                    this.stats = {};
+                    this.stats["V-FPS"] = (+$._stream.mpv.props["estimated-vf-fps"] || 0).toFixed(2);
+                    if (!$._stream.is_encoding) this.stats["D-FPS"] = (+$._stream.mpv.props["estimated-display-fps"] || 0).toFixed(2);
+                    this.stats["INTRP"] = $._stream.mpv.interpolation ? "On" : "Off";
+                    this.stats["DEINT"] = $._stream.mpv.deinterlace ? "On" : "Off";
+
+                    this.curr_chapters = app.get_current_chapters_at_time(this.time);
+                }
+            }
+            get time_left() { return Math.max(0, this.duration - this.time); }
+            get do_live_seek(){ return $._stream.is_running && !$._stream.is_encoding && !$._stream.mpv.is_special; }
+        }
+    }
+    _update(changes) {
+        utils.Observer.apply_changes(this, changes);
+        this._media.update();
+    }
+    _push(...items) {
+        this._changes.push(...items.map(i=>utils.deep_copy(i)));
+        app.debounced_update_$();
+    }
+    /** @type {Session} */
+    get _session() { return this.sessions[this._client.session_id] || NULL_SESSION; }
+    /** @type {Client} */
+    get _client() { return this.clients[this.client_id] || NULL_CLIENT; }
+    get _stream() { return this._session.stream; }
+}
+export class CropPreview extends utils.EventEmitter {
+    add_legend(name, clazz) {
+        var elem = $(`<div><div class="${clazz}" style="width:15px;height:15px"></div><span>${name}</span></div>`)[0]
+        this.legend_elem.appendChild(elem)
+    }
+    constructor(url, rect, rect2, editable) {
+        super();
+        this.corners = {}
+        this.edges = {}
+
+        this.elem = $(`<div class="crop-preview-wrapper"><div class="crop-preview"><div class="crop-edges"></div><div class="detected-crop-border"></div><div class="crop-border"></div><img src="${url}" draggable="false"></div></div>`)[0];
+        this.crop_border_elem = this.elem.querySelector(".crop-border");
+        this.crop_border_elem.classList.toggle("d-none", !rect2);
+        this.detected_crop_border_elem = this.elem.querySelector(".detected-crop-border");
+        this.content_elem = this.elem.querySelector(".crop-preview");
+        this.edges_elem = this.elem.querySelector(".crop-edges");
+        this.img_elem = this.elem.querySelector("img");
+        this.orig_rect = rect;
+        this.orig_crop_rect = rect2;
+        this.legend_elem = $(`<div class="legend"></div>`)[0];
+        if (editable) {
+            if (rect2) {
+                this.add_legend("Detected Crop Area", "detected-crop-border")
+                this.elem.append(this.legend_elem);
+            }
+            var corners = ["top-right","bottom-right","bottom-left","top-left"];
+            var corner_cursors = ["ne-resize","se-resize","sw-resize","nw-resize"]
+            // var edges = ["top","right","bottom","left"];
+            // var edge_cursors = ["n-resize","e-resize","s-resize","w-resize"]
+            /* edges.forEach((key,i)=>{
+                var edge_elem = $(`<div class="drag-edge ${key}"></div>`)[0];
+                corner_elem.style.cursor = edge_cursors[i];
+                this.edges[key] = corner_elem;
+                this.content_elem.appendChild(corner_elem);
+            }); */
+            corners.forEach((key,i)=>{
+                var corner_elem = $(`<div class="drag-corner ${key}"></div>`)[0];
+                corner_elem.style.cursor = corner_cursors[i];
+                this.corners[key] = corner_elem;
+                this.content_elem.appendChild(corner_elem);
+                var parts = key.split("-");
+                
+                $(corner_elem).on("mousedown", ()=>{
+                    var onmousemove = (e)=>{
+                        var client_rect = this.content_elem.getBoundingClientRect();
+                        var [min_y, max_y] = (parts[0]=="top") ? [0,CROP_LIMIT] : [1-CROP_LIMIT,1]
+                        var [min_x, max_x] = (parts[1]=="left") ? [0,CROP_LIMIT] : [1-CROP_LIMIT,1]
+                        $(corner_elem).css({
+                            left: `${utils.clamp((e.clientX-client_rect.left)/this.content_elem.offsetWidth,min_x, max_x)*100}%`,
+                            top: `${utils.clamp((e.clientY-client_rect.top)/this.content_elem.offsetHeight,min_y, max_y)*100}%`,
+                        });
+                        var sibling_corner_key = corners[(i+2)%4];
+                        // var sibling_corner_elem = this.corners[sibling_corner_key];
+                        var get_pos = (elem)=>({x:+elem.style.left.slice(0,-1)/100,y:+elem.style.top.slice(0,-1)/100});
+                        var o = {};
+                        for (var k of [key, sibling_corner_key]) {
+                            var p = k.split("-");
+                            var pt = get_pos(this.corners[k]);
+                            o[p[0]]=pt.y;
+                            o[p[1]]=pt.x;
+                        }
+                        var rect = new utils.Rectangle(o);
+                        this.update(rect);
+                    }
+                    $(document).on("mousemove", onmousemove);
+                    $(document).one("mouseup", (e)=>{
+                        $(document).off("mousemove", onmousemove);
+                        this.update(this.rect.clone().fix());
+                        this.elem.dispatchEvent(new Event("change"));
+                    });
+                });
+            });
+            this.info_elem = $(`<div class="info"></div>`)[0];
+            this.elem.appendChild(this.info_elem)
+            var button_container = $(`<div style="display:flex; flex-direction:row"></div>`)[0];
+
+            var reset_button = $(`<button class="button" style="flex:1">Set to Detected Crop</button>`)[0];
+            reset_button.addEventListener("click", ()=>{
+                this.update(this.orig_rect);
+            })
+            button_container.appendChild(reset_button);
+            var reset_button2 = $(`<button class="button" style="flex:1">Set to Current Crop</button>`)[0];
+            reset_button2.addEventListener("click", ()=>{
+                this.update(this.orig_crop_rect);
+            })
+            button_container.appendChild(reset_button2);
+
+            this.save_button = $(`<button class="button" style="flex:1">Apply Crop</button>`)[0];
+            this.save_button.addEventListener("click", ()=>{
+                this.emit("save", this.rect);
+            })
+            button_container.appendChild(this.save_button);
+
+            this.add_legend("Crop Area", "crop-border");
+
+            this.elem.appendChild(button_container);
+            /* ["left", "top", "right", "bottom"].forEach((e,i)=>{
+                var elem = $(`<div><label>Crop ${utils.capitalize(e)[0]}</label><input type="number" min="0"></div>`);
+                var input = elem.querySelector("input");
+                input.value = (i<2) ? d.rect[e] : 1.0-d.rect[e];
+                $(input).on("input change",()=>{
+                    
+                });
+                container.appendChild(elem);
+            }); */
+        }
+        if (rect2) this.update(rect2);
+        this.set_crop_border(this.detected_crop_border_elem, rect);
+    }
+    set_crop_border(elem, rect){
+        $(elem).css({
+            left:`${rect.x*100}%`,
+            top:`${rect.y*100}%`,
+            width:`${rect.width*100}%`,
+            height:`${rect.height*100}%`,
+        });
+    }
+    update(r){
+        r = new utils.Rectangle(r);
+        this.rect = r;
+        this.fixed_rect = r.clone().fix();
+        for (var k in this.corners) {
+            var parts = k.split("-");
+            $(this.corners[k]).css({
+                top:`${r[parts[0]]*100}%`,
+                left:`${r[parts[1]]*100}%`,
+            })
+        }
+        if (this.save_button) this.save_button.toggleAttribute("disabled",this.rect.equals(this.orig_crop_rect));
+        /* $(this.edges["top"]).css({
+            top:`${r.y*100}%`,
+            left:`${r.x*100}%`,
+            width:`${r.width*100}%`
+        })
+        $(this.edges["bottom"]).css({
+            top:`${r.bottom*100}%`,
+            left:`${r.x*100}%`,
+            width:`${r.width*100}%`
+        })
+        $(this.edges["left"]).css({
+            top:`${r.y*100}%`,
+            left:`${r.x*100}%`,
+            height:`${r.height*100}%`
+        })
+        $(this.edges["right"]).css({
+            top:`${r.y*100}%`,
+            left:`${r.right*100}%`,
+            height:`${r.height*100}%`
+        }) */
+        this.edges_elem.innerHTML = "";
+        this.edges_elem.innerHTML = [
+            `<div style="left:0;width:${r.left*100}%;top:0;bottom:0"></div>`,
+            `<div style="right:0;left:${r.right*100}%;top:0;bottom:0"></div>`,
+            `<div style="left:${r.left*100}%;width:${r.width*100}%;top:0;height:${r.top*100}%"></div>`,
+            `<div style="left:${r.left*100}%;width:${r.width*100}%;top:${r.bottom*100}%;height:${(1-r.bottom)*100}%;"></div>`,
+        ].join("")
+
+        if (this.crop_border_elem) {
+            this.set_crop_border(this.crop_border_elem, this.fixed_rect);
+        }
+        if (this.info_elem) {
+            this.info_elem.innerHTML=["left","top","right","bottom","width","height"].map((e,i)=>{
+                var v = (i!=2 && i!=3) ? this.fixed_rect[e] : 1-this.fixed_rect[e];
+                return `<span>${e}=${(v*100).toFixed(2)}%</span>`;
+            }).join("");
+        }
+    }
+}
+export class SelectableList extends utils.EventEmitter {
+    get selected() { return this._selected; }
+    get selected_index() { return this.items.indexOf(this._selected); }
+    constructor(elem, options) {
+        super();
+        /** @type {HTMLElement} */
+        this.elem = elem || $("<div></div>")[0];
+        elem.classList.add("selectable-list");
+        elem.setAttribute("tabindex", "-1");
+        $(elem).disableSelection();
+        this.options = Object.assign({
+            "selector":"*",
+            "selectedClass":"selected",
+        }, options);
+        
+        elem.addEventListener("click",(e)=>{
+            var tr = this.items.find(elem=>elem.contains(e.target));
+            if (!tr) return;
+            this.toggle(tr);
+        });
+        window.addEventListener("keydown", this.on_keydown = (e)=>{
+            if (!dom_utils.has_focus(this.elem)) return;
+            e.preventDefault();
+            var items = this.items;
+            var index = items.indexOf(this._selected);
+            if (e.key === "ArrowUp") {
+                index--;
+            } else if (e.key === "ArrowDown") {
+                index++;
+            } else {
+                return;
+            }
+            index = utils.clamp(index, 0, items.length-1);
+            this.select(items[index]);
+        });
+    }
+    get_item(i) {
+        return this.items[i];
+    }
+    get items() {
+        return Array.from(this.elem.children).filter(e=>e.matches(this.options.selector));
+    }
+    toggle(item) {
+        if (this._selected === item) this.select(null);
+        else this.select(item);
+    }
+    select(item) {
+        this.elem.focus();
+        if (this._selected === item) return;
+        if (this._selected) {
+            this._selected.classList.remove(this.options.selectedClass);
+            this.emit("deselect", this._selected);
+        }
+        this._selected = item;
+        if (this._selected) {
+            this._selected.classList.add(this.options.selectedClass);
+            this._selected.scrollIntoView({block:"nearest", inline:"nearest"})
+            this.emit("select", this._selected);
+        }
+        this.emit("change", this._selected, this.selected_index);
+    }
+
+    destroy() {
+        window.removeEventListener("keydown", this.on_keydown);
+    }
+}
+
+/* class Chapter {
+    constructor(c,i) {
+        Object.assign(this, c);
+        this.index = i;
+    }
+    toString(with_time=false) {
+        return `${String(this.index+1).padStart(2,"0")}. ${this.title}` + (with_time?` [${utils.ms_to_timespan_str(this.time*1000)}]`:"");
+    }
+} */
+
+
+//---------------------------------------------------------------------------------
+
+export function get_rect_pt_percent(rect, pt) {
+    return {x:(pt.x-rect.x)/rect.width, y:(pt.y-rect.y)/rect.height};
+}
+
+// fancy box fixes (ffs so fucking many)...
+
+(()=>{
+    /* var instances = [];
+
+    var old_getComputedStyle = window.getComputedStyle;
+    window.getComputedStyle = function(el, p_el) {
+        if (!(el instanceof Element)) return {};
+        return old_getComputedStyle.apply(null, [el, p_el])
+    }
+    
+    Fancybox.getInstance = function(id) {
+        var _instances = instances;
+        if (id) _instances = _instances.filter(i=>i.id==id);
+        for (var instance of _instances) {
+            if (instance && instance.state !== "closing" && instance.state !== "customClosing") {
+                return instance;
+            }
+        }
+        return null;
+    }; */
+    
+    window.Fancybox = class extends Fancybox {
+        attachEvents() {
+            this.original_active_element = document.activeElement;
+            this.$container.focus();
+            super.attachEvents();
+            this.$container.addEventListener("mousedown", this._onMousedown2 = (e)=>{
+                var slide = this.getSlide();
+                this._content_mousedown = !!(slide && slide.$content.contains(e.target));
+            }, true);
+        }
+        detachEvents() {
+            super.detachEvents();
+            if (this.original_active_element) this.original_active_element.focus({preventScroll: true});
+            this.$container.removeEventListener("mousedown", this._onMousedown2);
+        }
+        onClick(e) {
+            if (this._content_mousedown) return;
+            super.onClick(e);
+        }
+    }
+    
+    Object.assign(window.Fancybox.defaults, {
+        closeButton:"inside",
+        Hash: false,
+        ScrollLock: false,
+        dragToClose: false,
+        autoFocus: false,
+        trapFocus: false,
+        keyboard: false,
+        click: "close",
+        Carousel: {
+            Panzoom: {
+                touch: false
+            }
+        }
+    });
+    /* window.Fancybox = class extends Fancybox {
+        setContent(slide, html, opts) {
+            var shadow = slide.$content.attachShadow({mode:'open'});
+            slide.$content.remove();
+            dom_utils.clone_document_head(app.root, shadow, {style:true, script:false, other:false}).then(()=>{
+                shadow.append(slide.$content);
+            })
+            super.setContent(slide, html, opts);
+            // slide.$el.prepend()
+        }
+    } */
+    /* window.Fancybox = class extends Fancybox {
+        constructor(...args) {
+            super(...args);
+            instances.push(this);
+        }
+        attachEvents() {
+        app.root.addEventListener("mousedown", this.onMousedown);
+        app.root.addEventListener("keydown", this.onKeydown);
+        this.$container.addEventListener("click", this.onClick);
+        }
+        detachEvents() {
+            app.root.removeEventListener("mousedown", this.onMousedown);
+            app.root.removeEventListener("keydown", this.onKeydown);
+            this.$container.removeEventListener("click", this.onClick);
+        }
+        onMousedown(e) {
+            var slide = this.getSlide();
+            this._content_mousedown = !!(slide && slide.$content.contains(e.target));
+            super.onMousedown(e);
+        }
+        onClick(e) {
+            if (this._content_mousedown) return;
+            super.onClick(e);
+        }
+        close(...args) {
+            super.close(...args)
+        }
+        // focus() { debugger; }
+        destroy() {
+            var i = instances.indexOf(this);
+            if (i>-1) instances.splice(i,1);
+            super.destroy();
+        };
+    } */
+})();
+export class JsonElement {
+    constructor(data, key, parent) {
+        this.data = data;
+        this.type = typeof this.data;
+        var is_array = Array.isArray(this.data);
+        if (is_array) this.type = "array";
+        else if (this.data === null) this.type = "null";
+
+        this.elem = document.createElement("div");
+        this.elem.classList.add("json-node");
+        this.value_elem = document.createElement("div");
+        this.value_elem.classList.add("json-value");
+        var prefix = "";
+        var suffix = "";
+        if (key) prefix = key+": ";
+        if (this.type == "array") {
+            prefix += "[";
+            suffix += "]";
+        } else if (this.type == "object") {
+            prefix += "{";
+            suffix += "}";
+        }
+        var prefix_elem = document.createElement("span");
+        prefix_elem.classList.add("json-prefix");
+        prefix_elem.innerText = prefix;
+
+        var suffix_elem = document.createElement("span");
+        suffix_elem.classList.add("json-suffix");
+        suffix_elem.innerText = suffix;
+
+        if (this.type == "array" || this.type == "object") {
+            this.children = [];
+            for (var k in this.data) {
+                var child = new JsonElement(data[k], is_array ? null : k, this);
+                this.value_elem.append(child.elem);
+                this.children.push(child);
+            }
+        } else {
+            this.value_elem.innerText = String(this.data);
+        }
+        var collapsible = !!(this.children && this.children.length > 0 && !!parent);
+        var empty = !!(this.children && this.children == 0);
+        var placeholder_elem;
+        if (collapsible) {
+            placeholder_elem = document.createElement("span");
+            placeholder_elem.classList.add("json-placeholder");
+            placeholder_elem.innerText = `${this.children.length} items`;
+            if (collapsible) {
+                placeholder_elem.onclick=()=>this.toggle();
+                prefix_elem.onclick=()=>this.toggle();
+                suffix_elem.onclick=()=>this.toggle();
+            }
+        }
+
+        this.elem.append(prefix_elem);
+        this.elem.append(this.value_elem);
+        if (placeholder_elem) this.elem.append(placeholder_elem);
+        this.elem.append(suffix_elem);
+        
+        this.elem.dataset.jsonType = this.type;
+        this.elem.classList.toggle("collapsible", collapsible);
+        this.elem.classList.toggle("empty", empty);
+        
+        Object.assign(this.elem.style, {
+            "font-family": "monospace",
+            "font-size": "12px",
+            "word-break": "break-all"
+        });
+    }
+    toggle() {
+        this.elem.classList.toggle("collapsed")
+    }
+}
+export class JsonRoot extends JsonElement {
+    constructor(data, collapsed_children=false) {
+        super(data);
+        if (collapsed_children) {
+            for (var c of this.children) {
+                c.toggle();
+            }
+        }
+    }
+}
+
+// -----------------------------------------------------------
+
+export class ModalPropertyContainer extends UI.PropertyContainer {
+    get showing() { return !!this.fb; }
+    get changes() { return Object.keys(utils.deep_diff(this.property_lookup_on_show, this.property_lookup)); }
+    get modal_title() { return this.get_setting("modal.title"); }
+
+    constructor(settings) {
+        settings = {
+            // modal_click: "close",
+            "modal.close": true,
+            "modal.title": "",
+            "modal.footer": false,
+            "modal.header": true,
+            "modal.width": undefined,
+            ...settings
+        };
+
+        super(settings);
+        
+        this.header = new UI($(`<div class="fancybox-header"></div>`)[0]);
+        this.content = new UI($(`<div class="fancybox-content"></div>`)[0]);
+        this.footer = new UI($(`<div class="fancybox-footer"></div>`)[0]);
+
+        this.elem.append(this.header);
+        this.elem.append(this.content);
+        this.elem.append(this.footer);
+        this.elem.style.padding = "0";
+        this.elem.style.gap = "0";
+        this.content.elem.style.display = "flex";
+        this.content.elem.style["flex-direction"] = "column";
+        this.content.elem.style.gap = "var(--gap)";
+        if ("modal.width" in this.settings) this.elem.style.width = this.get_setting("modal.width");
+
+        this.on("update", ()=>{
+            var w = this.get_setting("modal.width");
+            if (w !== undefined) this.elem.style.width = `${w}px`;
+            dom_utils.set_inner_html(this.header.elem, this.get_setting("modal.title"));
+            dom_utils.toggle_class(this.footer.elem, "d-none", !this.get_setting("modal.footer"));
+            dom_utils.toggle_class(this.header.elem, "d-none", !this.get_setting("modal.header"));
+        });
+    }
+    
+    get_interactive_elements() {
+        return [...super.get_interactive_elements(), ...this.footer.elem.querySelectorAll("button")];
+    }
+
+    show(datas) {
+        if (this.fb) return;
+        var close_button = this.elem.querySelector("button.carousel__button.is-close");
+        if (close_button) close_button.remove();
+
+        this.fb = new Fancybox([{
+            src: this.elem,
+            type: "html",
+        }], {
+            // click:()=>this.get_setting("modal.modal_click"),
+            on: {
+                shouldClose:(e)=>{
+                    return this.get_setting("modal.close");
+                }
+            }
+        });
+        this.fb.on("closing",()=>{
+            this.fb = null;
+            this.emit("hide");
+        });
+        this.fb.on("destroy",()=>{
+            // this.items = [null];
+            // this.update_properties_with_data();
+        });
+
+        this.datas = datas;
+
+        // properties havent registered yet... wait until next frame.
+        // but important to do before emit show, queues next frame before update_layout->update_next_frame
+        requestAnimationFrame(()=>{
+            this.update();
+            this.property_lookup_on_show = this.property_lookup;
+        });
+
+        this.emit("show", [...this.datas]);
+        // this.update_next_frame();
+    }
+
+    hide() {
+        if (!this.fb) return;
+        this.fb.close();
+        this.fb = null;
+    }
+}
+
+export class NodeMediaServerTargetConfigMenu extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title": `Configure ${app.conf["nms.name"]} Target`,
+            data: ()=>utils.try(()=>app.$._session.target_configs["local"]) || {},
+        });
+
+        var row = this.content.append(new UI.FlexRow());
+        row.append(`<p>Nothing here yet.</p>`);
+        /* var streams = new UI.PropertyList("streams", "Streams", {
+            properties:()=>{
+                var container = new UI.PropertyContainer({
+
+                });
+                var passthrough = new UI.Property("passthrough", "Passthrough", `<select>`, {
+                    "options": YES_OR_NO,
+                    "default": false,
+                });
+                container.append(passthrough);
+                var video_bitrate = new UI.Property("video_bitrate", "Bitrate", `<div class="input-wrapper suffix number Kbips"><input type="number" min="500" max="5000"></div>`, {
+                    "default": "3000",
+                });
+                container.append(video_bitrate);
+                var audio_bitrate = new UI.Property("audio_bitrate", "Bitrate", `<div class="input-wrapper suffix number Kbips"><input type="number" min="64" max="320"></div>`, {
+                    "default": "160",
+                });
+                container.append(audio_bitrate);
+                var resolution = new UI.Property("resolution", "Resolution", `<select>`, {
+                    options: app.$.properties.stream_settings.props["resolution"].options,
+                    "default": "720x1280",
+                });
+                container.append(resolution);
+                return container;
+            },
+            default: []
+        });
+        row.append(streams); */
+
+        /* this.on("property-change", (e)=>{
+            if (e.trigger) {
+                app.request({
+                    call: ["session", "update_service_config"],
+                    arguments: ["restream.io", e.name, e._value]
+                });
+            }
+        }); */
+    }
+
+    async show(target) {
+        super.show();
+        /* this.target = target
+        console.log(await app.request({
+            call: ["app", "plugins", "restream.io", "get_channels"],
+            arguments: [target.id]
+        })); */
+    }
+}
+
+export class UserConfigurationSettings extends ModalPropertyContainer {
+    constructor() {
+        super({
+            data:()=>app.$.settings,
+            "modal.title": "Client Configuration",
+            "modal.footer":true,
+        });
+
+        function get_default() { return app.settings.defaults[this.name] }
+
+        var row = this.content.append(new UI.FlexRow());
+        row.append(
+            new UI.Property("playlist_sticky", "[Playlist] Sticky Mode", `<select>`, {
+                "options":YES_OR_NO,
+                "default":get_default,
+            }),
+            new UI.Property("wrap_playlist_items", "[Playlist] Line Wrap", `<select>`, {
+                "options":YES_OR_NO,
+                "default":get_default,
+            }),
+            new UI.Property("show_extra_playlist_icons", "[Playlist] Show Codecs", `<select>`, {
+                "options":YES_OR_NO,
+                "default":get_default,
+            }),
+        );
+        var row = this.content.append(new UI.FlexRow());
+        row.append(
+            new UI.Property("time_display_ms", "[Media Player / Timeline] Show Milliseconds", `<select>`, {
+                "options":YES_OR_NO,
+                "default":get_default,
+            }),
+            new UI.Property("show_chapters", "[Media Player] Show Chapters", `<select>`, {
+                "options":YES_OR_NO,
+                "default":get_default,
+            })
+        );
+        var row = this.content.append(new UI.FlexRow());
+        row.append(
+            new UI.Property("sessions_display", "[Sessions] Display Mode", `<select>`, {
+                "options":[["tabs","Tabs"],["select","Dropdown"]],
+                "default":get_default,
+            }),
+            new UI.Property("open_file_manager_in_new_window", "[File Manager] Open in New Window", `<select>`, {
+                "options":YES_OR_NO,
+                "default":get_default,
+            })
+        );
+        var row = this.content.append(new UI.FlexRow());
+        row.append(
+            new UI.Property("show_encoder_info", "[Encoder] Show Stats", `<select>`, {
+                "options":YES_OR_NO,
+                "default":get_default,
+            })
+        );
+        
+        var reset_button = new UI.Button(`Reset`, {
+            click: ()=>this.reset()
+        });
+        this.footer.append(reset_button);
+        
+        var reset_layout_button = new UI.Button(`Reset Layout`, {
+            click: ()=>{
+                app.settings.set("layout", null)
+                app.update_layout();
+            }
+        });
+        this.footer.append(reset_layout_button);
+
+        this.on("property-change", (e)=>{
+            if (!e.name || !e.trigger) return;
+            app.settings.set(e.name, e._value);
+        })
+    }
+}
+export class KeyboardShortcuts extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title": "Controls",
+        });
+        var sections = {
+            "General": [
+                [`[Ctrl] + [1] ... [9]`, `Open Session`],
+                [`[Ctrl] + [0]`, `Minimize Session`],
+                [`[Ctrl] + [S]`, `Save Session`],
+                [`[F1]`, `Toggle Help`],
+            ],
+            "Playlist": [
+                [`[Arrow Up] / [Arrow Down]`, `Select Previous / Next item`],
+                [`Click`, `Select Item`],
+                [`Drag + Drop`, `Rearrange Selected Items`],
+                [`[Ctrl] + Left Click`, `Toggle Select Item`],
+                [`[Shift] + Left Click`, `Select Multiple Items`],
+                [`[Alt] + Drag`, `Move View`],
+                [`[Ctrl] + [A]`, `Select All Items`],
+                [`[Ctrl] + [D]`, `Deselect All Items`],
+                ...app.playlist.all_commands.filter(c=>c.options.view === PLAYLIST_VIEW.LIST && c.shortcut()).map(c=>[c.shortcut_alt(), c.description_or_name()])
+            ],
+            "Playlist (Timeline Mode)": [
+                [`[Arrow Left] / [Arrow Right]`, `Select Previous / Next Item`],
+                [`Mouse Wheel Up / Down`, `Zoom In & Out`],
+                [`Left Click Tick Bar`, `Place Timeline Cursor`],
+                ...app.playlist.all_commands.filter(c=>c.options.view === PLAYLIST_VIEW.TIMELINE && c.shortcut()).map(c=>[c.shortcut_alt(), c.description_or_name()])
+            ]
+        };
+        //.replace("+", `<i class="fas fa-plus"></i>`)
+        var html = Object.entries(sections).map(([name,s])=>`<table class="keyboard-shortcuts"><tr><th colspan="2">${name}</th></tr>${s.map(line=>`<tr>${line.map(l=>`<td>${l.replace(/\[(.+?)\]/g, `<span class="keyboard-key">$1</span>`)}</td>`).join("")}</tr>`).join("")}</table>`).join("");
+        var tables = $(html);
+        this.content.append(...tables);
+    }
+}
+
+/* class AdvancedFunctionsMenu extends ModalPropertyContainer {
+    constructor() {
+        super({
+            title: "Advanced Functions",
+        });
+        var row = this.append(new UI.FlexRow());
+        row.append(
+        )
+    }
+
+    show() {
+        super.show();
+    }
+} */
+
+export class FileSystemInfoMenu extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title": "Local File System Tree",
+            "modal.width": "80%",
+            "modal.footer": true,
+        });
+        var uid = 0;
+        var nodes = [];
+        var percent_fraction_digits=1;
+        var process = (n, parent, icon)=>{
+            var node = {};
+            node.id = ++uid;
+            nodes[node.id] = node;
+            node.level = parent.level+1;
+            node.parent = parent;
+            // node.parent = parent;
+            // node.parents = [node.id,...parent.parents];
+            node.name = n[0];
+            // console.log(node.level, node.name)
+            if (typeof n[1] === "object") {
+                node.icon = icon || "folder";
+                node.isdir = true;
+                node.folders = 0;
+                node.files = 0;
+                node.size = 0;
+                node.children = [];
+                var children = n[1];
+                children.sort((a,b)=>(typeof b[1]==="object"?1:0)-(typeof a[1]==="object"?1:0));
+                var i=0, len=children.length;
+                var f = children.findIndex(c=>typeof c[1]!=="object");
+                if (f < 1) f = len;
+                for (;i<f;i++) {
+                    node.children.push(process(children[i], node));
+                }
+                if (i<len) {
+                    var files = children.slice(i);
+                    if (files.length == 1) node.children.push(process(files[0], node));
+                    else node.children.push(process([`[${files.length} Files]`, files], node, "files"));
+                }
+                for (var c of node.children) {
+                    if (c.isdir) {
+                        node.folders += c.folders + 1;
+                        node.files += c.files;
+                    } else {
+                        node.files++;
+                    }
+                    node.size += c.size;
+                }
+            } else {
+                node.icon = icon || "file";
+                node.size = n[1] || 0;
+            }
+            return node;
+        };
+        var create_bar = (p)=>{
+            var outer = document.createElement("div");
+            outer.classList.add("percent-bar");
+            var inner = document.createElement("div");
+            var text = document.createElement("span");
+            inner.style.width = `${p*100}%`;
+            outer.append(inner, text);
+            text.innerText = p === undefined ? "-" : (p*100).toLocaleString(undefined, {minimumFractionDigits:percent_fraction_digits,maximumFractionDigits:percent_fraction_digits})+"%";
+            return outer;
+        }
+        var process2 = (node, root_node)=>{
+            node.total_percent = node.size / root_node.size;
+            if (node.children) {
+                for (var c of node.children) {
+                    c.percent = (c.size / node.size);
+                    process2(c, root_node);
+                }
+            }
+        };
+
+        var init = async()=> {
+            for (let id in app.$.volumes) {
+                if (app.$.volumes[id].driver !== "LocalFileSystem") continue;
+                var volume = app.$.volumes[id];
+                var loading_el = $(`<tr><td colspan="6"><i class="fas fa-sync fa-spin"></i> Loading...</td></tr>`)[0];
+                dom_utils.empty(tbody);
+                tbody.append(loading_el);
+                var r = await app.request({
+                    call: ["app", "analyze_local_file_system_volume"],
+                    arguments: [id]
+                });
+                loading_el.remove();
+                var root_node = process([volume.name, r[1]], {root:volume.root,level:-1}, "drive");
+                process2(root_node, root_node);
+                render(root_node);
+                tbody.append(root_node.el);
+                root_node.toggle();
+            }
+        };
+
+        var render = (node)=>{
+            if (node.el) return;
+            var row_el = document.createElement("tr");
+            tbody.append(row_el);
+            
+            var name_outer_el = document.createElement("td");
+            name_outer_el.classList.add("name");
+
+            var name_inner_el = document.createElement("div");
+            name_inner_el.style.display="flex"
+            name_inner_el.style.alignItems="center"
+            name_inner_el.style.gap="5px"
+            name_inner_el.style.paddingLeft = `${node.level * 10}px`;
+
+            var name_el = document.createElement("a");
+            name_el.href="javascript:void(0)";
+            name_el.innerText = node.name;
+
+            name_el.onclick = ()=>{
+                var path = [], p = node;
+                while(p.parent) {
+                    if (p.icon != "files") path.push(p.name);
+                    p = p.parent;
+                }
+                var path = path.filter(p=>p).reverse();
+                if (node.icon == "files") path.push("");
+                path[0] = p.root;
+                open_file_manager({start: path.join("/")});
+            }
+            var arrow_el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            arrow_el.innerHTML = `<use href="icons.svg#chevron-right"></use>`;
+            arrow_el.classList.add("arrow");
+            name_inner_el.append(arrow_el);
+            if (!node.isdir) arrow_el.style.visibility = "hidden";
+
+            var icon_el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+            icon_el.innerHTML = `<use href="icons.svg#${node.icon}"></use>`;
+            name_inner_el.append(icon_el, name_el);
+            name_outer_el.append(name_inner_el);
+
+            var size_el = document.createElement("td");
+            size_el.classList.add("size");
+            size_el.innerText = utils.format_bytes(node.size);
+            var files_el = document.createElement("td");
+            files_el.classList.add("files");
+            files_el.innerText = node.isdir ? node.files.toLocaleString() : "-";
+            var folders_el = document.createElement("td");
+            folders_el.classList.add("folders");
+            folders_el.innerText = node.isdir ? node.folders.toLocaleString() : "-";
+            var percent_el = document.createElement("td");
+            percent_el.classList.add("percent");
+            percent_el.append(create_bar(node.percent));
+            var percent_total_el = document.createElement("td");
+            percent_total_el.classList.add("percent-total");
+            percent_total_el.append(create_bar(node.total_percent));
+
+            row_el.append(name_outer_el, size_el, files_el, folders_el, percent_total_el, percent_el);
+            node.el = row_el;
+
+            if (node.isdir) {
+                node.open = false;
+                node.toggle = ()=>{
+                    var open = node.open = !node.open;
+                    row_el.classList.toggle("open", open);
+                    var next = node;
+                    if (!node.sorted) {
+                        node.sorted = true;
+                        node.children.sort((a,b)=>b.size-a.size);
+                    }
+                    for (var c of node.children) {
+                        render(c);
+                        next.el.after(c.el);
+                        next = c;
+                    }
+                    var update = (n)=>{
+                        if (!n.isdir) return;
+                        var next = n;
+                        for (var c of n.children) {
+                            if (!c.el) continue;
+                            var o = open && n.open;
+                            if (o && !c.el.parentElement) {
+                                next.el.after(c.el);
+                                next = c;
+                            } else if (!o && c.el.parentElement) {
+                                c.el.remove();
+                            }
+                            // c.el.style.display = (open && n.open)?"":"none";
+                            update(c);
+                        }
+                    }
+                    update(node);
+                }
+                arrow_el.style.cursor = "pointer";
+                arrow_el.onclick = node.toggle;
+            }
+            return node;
+        }
+
+        // -------------------------------
+
+        var table = document.createElement("table");
+        table.classList.add("files");
+        var th = document.createElement("thead");
+        table.append(th);
+        var tr = document.createElement("tr");
+        tr.append(...["Name", "Size", "Files", "Folders", "% Total", "% Parent"].map((c)=>{
+            var td = document.createElement("td");
+            td.innerHTML = c;
+            return td;
+        }))
+        th.append(tr);
+        var tbody = document.createElement("tbody");
+        table.append(tbody);
+        this.content.append(table);
+
+        var refresh_button = new UI.Button("Refresh", {
+            click:()=>init()
+        });
+        this.footer.append(refresh_button)
+        
+        var inited;
+        this.on("show", ()=>{
+            if (inited) return;
+            inited = true;
+            init();
+        })
+    }
+}
+
+export class SystemManagerMenu extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title": "System Manager",
+        });
+        class Bar extends UI {
+            constructor(settings) {
+                super(null, settings);
+                this.append(new UI.FlexRow()).append(this.label = new UI.Label(null, {content: ()=>this.get_setting("label")}));
+                this.bar = new UI($(`<div class="bar"></div>`)[0]);
+                this.append(new UI.FlexRow()).append(this.bar);
+                this.on("update", ()=>{
+                    var x = this.get_setting("value");
+                    var n = this.get_setting("total");
+                    var format = (x)=>this.get_setting("format", x);
+                    var inner = $(`<div class="inner"></div>`)[0];
+                    var percent = (n == undefined) ? x : x/n;
+                    inner.style.width = `${Math.round(percent*1000)/10}%`;
+                    var str = (n == undefined) ? format(x||0) : `${format(x||0)} / ${format(n||0)}`;
+                    var text = $(`<div class="text">${str}</div>`)[0];
+                    this.bar.empty().append(inner, text);
+                });
+            }
+        }
+        class Process extends UI.Column {
+            constructor(name) {
+                super({gap:5});
+
+                var is_running = ()=>app.$.processes[name].status == "online"
+
+                var row = this.append(new UI.Row());
+                this.elem.classList.add("process");
+                var info_ui = row.append(new UI({flex:1}));
+                var name_ui = info_ui.append(new UI());
+                var description_ui = info_ui.append(new UI());
+                var buttons_ui = row.append(new UI.Row({gap:5}));
+                var stats_ui = this.append(new UI.Row({justify:"right"}));
+                var restart_button = new UI.Button("RESTART", {
+                    click: ()=>{
+                        app.request_no_timeout({
+                            call: ["core", `pm2_restart`],
+                            arguments: [name]
+                        });
+                    },
+                    hidden: ()=>!is_running()
+                });
+                var stop_button = new UI.Button("STOP", {
+                    click: ()=>{
+                        app.request_no_timeout({
+                            call: ["core", `pm2_stop`],
+                            arguments: [name]
+                        });
+                    },
+                    hidden: ()=>!is_running()
+                });
+                var start_button = new UI.Button("START", {
+                    click: ()=>{
+                        app.request_no_timeout({
+                            call: ["core", `pm2_start`],
+                            arguments: [name]
+                        });
+                    },
+                    hidden: ()=>is_running()
+                });
+                var buttons = [restart_button, stop_button, start_button];
+                if (name === "main") buttons = [restart_button]
+                buttons_ui.append(...buttons);
+
+                this.on("update", ()=>{
+                    var c = app.conf[name];
+                    var p = app.$.processes[name];
+                    var color = null;
+                    if (p.status.match(/(online|launch)/)) color="#0a0";
+                    else if (p.status.match(/stop/)) color="#666";
+                    else if (p.status.match(/error/)) color="f00";
+                    dom_utils.set_inner_html(name_ui.elem, `${c.name} [<span class="status">${p.status.toUpperCase()}</span>]`);
+                    var status_el = name_ui.elem.querySelector(".status");
+                    status_el.style.color = color;
+                    name_ui.style["font-weight"] = "bold";
+                    dom_utils.set_inner_html(description_ui.elem, c.description);
+                    
+                    var pinfo = app.$.process_info[p.pid] || {};
+                    var cpu = Number((pinfo.cpu||0)*100).toLocaleString(undefined, {minimumFractionDigits:2,maximumFractionDigits:2})+"%";
+                    var mem = utils.format_bytes(pinfo.memory||0);
+                    var uptime = utils.ms_to_human_readable_str(pinfo.elapsed||0);
+                    var s = {"CPU":cpu,"Memory":mem,"Transfer rate":`↑ ${utils.format_bytes(pinfo.sent)}ps / ↓ ${utils.format_bytes(pinfo.received)}ps`, "Uptime":uptime};
+                    dom_utils.set_inner_html(stats_ui.elem, Object.entries(s).map(([k,v])=>`${k}: ${v}`).join(" | "));
+                })
+            }
+        }
+        var uptime = this.content.append(new UI({
+            "update":()=>{
+                dom_utils.set_inner_html(uptime.elem, `System uptime: ${utils.ms_to_human_readable_str(app.$.sysinfo.uptime*1000)}`)
+            }
+        }));
+        var transfer = this.content.append(new UI({
+            "update":()=>{
+                dom_utils.set_inner_html(transfer.elem, `Transfer rate: ↑ ${utils.format_bytes(app.$.sysinfo.sent)}ps / ↓ ${utils.format_bytes(app.$.sysinfo.received)}ps`)
+            }
+        }));
+        this.content.append(new Bar({
+            label: "Disk",
+            value: ()=>app.$.sysinfo.disk_total-app.$.sysinfo.disk_free,
+            total: ()=>app.$.sysinfo.disk_total,
+            format: (x)=>utils.format_bytes(x)
+        }));
+        this.content.append(new Bar({
+            label:"Memory",
+            value: ()=>app.$.sysinfo.memory_total-app.$.sysinfo.memory_free,
+            total: ()=>app.$.sysinfo.memory_total,
+            format: (x)=>utils.format_bytes(x)
+        }));
+        this.content.append(new Bar({
+            label:"CPU Usage",
+            value: ()=>app.$.sysinfo.cpu_avg,
+            format: (x)=>Number(x*100).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})+"%"
+        }));
+
+        var process_wrapper = new UI();
+        process_wrapper.append(`<label>Processes</label>`)
+        var process_container = new UI.FlexColumn({gap:5});
+        process_wrapper.append(process_container);
+        this.content.append(process_wrapper);
+
+        this.on("update", ()=>{
+            var processes = Object.keys(app.$.processes);
+            utils.sort(processes, (p)=>p==="main"?0:1)
+            dom_utils.rebuild(process_container.elem, processes, {
+                id_callback: (p)=>p,
+                add: (p, elem, i)=>{
+                    if (!elem) elem = new Process(p).elem;
+                    return elem;
+                }
+            });
+        });
+        var tick_timeout;
+        var tick = async ()=>{
+            await app.request({
+                call: ["app", "update_system_info"]
+            });
+            if (this.showing) next_tick();
+        }
+        var next_tick = ()=>tick_timeout = setTimeout(tick, 2000);
+        var clear_tick = ()=>clearTimeout(tick_timeout);
+
+        this.on("show", ()=>{
+            tick();
+        })
+        this.on("hide", ()=>{
+            clear_tick();
+        })
+    }
+}
+export class FileManagerMenu extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.footer": false,
+            "modal.header": false,
+        });
+        Object.assign(this.elem.style, {
+            "padding": "0",
+            "width": "100%",
+            "height": "100%",
+            "min-height": "200px",
+        });
+        Object.assign(this.content.elem.style, {
+            "padding": 0,
+            "height": "100%",
+        });
+        this.content.elem.style.height = "100%";
+        /** @type {HTMLIFrameElement} */
+        this.iframe = $(`<iframe allowfullscreen="allowfullscreen" allow="autoplay; fullscreen" scrolling="auto" width="100%" height="100%" frameBorder="0"></iframe>`)[0];
+        this.content.elem.append(this.iframe);
+    }
+    show(url) {
+        super.show();
+        this.iframe.src = url;
+    }
+}
+
+
+export class ScheduleGenerator extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title": "Schedule Generator",
+            data: ()=>app.settings.get("schedule_generator"),
+            nullify_defaults: true,
+        });
+
+        var row = this.content.append(new UI.FlexRow());
+        row.append(
+            this.start_time = new UI.Property("start_time", "Start Time", `<input type="time">`, {
+                default: ()=>"00:00" //new Date().toLocaleTimeString().slice(0,5)
+            }),
+            this.time_rounding = new UI.Property("time_rounding", "Time Rounding", `<select>`, {
+                default: 5*60,
+                options: [[1*60,"None"],[5*60,"5 mins"],[10*60,"10 mins"],[15*60,"15 mins"]],
+            }),
+            this.min_duration_filter = new UI.Property("min_duration_filter", "Minimum Duration Filter", `<select>`, {
+                default: 0,
+                options: [[0,"None"],...[10,30,1*60,2*60,5*60,10*60].map(f=>[f, utils.seconds_to_human_readable_str(f)])],
+            })
+        )
+
+        var row = this.content.append(new UI.FlexRow());
+        row.append(
+            this.remove_ext = new UI.Property("remove_ext", "Remove File Extensions", `<select>`, {
+                default: true,
+                options: YES_OR_NO,
+            }),
+            this.use_labels = new UI.Property("use_labels", "Use Labels", `<select>`, {
+                default: true,
+                options: YES_OR_NO,
+            })
+            /* this.inner_playlists = new UI.Property("inner_playlists", "Include Playlist Contents", `<select>`, {
+                default: true,
+                options: YES_OR_NO,
+            }); */
+        );
+
+        var row = this.content.append(new UI.FlexRow());
+        row.append(
+            this.output = new UI.TextArea(null, "Output", {
+                "textarea.rows": 12,
+                "reset": false,
+                "copy": true,
+            })
+        );
+
+        this.on("property-change", (e)=>{
+            if (!e.name || !e.trigger) return;
+            app.settings.set("schedule_generator", this.named_property_lookup_not_null);
+            debounced_render()
+        });
+
+        this.on("show",()=>{
+            debounced_render()
+            // this.clip_start.set_values(null, true);
+        })
+
+        var debounced_render = utils.debounce(()=>{
+            var day = 60 * 60 * 24;
+            var t = this.start_time.value;
+            var time = utils.timespan_str_to_seconds(t, "hh:mm");
+            var r = this.time_rounding.value;
+            var min = this.min_duration_filter.value;
+            var rows = [];
+            var add_line = (name)=>{
+                var time_r = Math.round(time/r)*r;
+                time_r %= day;
+                var time_str = utils.seconds_to_timespan_str(time_r , "hh:mm");
+                rows.push(`${time_str} - ${name}`);
+            };
+            /** @param {PlaylistItem} item */
+            var walk = (item)=>{
+                var t = item.userdata.duration;
+                if (t && t>=min) {
+                    var name = item.get_pretty_name({ext:!this.remove_ext.value, label:this.use_labels.value});
+                    add_line(name);
+                }
+                time += t;
+                if (!item.is_merged_playlist) {
+                    for (var c of item.children) walk(c);
+                }
+            }
+            app.get_playlist_item("0").children.forEach(c=>walk(c));
+            add_line(`Fin`);
+            this.output.set_value(rows.join("\n"));
+        }, 0);
+    }
+}
+
+/* function get_timespan_format_by_duration(d) {
+    if (d < 60) return `s.SSS`;
+    if (d < 60*60) return `m:ss.SSS`;
+    return `h:mm:ss.SSS`;
+} */
+export class FontSettings extends ModalPropertyContainer {
+    constructor() {
+        super({
+            data:()=>app.$.fonts,
+            "modal.title": `Font Manager`,
+            "modal.footer":false,
+        });
+
+        this.elem.classList.add("font-manager");
+
+        var row = this.content.append(new UI.FlexRow());
+        
+        var left_elem = $(`<div class="left"></div>`)[0];
+        var list = new SelectableList($(`<div class="content thin-scrollbar"></div>`)[0], {});
+        var left_footer_elem = $(`<div class="footer"></div>`)[0];
+        left_elem.append(list.elem, left_footer_elem);
+        left_elem.style.height="300px";
+        left_elem.style.display="flex";
+        list.elem.style.flex = "1";
+
+        var right_elem = $(`<div class="right"></div>`)[0];
+        var info_elem = $(`<div class="content thin-scrollbar"></div>`)[0];
+        var right_footer_elem = $(`<div class="footer"></div>`)[0];
+        right_elem.append(info_elem, right_footer_elem);
+
+        row.append(left_elem, right_elem);
+
+        // app.load_font
+        var fd = new FileDrop(list.elem);
+        fd.on("drop", (files)=>{
+            app.upload_queue.add(files, {dir:"/fonts"});
+        })
+        
+        var add_button = new UI.Button("Add New Font", {
+            click:async ()=>{
+                var files = dom_utils.upload(`application/font-sfnt,application/font-sfnt`, true)
+                app.upload_queue.add(files, {dir:"/fonts"});
+            },
+            "disabled":()=>!list.selected,
+        });
+
+        left_footer_elem.append(add_button);
+        
+        var delete_button = new UI.Button("Delete", {
+            click:async ()=>{
+                await app.request({
+                    call: ["app", "delete_font"],
+                    arguments: [list.selected.id]
+                });
+            },
+            "disabled":()=>!list.selected,
+        });
+        var download_button = new UI.Button("Download", {
+            click:async ()=>{
+            },
+            "disabled":()=>!list.selected,
+        });
+        right_footer_elem.append(delete_button, download_button);
+        
+        list.on("change", async (item, i)=>{
+            // await app.load_font(item.id);
+            // dom_utils.empty(info_elem);
+        });
+
+        this.on("show", async ()=>{
+            list.select(null);
+        });
+    }
+
+    destroy() {
+        super.destroy();
+        list.destroy();
+    }
+}
+
+export class SplitSettings extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title": ()=>`Split ${app.get_playlist_items_title(this.datas)}`,
+            "modal.footer":true,
+        });
+
+        var row = this.content.append(new UI.FlexRow());
+        row.append(
+            this.split_type = new UI.Property("split_type", "Split Method", `<select>`, {
+                options:[["total", "# of Parts"], ["duration", "Duration"], ["time_list", "List of Time Codes"], ["every_chapter", "Every Chapter"], ["chapter_list", "List of Chapters"]],
+                "default": "time_list",
+            })
+        );
+
+        var row = this.content.append(new UI.FlexRow());
+        row.append(
+            this.total = new UI.Property("total", "# of Parts", `<input type="number" min="1"></input>`, {
+                "info":`Number of pieces (evenly split)`,
+                "default":1,
+                "hidden":()=>this.split_type.value != "total",
+            }),
+            this.duration = new UI.TimeSpanProperty("duration", "Duration", {
+                "timespan.format": "h:mm:ss.SSS",
+                "info":`Every specified time span`,
+                "default": 0,
+                "min":0,
+                "hidden":()=>this.split_type.value != "duration",
+            }),
+            this.time_list = new UI.TextArea("time_list", "List of Time Codes", {
+                "info":`Comma separated list of time-codes like '1:03, 00:30:00, 1:02:57.333'`,
+                "textarea.min_rows": 1,
+                "textarea.return_blur": true,
+                "default":[],
+                "hidden":()=>this.split_type.value != "time_list",
+            }),
+            this.chapter_list = new UI.TextArea("chapter_list", "Chapter List", {
+                "info":`Comma separated list of chapters (zero-based) like '0, 1, 5, 6'`,
+                "textarea.min_rows": 1,
+                "textarea.return_blur": true,
+                "default":[],
+                "hidden":()=>this.split_type.value != "chapter_list",
+            })
+        );
+
+        var delimiter_regex = /[,;|\s]+/;
+        var pos_int = v=>Math.floor(Math.abs(parseFloat(v)))||0;
+        this.total.input_modifiers.push(v=>pos_int(v));
+        this.total.output_modifiers.push(v=>String(v));
+        var valid_time = (v)=>v && v>0 && v<this.seek.get_setting("seek.duration");
+        var valid_chapter = (v)=>this.seek.get_setting("seek.chapters")[v] !== undefined;
+        this.time_list.input_modifiers.push(v=>{
+            return [...v.split(delimiter_regex)].map(v=>utils.timespan_str_to_seconds(v)).filter(valid_time)
+        });
+        this.time_list.output_modifiers.push(v=>{
+            if (v.length == 1 && !v[0]) return "";
+            return v.map(v=>utils.seconds_to_timespan_str(v, "h?:mm:ss.SSS")).join(", ")
+        });
+        this.chapter_list.input_modifiers.push(v=>[...v.split(delimiter_regex)].map(v=>pos_int(v)).filter(valid_chapter));
+        this.chapter_list.output_modifiers.push(v=>v.join(", "));
+
+        [this.split_type,this.total,this.duration,this.time_list,this.chapter_list].forEach(p=>{
+            p.on("change", (e)=>{
+                if (e.trigger) this.update_markers();
+            })
+        });
+
+        var row = this.content.append(new UI.FlexRow());
+        row.append(
+            this.seek = new SeekBar({
+                "label": ()=>`Timeline [${utils.seconds_to_timespan_str(this.seek.get_setting("seek.duration"), app.user_time_format)}]`,
+                "info": `Add markers to the list with mouse click, click marker to remove, click & drag marker to move.`,
+                "seek.add_markers": true,
+                // "seek.show_times": false,
+            })
+        )
+        this.seek.on("markers-change", ()=>{
+            this.split_type.set_value("time_list");
+            var times = this.seek.get_setting("seek.markers").map(m=>m.time);
+            times = utils.sort(times);
+            this.time_list.set_value(times);
+        });
+        
+        this.split_button = new UI.Button(`Split`, {
+            click: ()=>{
+                app.playlist_split(this.datas, this.get_splits(), true)
+                this.hide();
+            }
+        });
+        this.footer.append(this.split_button)
+    }
+
+    get_splits(){
+        var max = 128;
+        var d = this.seek.get_setting("seek.duration");
+        var chapters = this.seek.get_setting("seek.chapters");
+        if (this.split_type.value == "total") {
+            var v = this.total.value;
+            var n = v ? Math.min(max, v) : 1;
+            return [...Array(n-1)].map((_,i)=>(d/n)*(i+1));
+        }
+        if (this.split_type.value == "duration") {
+            var v = this.duration.value;
+            var n = v ? Math.min(max, Math.floor(d / v)) : 0;
+            return [...Array(n)].map((_,i)=>v*(i+1));
+        }
+        if (this.split_type.value == "time_list") {
+            return this.time_list.value;
+        }
+        if (this.split_type.value == "every_chapter") {
+            chapters = chapters.map(c=>c.start);
+            chapters = chapters.filter(t=>t>1&&t<d-1);
+            return chapters;
+        }
+        if (this.split_type.value == "chapter_list") {
+            return chapters.filter((c,i)=>this.chapter_list.value.includes(i)).map(c=>c.start);
+        }
+    }
+
+    update_markers(){
+        this.seek.clear_markers();
+        this.get_splits().forEach(t=>this.seek.add_marker(t));
+    };
+
+    show(datas) {
+        super.show(datas);
+        this.seek.update_settings({
+            "seek.duration": this.data.userdata ? this.data.userdata.duration : 0,
+            "seek.chapters": this.data.userdata ? this.data.userdata.chapters : []
+        });
+        this.update_markers();
+    }
+}
+export class ScheduleStreamSettings extends ModalPropertyContainer {
+    constructor() {
+        super({
+            data: ()=>app.$._session,
+            "modal.title": "Schedule Stream Start",
+            "modal.footer": true,
+            nullify_defaults: true,
+        });
+
+        var row = this.content.append(new UI.FlexRow());
+        row.append(
+            this.schedule_start_time = new UI.DateTimeProperty("schedule_start_time", null, {
+                "label": function(){
+                    var n = `Start Date/Time`;
+                    if (this.value) {
+                        n += ` (<i>${utils.time_diff_readable(Date.now(), new Date(this.value))}</i>)`;
+                    }
+                    return n;
+                },
+                "default": null,
+                "datetime.after_now":true,
+            })
+        )
+        
+        var reset_button = new UI.Button(`Reset`, {
+            click: ()=>this.reset()
+        });
+        this.footer.append(reset_button);
+        
+        this.on("property-change", (e)=>{
+            if (!e.name || !e.trigger) return;
+            app.$._push([`sessions/${app.$._session.id}/${e.name}`, e._value]);
+            app.request({
+                call: ["session", "update_values"],
+                arguments: [[e.name, e._value]]
+            });
+        });
+    }
+}
+
+export class SessionConfigurationSettings extends ModalPropertyContainer {
+    constructor() {
+        super({
+            data: ()=>app.$._session,
+            "modal.title":"Session Configuration",
+        });
+
+        function get_default() { return utils.try(()=>app.$.properties[this.name].default); }
+        this.name = new UI.Property("name", "Session Name", `<input type="text">`, {
+            "default": null,
+            "reset": false,
+        });
+        this.name.add_validator(UI.VALIDATORS.not_empty);
+
+        /* this.default_stream_title = new UI.Property("default_stream_title", "Default Stream Title", `<input type="text">`, {
+            "placeholder":()=>this.name.value,
+            "default": "",
+            "reset": true,
+        }); */
+        
+        this.creation_time = new UI.Property("creation_time", "Creation Date", `<input type="text" readonly>`, {
+            "disabled": true,
+            "reset": false,
+        });
+        this.creation_time.output_modifiers.push(v=>new Date(v).toLocaleString());
+
+        this.stream_host = new UI.Property(null, "Stream Host", `<input type="text" readonly>`, {
+            "default": app.rtmp_host,
+            "reset": false,
+            "copy": true,
+            "info": "Connect and stream to dynamic RTMP playlist items. Use this RTMP host and key in OBS or your streaming software of preference",
+        });
+
+        this.stream_key = new UI.Property(null, "Stream Key", `<input type="text" readonly>`, {
+            "default": ()=>`private/${app.$._session.id}`,
+            "reset": false,
+            "copy": true,
+        });
+
+        /* var regenerate_button = new UI.Button(`<i class="fas fa-sync-alt"></i>`, {
+            "click":async ()=>{
+                regenerate_button.settings.disabled = true;
+                await app.request({
+                    call: ["session", "generate_rtmp_key"]
+                });
+                regenerate_button.settings.disabled = false;
+            },
+            "title": "Regenerate Key",
+        });
+        this.stream_key.group_elem.append(regenerate_button); */
+        
+        [this.background_mode, this.background_color, this.background_file, this.background_file_start, this.background_file_end] = create_background_properties({
+            "name": "background",
+            "label": "Default Background",
+            "options": ()=>utils.try(()=>app.$.properties.background_mode.options, []),
+            "default": ()=>utils.try(()=>app.$.properties.background_mode.default, null),
+        }, true)
+
+        this.files_dir = new FileProperty("files_dir", "Root Directory", {
+            "info": "Your preferred location for storing any uploaded / downloaded files.",
+            "file.options":{ folders: true },
+            "default": get_default,
+        });
+        this.files_dir.add_validator(UI.VALIDATORS.media_exists);
+
+        this.interpolation_mode = new UI.Property("interpolation_mode", "Interpolation Mode", `<select></select>`, {
+            "options":()=>{
+                return [["auto","Auto"], [false, "Off"], [true, "On"]];
+            },
+            "default": get_default,
+            "hidden": ()=>!IS_ELECTRON
+        });
+        this.auto_interpolation_rate = new UI.Property("auto_interpolate_rate", "Auto Interpolation Target FPS", `<select></select>`, {
+            "options":()=>{
+                return [24, 25, 30, 60];
+            },
+            "disabled":()=>this.interpolation_mode.value !== "auto",
+            "default": get_default,
+            "hidden": ()=>!IS_ELECTRON
+        });
+
+        this.members = new AccessControlProperty("access_control", "Access Control", {
+            "info": "Owners: Full access.\nAllowed: Full access but cannot edit session confugration, delete the session, load/save session files or access history.\nDenied: No access rights whatsoever.",
+            default: AccessControl.DEFAULT_ACCESS_FOR_SELF
+        });
+        this.on("property-change", (e)=>{
+            if (!e.name || !e.trigger) return;
+            app.$._push([`sessions/${app.$._session.id}/${e.name}`, e._value]);
+            app.request({
+                call: ["session", "update_values"],
+                arguments: [[e.name, e._value]]
+            });
+        });
+        
+        this.on("show", ()=>{
+            var layout = [
+                [this.name],
+                // [this.default_stream_title],
+                [this.creation_time]
+            ];
+            if (this.data.type === "InternalSession") {
+                layout.push(
+                    [this.stream_host,this.stream_key],
+                    [this.background_mode, this.background_color, this.background_file, this.background_file_start, this.background_file_end],
+                    [this.files_dir],
+                    [this.auto_reconnect, this.auto_reconnect_delay, this.auto_reconnect_max_attempts]
+                )
+                if (IS_ELECTRON) {
+                    layout.push([this.interpolation_mode, this.auto_interpolation_rate]);
+                }
+                layout.push([this.members]);
+            }
+            this.content.update_layout(layout)
+        });
+    }
+}
+
+export class AdminSettings extends ModalPropertyContainer {
+    constructor() {
+        super({
+            data: ()=>app.$._session,
+            "modal.title":"Admin",
+        });
+        // var row = this.append(new UI.FlexRow());
+    }
+}
+
+export class ChangeLog extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title":"Change Log",
+        });
+        this.elem.style.setProperty("--min-width", "750px");
+        this.on("show",()=>{
+            Object.assign(this.content.elem.style, {
+                // "font-family": "monospace",
+                "font-size": "1.2rem",
+            });
+            app.settings.set("last_change_log", app.$.change_log.mtime);
+            this.content.elem.innerHTML = `<div>${app.$.change_log.html}</div>`;
+        })
+    }
+}
+
+export class UploadsDownloadsMenu extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title":"Uploads / Downloads",
+            "modal.width": "70%",
+        });
+        var types = ["uploads", "downloads"];
+        this.on("update", ()=>{
+            var content = new UI();
+            var stats = types.map(t=>`Total ${t.slice(0,-1)} rate: ${utils.format_bytes(utils.sum(Object.values(app.$[t]).map(u=>u.speed)))+"ps"}`).join(" | ");
+            content.append(...$(`<div>${stats}</div>`));
+            Object.assign(this.content.elem.style, {"white-space": "pre-wrap", "word-break": "break-all", "font-family":"monospace" });
+            for (var type of types) {
+                var rows = [];
+                var header = {
+                    "dest_path":{
+                        name: "Filename",
+                    },
+                    "rate":{
+                        name: "Rate",
+                        style: "white-space: nowrap",
+                    },
+                    "bytes":{
+                        name: utils.capitalize(type.slice(0,-1))+"ed",
+                        style: "white-space: nowrap",
+                    },
+                    "total":{
+                        name: "Total",
+                        style: "white-space: nowrap",
+                    },
+                    "progress":{
+                        name: "Progress",
+                        style: "white-space: nowrap",
+                    }
+                };
+                for (var [id,u] of Object.entries(app.$[type])) {
+                    rows.push({
+                        id,
+                        ...u,
+                        rate: utils.format_bytes(u.speed)+"ps",
+                        bytes: utils.format_bytes(u.bytes),
+                        total: utils.format_bytes(u.total),
+                        progress: `${((u.bytes/u.total)*100).toLocaleString(undefined, {maximumFractionDigits:2,minimumFractionDigits:2})}%`
+                    });
+                }
+                var table = dom_utils.build_table(rows, { header, empty: `No active ${type}` });
+                content.append(table);
+            }
+            dom_utils.sync_dom(this.content.elem, content.elem, {attrs:false});
+        });
+    }
+}
+
+export class JSONViewer extends ModalPropertyContainer {
+    async show(title, json) {
+        super.show();
+        this.settings.title = title;
+        var json = new JsonRoot(json);
+        this.content.elem.innerHTML = "";
+        this.content.elem.style["margin-bottom"] = 0;
+        this.content.elem.append(json.elem);
+    }
+}
+
+export class InfoSettings extends JSONViewer {
+    /** @param {PlaylistItem[]} items */
+    async show(items) {
+        var name;
+        var data = items.map(d=>{
+            var a = {...d};
+            a.media_info = d.media_info;
+            // if (app.debug) {
+            a.info = d.info;
+            a.userdata = d.userdata;
+            // }
+            return a;
+        })
+        if (items.length == 1) {
+            name = items[0].get_pretty_name();
+            data = data[0];
+        } else {
+            name = `[${items.length} Items]`
+        }
+        super.show(name, data);
+    }
+}
+
+export class SetTimePosSettings extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title":"Precise Seek",
+            "modal.footer":true,
+        });
+        var row = this.content.append(new UI.FlexRow());
+        row.append(
+            this.chapter_select = new UI.Property(null, "Chapter", `<select>`, {
+                "hidden":()=>!app.settings.get("show_chapters") || app.get_current_chapters().length < 2,
+                "options":()=>{
+                    return app.get_current_chapters().map((c,i)=>[i, app.chapter_to_string(c, true)])
+                },
+                "reset":false,
+            }),
+            this.time_pos = new UI.TimeSpanProperty(null, "Time", {
+                "timespan.format":()=>"h:mm:ss.SSS",
+                "min":0,
+                "reset":false,
+            })
+        );
+        this.time_pos.on("change",(e)=>{
+            if (!e.trigger) return;
+            this.chapter_select.set_values((app.get_current_chapter_at_time(e._value)||EMPTY_OBJECT).index);
+        })
+        this.chapter_select.on("change",(e)=>{
+            if (!e.trigger) return;
+            var c = app.get_current_chapters()[e._value];
+            this.time_pos.set_values(c.start);
+        })
+
+        this.ok = new UI.Button("Seek", {
+            click: ()=>{
+                app.seek(this.time_pos.value);
+                this.hide();
+            }
+        });
+        this.cancel = new UI.Button("Cancel", {
+            click: ()=>this.hide()
+        });
+        this.footer.append(this.ok, this.cancel);
+
+        this.on("show",()=>{
+            this.time_pos.settings.default = app.get_current_time_pos();
+            this.time_pos.reset(true);
+        })
+    }
+}
+
+export class SetVolumeSettings extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title":"Precise Volume Adjustment",
+            "modal.footer":true,
+        });
+        var row = this.content.append(new UI.FlexRow());
+        //<div style="padding:0 5px; border-left: 1px solid #aaa; border-bottom: 1px solid #aaa;">
+        var volume_input = new UI.Property(null, "Volume (%)", `<input type="number" min="0" max="200">`, {
+            default: 100,
+        });
+        row.append(volume_input);
+        var vol_speed = new UI.Property(null, "Volume Transition Speed", `<select>`, {
+            title: "Volume Transition Speed",
+            default: 2.0,
+            // reset: false,
+            options: [[0.5, "Very Slow"], [1.0, "Slow"], [2.0, "Medium"], [4.0, "Fast"], [8.0, "Very Fast"], [0, "Immediate"]],
+        });
+        row.append(vol_speed);
+        
+        var row = this.content.append(new UI.FlexRow());
+        var volume_slider = new UI.Property(null, "Volume (%)", `<input type="range" min="0" max="200">`, { //  style="margin-right:5px"
+            default: 100,
+            reset_on_dblclick: true,
+            reset:false,
+        });
+        row.append(volume_slider);
+        
+        volume_input.on("change", (e)=>{
+            volume_slider.set_value(e._value, {trigger:false});
+        });
+        volume_slider.on("change", (e)=>{
+            volume_input.set_value(e._value, {trigger:e.trigger})
+        });
+        
+        volume_input.set_value(app.$._session.volume_target);
+        vol_speed.set_value(app.$._session.volume_speed);
+
+        this.ok = new UI.Button("Apply Changes", {
+            disabled: ()=>this.changes.length==0,
+            click: ()=>{
+                app.media_player.volume.set_value(volume_input.value, {trigger:true});
+                app.media_player.vol_speed.set_value(vol_speed.value, {trigger:true});
+                this.hide();
+            }
+        });
+        this.cancel = new UI.Button("Cancel", {
+            click: ()=>this.hide()
+        });
+        this.footer.append(this.ok, this.cancel);
+    }
+}
+
+export class ExternalSessionConfigurationMenu extends ModalPropertyContainer {
+    /** @param {UI.Property} prop */
+    constructor() {
+        super({
+            "modal.title":"Setup External Session",
+            "modal.footer":false,
+        });
+        
+        var row = this.content.append(new UI.FlexRow());
+        row.elem.innerHTML = `Setup your streaming software to stream to cabtv and restream to multiple targets.`;
+        var row = this.content.append(new UI.FlexRow());
+        row.elem.innerHTML = `<hr/>`;
+        
+        this.content.append(new StreamKeyGeneratorSettings());
+    }
+}
+
+export const TimeLeftMode = {
+    TIME_LEFT:0,
+    DURATION:1,
+}
+
+export class TargetEditMenu extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title": ()=>this.data ? `Edit '${this.data.name}'` : "New Target",
+            "modal.footer":true,
+        });
+
+        /* var row = this.content.append(new UI.FlexRow());
+        var id = new UI.Property("id", "ID", `<input type="text" readonly>`, {
+            "disabled":true,
+            hidden: ()=>!this.id
+        });
+        row.append(id) */
+
+        var row = this.content.append(new UI.FlexRow());
+        this.name = new UI.Property("name", "Name", `<input type="text">`, {
+            "reset":false,
+            "default": "",
+            "placeholder": "My Stream",
+        });
+        this.name.add_validator(UI.VALIDATORS.not_empty, (v)=>{
+            return Object.values(app.$.targets).filter((t)=>t!=this.data).map(t=>t.name).includes(v) ? "Name already exists." : true
+        });
+        row.append(this.name)
+
+        var row = this.content.append(new UI.FlexRow());
+        this.description = new UI.TextArea("description", "Description", {
+            "textarea.min_rows": 2,
+            "reset":false,
+            "default": "",
+        });
+        row.append(this.description)
+
+        var row = this.content.append(new UI.FlexRow());
+        this.rtmp_host = new UI.Property("rtmp_host", "Stream Host", `<input type="url">`, {
+            "reset":false,
+            "default": "",
+            "placeholder": "rtmp://streaming-service.com",
+        });
+        this.rtmp_host.add_validator(UI.VALIDATORS.rtmp);
+        this.rtmp_key = new UI.Property("rtmp_key", "Stream Key", `<input type="text">`, {
+            "reset":false,
+            "default": "",
+            "placeholder": ""
+        });
+        row.append(this.rtmp_host, this.rtmp_key);
+
+        var row = this.content.append(new UI.FlexRow());
+        this.url = new UI.Property("url", "Stream URL", `<input type="url">`, {
+            "reset": false,
+            "info": "The public URL to view your channel's livestream.",
+            "default": "",
+            "placeholder": "https://streaming-service.com/my-channel",
+        });
+        this.url.add_validator((v)=>!v || UI.VALIDATORS.url(v));
+        row.append(this.url);
+
+        var row = this.content.append(new UI.FlexRow());
+        this.access_control = new AccessControlProperty("access_control", "Access Control", {
+            "info": "Owner: User can edit, delete or utilize the target (full access).\nAllowed: User can view and utilize the target.\nDenied: Users cannot view or utilize target.",
+            default: AccessControl.DEFAULT_ACCESS_FOR_SELF,
+            "access.allow_passwords": false,
+        });
+        row.append(this.access_control);
+
+        /* var row = this.append(new UI.FlexRow());
+        this.custom = new UI.TextArea("custom", "Additional Properties (JSON)", {
+            "default": {},
+        });
+        this.custom.add_validator(UI.VALIDATORS.json);
+        this.custom.input_modifiers.push(v=>{ try { return JSON.parse(v) } catch {} });
+        this.custom.output_modifiers.push(v=>JSON.stringify(v, null, "  "));
+        row.append(this.custom); */
+        
+        var save_button = new UI.Button(`Save`, {
+            disabled: ()=>!this.valid,
+            hidden: ()=>!!this.data,
+            click: ()=>{
+                app.request({
+                    call: ["app", "create_target"],
+                    arguments: [{access_control:{[app.$._client.id]:{"access":"owner"}} , ...this.named_property_lookup}]
+                });
+                this.hide();
+            }
+        });
+
+        var delete_button = new UI.Button(`Delete`, {
+            hidden: ()=>!this.data,
+            click: ()=>{
+                if (confirm(`Are you sure you want to delete '${this.data.name}'?`)) {
+                    app.request({
+                        call: ["app", "delete_target"],
+                        arguments: [this.data.id]
+                    });
+                    this.hide();
+                }
+            }
+        });
+        this.footer.append(save_button, delete_button);
+        
+        this.on("property-change", (e)=>{
+            if (!this.data || !e.name || !e.trigger) return;
+            app.request({
+                call: ["app", "update_target"],
+                arguments: [this.data.id, {[e.name]:e._value}]
+            });
+        });
+    }
+    /* show(ids) {
+        super.show(ids);
+        if (!this.id) {
+            this.access_control.claim();
+        }
+    } */
+}
+
+export class TargetConfigurationMenu extends ModalPropertyContainer {
+    /** @type {Record<string,Target>} */
+    targets;
+    /** @type {Target[]} */
+    targets_selected;
+
+    /** @param {TargetsProperty} parent_prop */
+    // get targets_selected() { return this.parent_prop ? this.parent_prop.value.map(id=>this.targets[id]) : []; }
+    get targets_remaining() {
+        var targets = Object.values(this.targets);
+        if (this.parent_prop) {
+            var selected = new Set(this.targets_selected);
+            targets = targets.filter(t=>!selected.has(t));
+        }
+        targets = targets.filter(t=>t.locked?true:new AccessControl(t.access_control).self_has_access());
+        utils.sort(targets, t=>!t.locked, t=>t.ts);
+        return targets;
+    }
+    /** @param {TargetsProperty} parent_prop */
+    constructor(parent_prop, settings) {
+        super({
+            "modal.title": "Stream Targets",
+            "show_in_use": true,
+            "auto_apply": true,
+            ...settings,
+        });
+
+        this.parent_prop = parent_prop;
+        this.content.elem.classList.add("target-config");
+
+        var selected_el
+        if (parent_prop) {
+            selected_el = new UI.Column().elem;
+            selected_el.classList.add("target-list");
+            this.content.append(selected_el);
+            this.content.append(new UI.Separator());
+        }
+
+        var list_el = new UI.Column().elem;
+        list_el.classList.add("target-list");
+        this.content.append(list_el);
+
+        var new_button = new UI.Button(`New Target <i class="fas fa-plus" style="padding:0 5px"></i>`, {
+            "click":()=>{
+                new TargetEditMenu().show(null);
+            },
+            "title": "New Target",
+        });
+        this.content.append(new_button);
+
+        if (!this.settings["auto_apply"]) {
+            var apply_button = new UI.Button(`Apply`, {
+                "click":()=>{
+                    update_value(true);
+                    this.hide();
+                },
+                "title": "Apply",
+            });
+            this.content.append(apply_button);
+        }
+
+        var onchange;
+        this.on("show", ()=>{
+            app.on("change", onchange = ($)=>{
+                if ($.targets) update_targets();
+            });
+            update_targets();
+        });
+        this.on("hide", ()=>{
+            app.off("change", onchange);
+        });
+        var update_targets = ()=>{
+            this.targets = {...app.$.targets};
+            this.targets_selected = this.parent_prop ? this.parent_prop.value.map(id=>{
+                if (!this.targets[id]) console.warn(`Target with ID '${id}' does not exist.`);
+                return this.targets[id];
+            }).filter(t=>t) : [];
+            rebuild();
+        };
+        var rebuild = ()=>{
+            if (parent_prop) {
+                dom_utils.rebuild(selected_el, this.targets_selected, { add });
+                if (this.targets_selected.length == 0) {
+                    selected_el.innerHTML = `<span style="display: flex; justify-content: center; padding: 10px;">No Targets Selected.</span>`;
+                }
+            }
+            dom_utils.rebuild(list_el, this.targets_remaining, { add });
+            if (this.targets_remaining.length == 0) {
+                list_el.innerHTML = `<span style="display: flex; justify-content: center; padding: 10px;">No Remaining Targets.</span>`;
+            }
+        }
+        var update_value = (force)=>{
+            this.targets_selected = [...selected_el.children, ...list_el.children].filter(e=>e.dataset.id && e.querySelector("input").checked).map(e=>this.targets[e.dataset.id]);
+            rebuild();
+
+            if (force || this.settings["auto_apply"]) {
+                if (parent_prop) {
+                    parent_prop.set_value(this.targets_selected.map(t=>t.id), {trigger:true});
+                }
+            }
+        };
+        var is_editable = (target)=>{
+            return !target.locked && new AccessControl(target.access_control).self_can_edit;
+        };
+        /** @param {Target} target */
+        var add = (target, elem, i)=>{
+            elem = new UI.Row().elem;
+
+            /** @type {HTMLLabelElement} */
+            var label_el = $(`<span></span>`)[0];
+
+            var checkbox_input = $(`<input type="checkbox">`)[0];
+            var text_wrapper_elem = $(`<div class="text-wrapper"></div>`)[0];
+            checkbox_input.onchange = ()=>{
+                update_value();
+            };
+            label_el.append(checkbox_input, text_wrapper_elem)
+
+            var up_button = new UI.Button(`<i class="fas fa-arrow-up"></i>`, {
+                "click":()=>{
+                    dom_utils.move(elem, -1);
+                    update_value();
+                },
+                "hidden":()=>this.targets_selected.length<2 || !this.targets_selected.includes(target),
+                "disabled":()=>this.targets_selected.indexOf(target)==0,
+                "title": "Move Up",
+            });
+
+            var down_button = new UI.Button(`<i class="fas fa-arrow-down"></i>`, {
+                "click":()=>{
+                    dom_utils.move(elem, 1);
+                    update_value();
+                },
+                "hidden":()=>this.targets_selected.length<2 || !this.targets_selected.includes(target),
+                "disabled":()=>this.targets_selected.indexOf(target) == this.targets_selected.length-1,
+                "title": "Move Down",
+            });
+
+            var get_config_menu = ()=>utils.try(()=>app.target_config_menus[target.id]);
+
+            var config_button = new UI.Button(`<i class="fas fa-cog"></i>`, {
+                "hidden": ()=>!parent_prop || !get_config_menu(),
+                "click": ()=>get_config_menu().show(target),
+                "title": "Configure",
+            });
+
+            /* var view_url_button = new UI.Link(null, `<i class="fa-solid fa-arrow-up-right-from-square"></i>`, {
+                "hidden": ()=>!target.url,
+                "href": ()=>target.url,
+            }); */
+
+            var edit_button = new UI.Button(`<i class="fas fa-edit"></i>`, {
+                "click":()=>{
+                    new TargetEditMenu().show(target)
+                },
+                "hidden":()=>!is_editable(target),
+                "title": "Edit",
+            });
+
+            var delete_button = new UI.Button(`<i class="fas fa-trash-can"></i>`, {
+                "click":()=>{
+                    if (confirm(`Are you sure you want to delete '${target.name}'?`)) {
+                        app.request({
+                            call: ["app", "delete_target"],
+                            arguments: [target.id]
+                        });
+                    }
+                },
+                "hidden":()=>!is_editable(target),
+                "title": "Delete",
+            });
+
+            elem.append(label_el, edit_button, config_button, delete_button, /*view_url_button, */ up_button, down_button);
+
+            var in_use = !!target.streams.length;
+            var name_elem = $(`<span class="name"></span>`)[0];
+            var description_elem = $(`<div class="description"></div>`)[0];
+            text_wrapper_elem.innerHTML = "";
+            text_wrapper_elem.append(name_elem, description_elem);
+            var checkbox_input = elem.querySelector(`input[type="checkbox"]`);
+
+            var parts = [target.name || target.id];
+            if (in_use) parts.push(`<span class="flashing-slow">[Currently In Use]</span>`);
+            if (target.locked) parts.push(` <i class="fas fa-lock"></i>`);
+            if (target.url) parts.push(`<a href="${target.url}" target="_blank"><i class="fas fa-arrow-up-right-from-square"></i></a>`);
+            name_elem.innerHTML = parts.join(" ");
+            description_elem.innerHTML = utils.convert_links_to_html(target.description || "");
+            checkbox_input.checked = this.targets_selected.includes(target)
+            checkbox_input.style.display = parent_prop ? "" : "none";
+            checkbox_input.disabled = !parent_prop;
+
+            return elem;
+        };
+    }
+}
+
+export class TargetsProperty extends UI.Property {
+    constructor(name, label, settings) {
+        settings = {
+            "default": [],
+            "reset": false,
+            "show_in_use": true,
+            "auto_apply": true,
+            ...settings,
+        };
+        
+        var input = $(`<input type="text" readonly>`)[0];
+        input.style.cursor = "pointer";
+
+        super(name, label, input, settings);
+
+        input.onclick = ()=>{
+            var modal = new TargetConfigurationMenu(this, {
+                "show_in_use": this.settings["show_in_use"],
+                "auto_apply":this.settings["auto_apply"]
+            });
+            modal.show();
+        }
+
+        this.output_modifiers.push(v=>v.length ? v.length == 1 ? (app.$.targets[v[0]]||EMPTY_OBJECT).name : `${v.length} Targets` : `None`)
+    }
+}
+export class SeekBar extends UI {
+    constructor(settings) {
+        var input = $(
+`<div class="seek-wrapper">
+    <span id="time">00:00:00</span>
+    <div class="seek" tabindex="-1">
+        <div class="bg"></div>
+        <div class="buffer-bar"></div>
+        <div class="bar"></div>
+        <div class="ticks-bar"></div>
+        <div class="ranges"></div>
+        <div class="chapters"></div>
+        <div class="markers"></div>
+    </div>
+    <span id="time-left">00:00:00</span>
+</div>`
+        )[0];
+        // <input type="range" min="0" max="1" step="0.001" class="slider" id="seek> // after bar
+        super(input, Object.assign({
+            "reset": false,
+            "disabled": ()=>!this.get_setting("seek.seekable"),
+            //-----
+            "seek.time": 0,
+            "seek.seekable": true,
+            "seek.duration": 0,
+            "seek.chapters": [],
+            "seek.ranges": [],
+            "seek.markers": [],
+            "seek.seek_pause": false,
+            "seek.buffering": false,
+            "seek.show_times": true,
+            "seek.add_markers": false,
+            "seek.stagger": 100,
+            "seek.time_left_mode": TimeLeftMode.TIME_LEFT,
+        }, settings));
+        
+        this.seek_elem = this.elem.querySelector(".seek");
+        this.bar_elem = this.elem.querySelector(".bar");
+        this.ticks_bar_elem = this.elem.querySelector(".ticks-bar");
+        this.ranges_elem = this.elem.querySelector(".ranges");
+        this.chapters_elem = this.elem.querySelector(".chapters");
+        this.markers_elem = this.elem.querySelector(".markers");
+        this.bg_elem = this.elem.querySelector(".bg");
+        
+        this.time_elem = this.elem.querySelector("#time");
+        this.time_elem.title = "Time Position";
+        this.time_left_elem = this.elem.querySelector("#time-left");
+        this.time_left_elem.title = "Time Left";
+        this.buffer_bar_elem = this.elem.querySelector(".buffer-bar");
+
+        var set_hover_chapters = (chapters)=>{
+            var indices = new Set(chapters.map(c=>+c.index));
+            [...this.chapters_elem.children].forEach(e=>{
+                e.classList.toggle("hover", indices.has(+e.dataset.index));
+            });
+        };
+
+        var get_current_chapters = (t)=>{
+            var chapters = this.get_setting("seek.chapters");
+            if (chapters.length <= 1) return [];
+            return chapters.filter(c=>t>=c.start && t<c.end);
+        }
+
+        this.ticks_bar = new TicksBar(this.ticks_bar_elem, {
+            hover_elem: this.seek_elem,
+            placement: "bottom",
+            show_numbers: false,
+            modifier: (html, t)=>{
+                // console.log(html, t);
+                var curr_chapters = get_current_chapters(t);
+                if (curr_chapters.length) {
+                    html = curr_chapters.map(c=>`<div class="chapter">${app.chapter_to_string(c)}</div>`).join("") + html;
+                }
+                return html;
+            }
+        });
+
+        var hover_listener = new dom_utils.TouchListener(this.seek_elem, {
+            mode: "hover",
+            start: (e)=>{
+                var data = this.ticks_bar.parse_event(e);
+                set_hover_chapters(get_current_chapters(data.time));
+            },
+            move: (e)=>{
+                var data = this.ticks_bar.parse_event(e);
+                set_hover_chapters(get_current_chapters(data.time));
+            },
+            end: (e)=>{
+                set_hover_chapters([]);
+            }
+        });
+        var seek_interval, seeking, seek_time;
+        var update = ()=>{
+            this.update_settings({
+                "seek.seeking": seeking,
+                "seek.seek_time": seek_time,
+            });
+        };
+        var seek_listener = new dom_utils.TouchListener(this.seek_elem, {
+            start: (e)=>{
+                this.seek_elem.focus();
+                seek_time = this.ticks_bar.parse_event(e).time;
+                seeking = true;
+                this.emit("seek-start", {time:seek_time});
+
+                var last_seek_time;
+                seek_interval = setInterval(()=>{
+                    if (last_seek_time == seek_time) return;
+                    last_seek_time = seek_time
+                    this.emit("seeking", {time:seek_time});
+                    update();
+                }, this.get_setting("seek.stagger"));
+            },
+            move: (e)=>{
+                seek_time = this.ticks_bar.parse_event(e).time;
+                update();
+            },
+            end: (e)=>{
+                clearInterval(seek_interval);
+                if (seeking) {
+                    app.seek(seek_time)
+                    this.emit("seek-end", {time:seek_time});
+                }
+                seeking = false;
+                update();
+            }
+        });
+
+        var curr_marker, moving_curr_marker, curr_marker_start_x;
+        var marker_listener = new dom_utils.TouchListener(this.seek_elem, {
+            start: (e)=>{
+                this.seek_elem.focus();
+                var data = this.ticks_bar.parse_event(e);
+                curr_marker_start_x = data.pt.x;
+                curr_marker = null;
+                moving_curr_marker = false;
+                var marker_elem = e.target.closest(".marker");
+                if (marker_elem) {
+                    curr_marker = this.get_setting("seek.markers").find(m=>m.id == marker_elem.dataset.id);
+                }
+                if (!curr_marker) {
+                    curr_marker = this.add_marker(data.time);
+                    if (curr_marker) {
+                        moving_curr_marker = true;
+                        this.emit("markers-change");
+                    }
+                }
+            },
+            move: (e)=>{
+                var m = this.ticks_bar.parse_event(e);
+                if (curr_marker_start_x != null && Math.abs(curr_marker_start_x-m.pt.x)>8) {
+                    curr_marker_start_x = null;
+                    moving_curr_marker = true;
+                }
+                if (moving_curr_marker) {
+                    curr_marker.time = m.time;
+                    this.emit("markers-change");
+                    this.update_next_frame();
+                }
+            },
+            end: (e)=>{
+                if (curr_marker && !moving_curr_marker) {
+                    this.remove_marker(curr_marker);
+                    this.emit("markers-change");
+                }
+                curr_marker = null;
+                moving_curr_marker = false;
+            }
+        });
+        
+        this.time_left_elem.style.cursor = "pointer";
+        this.time_left_elem.addEventListener("click", ()=>{
+            var time_left_mode = (this.get_setting("seek.time_left_mode")+1) % 2;
+            this.emit("time_left_mode", time_left_mode);
+        });
+
+        this.on("update", ()=>{
+            var time_left_mode = this.get_setting("seek.time_left_mode");
+            this.time_left_elem.title = time_left_mode == 0 ? "Time Left" : "Duration";
+
+            var _time = this.get_setting("seek.time");
+            var duration = this.get_setting("seek.duration");
+            var ranges = this.get_setting("seek.ranges");
+            var markers = this.get_setting("seek.markers");
+            var chapters = this.get_setting("seek.chapters");
+            var buffering = this.get_setting("seek.buffering");
+            // var seekable = this.get_setting("seek.seekable");
+            var seeking = this.get_setting("seek.seeking");
+            var seek_pause = this.get_setting("seek.seek_pause");
+            var seek_time = this.get_setting("seek.seek_time");
+            var show_times = this.get_setting("seek.show_times");
+            var show_markers = this.get_setting("seek.add_markers");
+
+            var time = (seeking || seek_pause) ? seek_time : _time;
+            var time_left = duration ? (duration - time) : 0;
+            var time_percent = time / duration;
+            if (!Number.isFinite(time_percent)) time_percent = 0;
+            this.bar_elem.style.width = `${time_percent*100}%`;
+
+            this.time_elem.style.display = show_times ? "" : "none";
+            this.time_left_elem.style.display = show_times ? "" : "none";
+
+            var add_markers = show_markers;
+            this.elem.style.cursor = add_markers ? "copy" : "";
+            dom_utils.toggle_class(this.bar_elem, "d-none", add_markers);
+            this.markers_elem.style.display = add_markers ? "" : "none";
+            // dom_utils.toggle_class(this.input, "d-none", add_markers);
+
+            var ranges_hash = JSON.stringify([duration, ranges]);
+            if (this._ranges_hash != ranges_hash) {
+                this._ranges_hash = ranges_hash;
+                dom_utils.empty(this.ranges_elem);
+                if (duration && ranges) {
+                    for (var r of ranges) {
+                        var e = $(`<div class="range"></div>`)[0];
+                        e.style.left = `${r.start / duration * 100}%`;
+                        e.style.width = `${(r.end - r.start) / duration * 100}%`;
+                        this.ranges_elem.appendChild(e);
+                    }
+                }
+            }
+
+            dom_utils.toggle_class(this.seek_elem, "buffering", buffering);
+
+            var markers_hash = JSON.stringify([markers, duration]);
+            if (this._markers_hash != markers_hash) {
+                this._markers_hash = markers_hash;
+                dom_utils.empty(this.markers_elem);
+                if (duration) {
+                    for (var m of markers) {
+                        var e = $(`<div class="marker"><div></div></div>`)[0];
+                        e.style.left = `${m.time/duration*100}%`;
+                        e.dataset.id = m.id;
+                        this.markers_elem.appendChild(e);
+                    }
+                }
+            }
+
+            var chapters_hash = JSON.stringify([chapters, duration]);
+            if (this._chapters_hash != chapters_hash) {
+                this._chapters_hash = chapters_hash;
+                dom_utils.empty(this.chapters_elem);
+                if (duration && chapters.length > 1) {
+                    chapters.forEach((c,i)=>{
+                        var d = Math.max(0, c.end-c.start);
+                        var e = $(`<div class="chapter"></div>`)[0];
+                        e.style.left = `${c.start / duration*100}%`;
+                        e.style.width = `${d / duration*100}%`;
+                        e.style["z-index"] = i+1;
+                        e.dataset.index =  c.index;
+                        this.chapters_elem.appendChild(e);
+                    });
+                }
+            }
+
+            this.ticks_bar.update(0, duration);
+
+            dom_utils.set_text(this.time_elem, `${utils.seconds_to_timespan_str(time, app.user_time_format)}`);
+            var tl = "";
+            var tlm = this.get_setting("seek.time_left_mode");
+            if (tlm === TimeLeftMode.TIME_LEFT) tl = `-${utils.seconds_to_timespan_str(Math.max(0, time_left), app.user_time_format)}`;
+            else if (tlm === TimeLeftMode.DURATION) tl = utils.seconds_to_timespan_str(Math.max(0, duration), app.user_time_format)
+            dom_utils.set_text(this.time_left_elem, tl);
+        });
+
+        this.on("destroy", ()=>{
+            hover_listener.destroy();
+            seek_listener.destroy();
+        })
+    }
+    seek(t) {
+        if (t === undefined) t = this.get_setting("seek.time");
+        this.update_settings({
+            "seek.seek_time": t,
+            "seek.seek_pause": true,
+        });
+    }
+    clear_markers() {
+        this.update_settings({"seek.markers": []});
+    }
+    add_marker(t) {
+        if (!this._marker_id) this._marker_id = 0;
+        var markers = this.get_setting("seek.markers");
+        if (markers.length > 128) return;
+        var marker = {time:t, id:++this._marker_id};
+        markers.push(marker);
+        this.update_settings({"seek.markers": markers});
+        return marker;
+    }
+    remove_marker(m) {
+        var markers = this.get_setting("seek.markers");
+        utils.array_remove(markers, m);
+        this.update_settings({"seek.markers": markers});
+    }
+}
+export class MediaSeekBar extends SeekBar {
+    constructor() {
+        super();
+    
+        var last_time;
+        this.on("seek-end", (e)=>{
+            if (!app.$._media.do_live_seek || last_time != e.time) app.seek(e.time);
+        });
+        this.on("seeking", (e)=>{
+            if (app.$._media.do_live_seek) app.seek(e.time);
+            last_time = e.time;
+        });
+        this.on("time_left_mode", (v)=>{
+            app.settings.set("time_left_mode", v);
+        });
+        app.settings.on("change", (e)=>{
+            if (e.name === "time_left_mode") {
+                this.update_settings({
+                    "seek.time_left_mode": app.settings.get("time_left_mode")
+                });
+            }
+        });
+        this.on("pre_update", ()=>{
+            var running = app.$._stream.is_running;
+            var seek_pause = this.get_setting("seek.seek_pause");
+            if (app.$._stream.mpv.seeks != this._last_seeks || !running) {
+                seek_pause = false;
+            }
+            this._last_seeks = app.$._stream.mpv.seeks;
+            var buffering = running && (app.$._media.buffering || seek_pause || !app.$._stream.mpv.preloaded);
+
+            Object.assign(this.settings, {
+                "seek.time": app.$._media.time,
+                "seek.seekable": app.$._media.seekable,
+                "seek.duration": app.$._media.duration,
+                "seek.chapters": app.$._media.chapters,
+                "seek.ranges": app.get_current_seekable_ranges(),
+                "seek.seek_pause": seek_pause,
+                "seek.buffering": buffering,
+            });
+        });
+    }
+}
+
+export class StreamSettings extends UI.PropertyContainer {
+    constructor() {
+        super({
+            data: ()=>app.$._session.stream_settings,
+            // disabled: ()=>app.$.session.is_running,
+        });
+        var left = new UI.Row({flex:1});
+        var right = new UI.Row({flex:0, gap:0});
+        this.append(left, right);
+        
+        this.properties_ui = new UI.Row({
+            "class":"stream-properties",
+            gap: 5,
+            "align":"end",
+            "hidden": ()=>app.$._session.is_running || app.$._session.type !== "InternalSession"
+        })
+        this.info_ui = new UI({
+            "class":"stream-info",
+            "hidden": ()=>!app.$._session.is_running
+        });
+        left.append(this.properties_ui, this.info_ui);
+        
+        this.status_ui = right.append(new UI({"class":"stream-status"}));
+        var button_group_ui = right.append(new UI.FlexRow({gap:0}));
+
+        this.toggle_streaming_button = new UI.Button(null, {
+            id: "toggle-streaming",
+            content: ()=>{
+                var state = app.$._session.stream.state;
+                if (state === "stopped") state = `START`;
+                else if (state === "started") state = `STOP`;
+                else if (state === "stopping") state = `Stopping...`;
+                else if (state === "starting") state = `Starting...`;
+                return state;
+            },
+            disabled: ()=>!app.$._session.is_running && !this.valid_visible,
+            click: (e)=>{
+                if (app.$._session.is_running) {
+                    app.request({
+                        call: ["session", "stop_stream"],
+                        arguments: [true]
+                    });
+                } else {
+                    var msg = "Another stream is already running, playback of all streams may by slower than realtime.\nAre you sure you want to start streaming?";
+                    if (Object.values(app.$.streams).filter(s=>s.is_running).length == 0 || confirm(msg)) {
+                        app.request({
+                            call: ["session", "start_stream"],
+                        });
+                        // app.$.push([`sessions/${app.$.session.id}/core/state`, "starting"]);
+                    }
+                    // app.$.push([`sessions/${app.$.session.id}/core/state`, "stopping"]);
+                }
+            }
+        });
+        this.schedule_stream_button = new UI.Button("Schedule", {
+            id: "schedule-stream",
+            click: (e)=>{
+                app.schedule_stream_menu.show();
+            },
+            disabled:()=>app.$._session.is_running,
+            hidden:()=>app.$._session.is_running
+        });
+        this.handover_button = new UI.Button("Handover", {
+            id: "handover-button",
+            click: async (e)=>{
+                var modal = new HandoverSessionMenu();
+                modal.show();
+            },
+            hidden:()=>!app.$._session.is_running || app.$._session.type != "InternalSession" || app.$._stream.test
+        });
+        this.config_button = new UI.Button(`<i class="fas fa-cog"></i>`, {
+            "id": "config-button",
+            "title": "Stream Configuration",
+            "click": async (e)=>{
+                var modal = new StreamConfigurationMenu();
+                modal.show();
+            },
+            hidden:()=>!app.$._session.is_running || app.$._stream.test
+        });
+        var row = new UI.FlexRow({gap:0});
+        row.elem.style["flex-wrap"] = "nowrap";
+        row.append(this.schedule_stream_button, this.handover_button, this.config_button);
+        button_group_ui.append(this.toggle_streaming_button, row);
+
+        function get_default() { return utils.try(()=>app.$.properties.stream_settings.props[this.name].default); }
+        function get_options() { return utils.try(()=>app.$.properties.stream_settings.props[this.name].options, []); }
+
+        this.stream_method = new UI.Property("method", "Stream Method", `<select></select>`, {
+            "options":function() {
+                var options = get_options.apply(this);
+                if (!app.dev_mode) options = options.filter(o=>!o[1].match(/\[dev\]/i));
+                return options;
+            },
+            // "hidden": !app.dev_mode,
+            "default": get_default,
+            "reset": false,
+        });
+        this.properties_ui.append(this.stream_method)
+
+        this.stream_targets = new TargetsProperty("targets", "Stream Target(s)", {
+            "hidden": ()=>this.stream_method.value != "rtmp",
+        });
+        this.stream_targets.add_validator(v=>(!v || v.length == 0) ? "No targets selected" : true);
+        this.properties_ui.append(this.stream_targets)
+
+        this.stream_title = new UI.Property("title", "Stream Title", `<input type="text">`, {
+            "default": "",
+            "placeholder": ()=>/* app.$.session.default_stream_title || */ app.$._session.name,
+            "hidden": ()=>this.stream_method.value != "rtmp",
+        });
+        this.properties_ui.append(this.stream_title)
+
+        this.stream_file = new UI.Property("filename", "Filename", `<input type="text">`, {
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value != "file",
+            "info": "Special keywords: %date% | %unix%",
+        });
+        this.stream_file.add_validator(UI.VALIDATORS.not_empty)
+        this.properties_ui.append(this.stream_file)
+        
+        this.stream_re = new UI.Property("re", "Encoding Speed", `<select></select>`, {
+            "options": [[1,"Realtime"],[0,"Fastest"]],
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value != "file"
+        });
+        this.properties_ui.append(this.stream_re)
+
+        this.h264_preset = new UI.Property("h264_preset", "h264 Preset", `<select></select>`, {
+            "options": get_options,
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui"
+        });
+        this.properties_ui.append(this.h264_preset)
+
+        this.video_bitrate = new UI.Property("video_bitrate", "Video Bitrate", `<div class="input-wrapper suffix number Kbips"><input type="number" min="500" max="8000" step="100"></div>`, {
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui"
+        });
+        this.properties_ui.append(this.video_bitrate)
+
+        this.audio_bitrate = new UI.Property("audio_bitrate", "Audio Bitrate", `<div class="input-wrapper suffix number Kbips"><input type="number" min="64" max="320" step="10"></div>`, {
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui"
+        });
+        this.properties_ui.append(this.audio_bitrate)
+
+        this.stream_resolution = new UI.Property("resolution", "Resolution", `<select></select>`, {
+            "options": get_options,
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui"
+        });
+        this.properties_ui.append(this.stream_resolution)
+
+        this.frame_rate = new UI.Property("frame_rate", "Frame Rate", `<select></select>`, {
+            "options": get_options,
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui" // || this.legacy_mode.value
+        });
+        this.properties_ui.append(this.frame_rate)
+
+        this.legacy_mode = new UI.Property("legacy_mode", "Legacy Mode", `<select></select>`, {
+            "options": get_options,
+            "default": get_default,
+        });
+        this.properties_ui.append(this.legacy_mode)
+
+        this.use_hardware = new UI.Property("use_hardware", "Hardware Transcoding", `<select></select>`, {
+            "options": get_options,
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui" || this.legacy_mode.value
+        });
+        this.properties_ui.append(this.use_hardware)
+
+        this.test_button = new UI.Button("Test", {
+            "hidden": ()=>this.stream_method.value != "rtmp",
+            "disabled": ()=>!app.$.processes["nms"],
+            "click": ()=> {
+                app.request({
+                    call: ["session", "start_stream"],
+                    arguments: [{ "test": true }],
+                })
+            },
+        })
+        this.properties_ui.append(this.test_button)
+
+        this.on("property-change", (e)=>{
+            if (!e.name || !e.trigger) return;
+            app.request({
+                call: ["session", "update_values"],
+                arguments: [[`stream_settings/${e.name}`, e._value]]
+            });
+            app.$._push([`sessions/${app.$._session.id}/stream_settings/${e.name}`, e._value]);
+        });
+
+        this.on("post_update", ()=>{
+            var session = app.$._session || EMPTY_OBJECT;
+            var stream = session.stream;
+            var status;
+            if (session.reconnect && session.reconnect.active) {
+                var time_left = Math.max(0, session.reconnect.delay - Math.ceil((app.server_now - session.reconnect.ts)/1000));
+                status = `Restarting in ${time_left}s... (${session.reconnect.attempt}/${session.auto_reconnect_max_attempts})`;
+            } else if (session.is_running) {
+                status = utils.ms_to_timespan_str(app.server_now - session.stream.start_time);
+            }
+            // dom_utils.toggle_class(this.stream_status_elem, "d-none", !status);
+            dom_utils.set_inner_html(this.status_ui, status || "-");
+
+
+            dom_utils.toggle_class(this.properties_ui.elem, "d-none", session.is_running);
+            dom_utils.toggle_class(this.info_ui.elem, "d-none", !session.is_running);
+    
+    
+            dom_utils.toggle_class(this.properties_ui.elem, "d-none", session.is_running);
+            dom_utils.toggle_class(this.info_ui.elem, "d-none", !session.is_running);
+    
+            var state;
+            if (stream.state === "stopped") state = `Start`;
+            else if (stream.state === "started") state = `Stop`;
+            else if (stream.state === "stopping") state = `Stopping...`;
+            else if (stream.state === "starting") state = `Starting...`;
+            dom_utils.set_text(this.toggle_streaming_button, state);
+
+            var stream_info = {};
+            stream_info["Stream Method"] = stream["method"];
+            if (app.$._session.type === "InternalSession") {
+                if (stream["method"] !== "gui") {
+                    let parts = {
+                        "h264 Preset": `${stream["h264_preset"]}`,
+                        "Video Bitrate": `${stream["video_bitrate"]}Kbps`,
+                        "Audio Bitrate": `${stream["audio_bitrate"]}Kbps`,
+                        "Resolution": `${stream["resolution"]}`,
+                    };
+                    if (stream["legacy_mode"]) {
+                        parts["Legacy Mode"] = `${stream["legacy_mode"]?"Yes":"No"}`;
+                    } else {
+                        parts["Use Hardware"] = `${stream["use_hardware"]?"Yes":"No"}`;
+                    }
+                    stream_info["Encoder Settings"] = Object.entries(parts).map(([k,v])=>`${k}: ${v}`).join(", ");
+                }
+                if (stream["method"] === "file") {
+                    stream_info["Realtime"] =`${stream["re"]?"Yes":"No"}`;
+                    stream_info["Output Path"] = stream["filename_evaluated"] || "-";
+                }
+                stream_info["Frame Rate"] = `${stream["frame_rate"]}`;
+            } else {
+                var nms_session = app.$._session.get_connected_nms_session_with_appname("livestream");
+                if (nms_session) {
+                    stream_info["Resolution"] = `${nms_session.videoWidth}x${nms_session.videoHeight}`;
+                    stream_info["Frame Rate"] = `${nms_session["videoFps"]}`;
+                }
+            }
+            if (stream["method"] === "rtmp") {
+                if (!stream["test"]) {
+                    stream_info["Stream Target(s)"] = stream["targets"].map((t,i)=>`${t} <span style="color:${app.$.targets[t]?"#00f":"f00"}">[${app.$.targets[t]?"OK":"NOT EXIST"}]</span>`).join(", ");
+                    stream_info["Stream Title"] = stream.title;
+                }
+            }
+
+            dom_utils.set_inner_html(this.info_ui.elem, Object.entries(stream_info).map(([k,v])=>`${k}: ${v}`).join(" | "));
+        })
+    }
+}
+
+export class StreamKeyGeneratorSettings extends UI.PropertyContainer {
+    constructor() {
+        super({});
+
+        this.elem.style.gap = "var(--gap)";
+        
+        // function get_default() { return utils.try(()=>app.$.properties[this.name].default); }
+
+        var stream_name = new UI.Property(null, "Name", `<input type="text">`, {
+            "default": ()=>`${app.$._client.username}'s Stream`,
+            "info": "This must be a unique name to identify your stream."
+        });
+        // stream_name.input_modifiers.push((s)=>s.replace(/\W+/g, " ").trim().split(/\s+/).join("-"));
+        stream_name.on("change", e=>localStorage.setItem("obs_id", String(e._value)));
+        var saved_id = localStorage.getItem("obs_id");
+        if (saved_id) stream_name.set_value(saved_id)
+
+        /* var regenerate_button = new UI.Button(`<i class="fas fa-sync-alt"></i>`, {
+            "click":()=>stream_name.set_value(dom_utils.uuidb64()),
+            "title": "Generate ID",
+        }); */
+        // stream_name.inner.append(regenerate_button);
+        stream_name.add_validator(UI.VALIDATORS.not_empty);
+        this.append(stream_name);
+
+        this.stream_targets = new TargetsProperty(null, "Stream Target(s)", {
+            "show_in_use":false,
+            "flex":1,
+        });
+        this.stream_targets.add_validator(v=>(!v || v.length == 0) ? "No targets selected" : true);
+        this.append(this.stream_targets)
+
+        this.volume_normalization = new UI.Property(null, "Volume Normalization", `<select>`, {
+            "options":[[0,"Off"],[1,"On"]],
+            "default": 0,
+            "info": "This will enable an audio post-processor that will apply volume normalization to the stream."
+        });
+        this.append(this.volume_normalization);
+
+        this.append(new UI.Separator());
+
+        this.output_host = new UI.Property(null, "Stream Host", `<input type="text" readonly>`, {
+            "default": "",
+            "copy":true,
+            "reset": false,
+            "disabled":()=>!this.valid
+        });
+        this.append(this.output_host)
+
+        this.output_key = new UI.Property(null, "Stream Key", `<input type="text" readonly>`, {
+            "default": "",
+            "copy":true,
+            "reset": false,
+            "disabled":()=>!this.valid
+        });
+        this.append(this.output_key)
+        this.output_key.add_validator(v=>this.stream_targets.value == 0 ? "Invalid targets" : true);
+
+        var update_output = ()=>{
+            var name = stream_name.value.trim();
+            var params = new URLSearchParams();
+            params.set("targets", this.stream_targets.value.join(","));
+            params.set("name", name)
+            if (this.volume_normalization.value) params.set("volume-normalization", 1);
+            var query_str = params.toString();
+            var host = app.rtmp_host+"livestream";
+            this.output_host.set_values(host);
+            var key = `${utils.kebabcase(utils.sanitize_filename(name))}`;
+            if (query_str) key += "?"+query_str;
+            this.output_key.set_values(key);
+        };
+
+        var debounced_update_output = utils.debounce(update_output);
+        this.on("property-change",(e)=>{
+            if (!e.trigger) return;
+            debounced_update_output();
+        });
+        update_output();
+    }
+}
+export class StreamConfigurationMenu extends ModalPropertyContainer {
+    constructor(){
+        super({
+            "modal.title": "Stream Configuration",
+            data:()=>app.$._stream,
+        });
+        var title_ui = new UI.Property("title", "Stream Title", `<input type="text">`, {
+            // "reset": false
+        });
+        this.content.append(title_ui);
+        
+        var stream_targets = new TargetsProperty("targets", "Stream Target(s)", {
+            "hidden": ()=>app.$._stream.method != "rtmp",
+            "auto_apply": false,
+        });
+        stream_targets.add_validator(v=>(!v || v.length == 0) ? "No targets selected" : true);
+        this.content.append(stream_targets);
+
+        this.on("property-change", (e)=>{
+            if (!e.name || !e.trigger) return;
+            app.request({
+                call: ["session", "stream", "update_values"],
+                arguments: [[e.name, e._value]]
+            });
+        })
+    }
+}
+export class HandoverSessionMenu extends ModalPropertyContainer {
+    constructor(){
+        super({
+            "modal.title": "Handover Session",
+            "modal.footer": true,
+        });
+        var row = this.content.append(new UI.FlexRow());
+        var handover_stream_property = new UI.Property(null, "Session", `<select>`, {
+            "options":()=>app.get_handover_sessions_options(),
+            "reset":false,
+            "info":"To seamlessly hand off to another session, select the session in the dropdown and click OK. Without interruption, the livestream will immediately start playing from the current playlist position in the selected stream."
+        })
+        row.append(handover_stream_property);
+        this.footer.append(new UI.Button("OK", {
+            disabled: ()=>!handover_stream_property.value,
+            click: ()=>{
+                this.hide();
+                app.request({
+                    call: ["session", "handover"],
+                    arguments: [handover_stream_property.value]
+                });
+            }
+        }));
+    }
+}
+export class SavePlaylistSettings extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title": ()=>`Save Playlist '${playlist_name}'`,
+            "modal.footer": true,
+            data: ()=>app.settings.get("save_playlist_settings"),
+        });
+        
+        this.on("property-change", (e)=>{
+            if (!e.name || !e.trigger) return;
+            app.settings.set("save_playlist_settings", this.named_property_lookup_not_null);
+        });
+
+        var playlist_name, filename;
+        
+        var row = this.content.append(new UI.FlexRow());
+        this.playlist_save_file = new UI.Property("playlist-save-file", "Filename", `<input type="text">`,{
+            flex: 2,
+            "default": ()=>filename,
+        });
+        this.playlist_save_file.add_validator(UI.VALIDATORS.not_empty);
+        row.append(this.playlist_save_file);
+
+        this.playlist_save_format = new UI.Property("playlist-save-format", "Format", `<select></select>`,{
+            "default": "json",
+            "options": [["json","JSON"],["text","Simple Text"]],
+            "hidden":true,
+        });
+        row.append(this.playlist_save_format);
+
+        this.playlist_save_children = new UI.Property("playlist-save-children", "Include Nested Playlists", `<select></select>`,{
+            "default": true,
+            "options": YES_OR_NO,
+        });
+        row.append(this.playlist_save_children);
+
+        this.playlist_json_spaces = new UI.Property("playlist-json-spaces", "JSON spaces", `<input type="number" min="0" max="10">`,{
+            "default": 2,
+            "hidden":()=>this.playlist_save_format.value!="json"
+        });
+        row.append(this.playlist_json_spaces);
+
+        var row = this.content.append(new UI.FlexRow());
+        this.playlist_save_dir = new FileProperty("playlist-save-dir", "Remote Save Directory", {
+            "file.options": { folders: true },
+            "default": "",
+            "invalid_class": null,
+        });
+        this.playlist_save_dir.add_validator(UI.VALIDATORS.not_empty);
+        row.append(this.playlist_save_dir);
+        
+        var save_remote_button = new UI.Button(`Save (Remote)`, {
+            flex: 0,
+            disabled:()=>!this.valid_visible,
+            click: ()=>{
+                app.request({
+                    call: ["save_file"],
+                    arguments: [this.playlist_save_dir.value, this.playlist_save_file.value, serialize()]
+                });
+                this.hide();
+            }
+        });
+        save_remote_button.elem.style.flex = "0"
+        row.append(save_remote_button);
+
+        var row = this.content.append(new UI.FlexRow());
+        var last_hash;
+        
+        this.preview = new UI.Property(null, "Preview", `<div class="text-block"></div>`, {
+            "update":()=>{
+                var hash = JSON.stringify([app.playlist.current.id, ...[this.playlist_save_format, this.playlist_save_children, this.playlist_json_spaces].map(p=>p.value)]);
+                if (hash != last_hash) render_preview();
+                last_hash = hash;
+            },
+            "reset":false,
+        });
+        row.append(this.preview);
+
+        var serialize = ()=>{
+            if (this.playlist_save_format.value != "json") return;
+            /** @param {PlaylistItem} item */
+            var process = (item)=>{
+                var o = {filename: item.filename};
+                if (!utils.is_empty(item.props)) o.props = item.props;
+                var children = item.children;
+                if (this.playlist_save_children.value && children.length) {
+                    o.children = children.map(c=>process(c));
+                }
+                return o;
+            }
+            var items = app.playlist.current.children.map(i=>process(i));
+            var json = JSON.stringify(items, null, this.playlist_json_spaces.value ? " ".repeat(this.playlist_json_spaces.value) : undefined);
+            return "// livestreamer playlist\n" + json;
+        }
+
+        var save_local_button = new UI.Button(`Save (Local)`, {
+            click: async ()=>{
+                if (await save_local_file(this.playlist_save_file.value+"."+this.playlist_save_format.value, serialize())) this.hide();
+            }
+        });
+        this.cancel = new UI.Button("Cancel", {
+            click: ()=>this.hide()
+        });
+        this.footer.append(save_local_button, this.cancel)
+
+        this.on("show", ()=>{
+            playlist_name = app.playlist.current.get_pretty_name() || app.$._session.name;
+            filename = `${utils.sanitize_filename(playlist_name)}-${utils.date_to_string()}.json`;
+            render_preview();
+        });
+
+        var render_preview = ()=>{
+            this.preview.content.innerText = serialize();
+        }
+
+        /* this.on("update", ()=>{
+            this.playlist_save_format
+        }) */
+    }
+}
+
+export class HistorySettings extends ModalPropertyContainer {
+    history = [];
+    constructor() {
+        super();
+
+        this.elem.style.setProperty("--min-width", "900px");
+        this.content.elem.classList.add("autosave-history");
+        var table_data = {
+            "Time":(data)=>{
+                var mtime = new Date(data.mtime);
+                var e = $(`<span>${utils.time_diff_readable(new Date(), mtime)}</span>`)[0];
+                e.title = mtime.toLocaleString();
+                return e;
+            },
+            "Current Changes":(data)=>{
+                return data.curr.length.toLocaleString();
+            },
+            "Previous Changes":(data)=>{
+                if (!data.prev) return "-";
+                return data.prev.length.toLocaleString();
+            },
+        };
+        var row = this.content.append(new UI.FlexRow());
+        var table_wrapper = $(`<div class="table-wrapper thin-scrollbar"></div>`)[0];
+        var table = $(`<table><thead></thead><tbody></tbody></table>`)[0];
+        var thead = table.querySelector("thead");
+        var thead_tr = $(`<tr></tr>`)[0];
+        var tbody = table.querySelector("tbody");
+        Object.keys(table_data).forEach(k=>{
+            $(thead_tr).append(`<th>${k}</th>`);
+        });
+        thead.append(thead_tr);
+        var table_col = row.append(new UI.Column());
+        table_wrapper.append(table);
+        table_col.append(table_wrapper);
+        
+        var info_col = row.append(new UI.Column());
+        var info_wrapper_elem = $(`<div class="info-wrapper"></div>`)[0];
+        var info_elem = $(`<div class="info thin-scrollbar"></div>`)[0];
+        info_wrapper_elem.append(info_elem);
+        var info_footer_elem = $(`<div class="footer"></div>`)[0];
+        info_wrapper_elem.append(info_footer_elem);
+        info_col.append(info_wrapper_elem)
+        
+        var loading = false;
+        this.load_button = new UI.Button("Load", {
+            click:async ()=>{
+                loading = true;
+                await app.request({
+                    call: ["session","client_load_autosave"],
+                    arguments: [this.history[this.selectable_list.selected_index].filename]
+                });
+                loading = false;
+                this.hide();
+            },
+            "disabled":()=>!this.selectable_list.selected && !loading,
+        });
+        info_footer_elem.append(this.load_button)
+        this.selectable_list = new SelectableList(tbody, {
+            "selector":"tr",
+        });
+        this.selectable_list.on("change", (item, i)=>{
+            var data = this.history[i];
+            dom_utils.empty(info_elem);
+
+            if (!data) return;
+            // var diff_type_to_str = ["-", "created", "deleted", "changed"]
+            // ${diff_type_to_str[v[0]]}
+            for (var k of ["curr", "prev"]) {
+                var entries = data[k];
+                var title = k == "prev" ? "Previous Changes" : "Current Changes"
+                var box = $(`<div><h3>${title}</h3><ul></ul></div>`)[0];
+                info_elem.append(box);
+                var ul = box.querySelector("ul");
+                if (!entries || entries.length == 0) {
+                    $(ul).append(`<li>No changes.</li>`);
+                } else {
+                    entries.forEach(([path,v])=>{
+                        // path = path.map(p=>p.replace(/^_+/,""));
+                        if (path[0] == "player") path.shift();
+                        var from = (typeof v[2] === "object" && v[2] !== null) ? "Object" : v[2];
+                        var to = (typeof v[1] === "object" && v[1] !== null) ? "Object" : v[1];
+                        $(ul).append(`<li><i>[${path.join("•")}]</i>\n<strong>(${from}) => (${to})</strong></li>`);
+                    });
+                }
+            }
+        });
+
+        this.on("show", async ()=>{
+            this.selectable_list.select(null);
+            dom_utils.empty(tbody);
+
+            this.settings.title = `History [Fetching...]`;
+
+            this.history = await app.request({
+                call: ["session","get_autosave_history"],
+            });
+            
+            this.history.forEach((data)=>{
+                var values = Object.values(table_data).map(d=>d(data));
+                var tr = $(`<tr></tr>`)[0];
+                tr.dataset.filename = data.filename;
+                for (var v of values) {
+                    var td = $(`<td></td>`)[0];
+                    $(td).append(v);
+                    tr.append(td);
+                }
+                tbody.append(tr);
+            });
+            this.settings.title = `History [${this.history.length}]`;
+        });
+    }
+
+    destroy() {
+        super.destroy();
+        this.selectable_list.destroy();
+    }
+}
+
+export class PlaylistAddURLMenu extends ModalPropertyContainer {
+    constructor() {
+        super({
+            "modal.title": "Add URLs to Playlist",
+            "modal.footer":true,
+        });
+        var urls = new UI.Property(null, "URLs", `<textarea style="height:180px;white-space:pre"></textarea>`, {
+            "info": "To enter multiple URLs seperate each one with a new line.",
+            "placeholder": [
+                `https://www.youtube.com/watch?v=1234567890`,
+                `https://www.youtube.com/watch?v=vJX7FPhMJPw&list=PL6C81E659279FE5DA&index=1`,
+                `https://vimeo.com/123456789`,
+                `https://www.bbc.co.uk/iplayer/episodes/12345678/show`,
+                `https://archive.org/details/ALTVComplete/Al+Music+1.mp4`,
+                `https://website.com/direct/link/to/video.mp4`,
+                `etc...`,
+            ].join("\n"),
+            "reset":false,
+        })
+        var row = this.content.append(new UI.FlexRow());
+        row.append(urls);
+
+        var row = this.content.append(new UI.FlexRow());
+        row.append(...$(`<span>If you're having problems downloading some media it might be due to geo-blocking in the server's locale, try <a href="https://oleksis.github.io/youtube-dl-gui/" target="_blank">yt-dlg</a> to download the media in your locale and upload to the server.</span>`));
+
+        var ok_button = new UI.Button("OK", {
+            disabled: ()=>!urls.value,
+            click: ()=>{
+                this.resolve(urls.value);
+                urls.set_value("", {trigger:false});
+                this.hide();
+            }
+        })
+        this.footer.append(ok_button)
+        var cancel_button = new UI.Button("Cancel", {
+            click: ()=>{
+                this.resolve(null);
+                this.hide();
+            }
+        })
+        this.footer.append(cancel_button)
+        this.on("hide", ()=>this.resolve(null));
+    }
+    show(resolve) {
+        this.resolve = resolve;
+        super.show();
+    }
+};
+
+export const MediaSettingsMode = {
+    "current": "current",
+    "all": "all",
+}
+export class PlaylistModifySettings extends ModalPropertyContainer {
+    /** @param {PlaylistItem[]} items */
+    show(items, new_type) {
+        this._new_type = new_type;
+        this._saved = false;
+        super.show(items);
+    }
+
+    hide(saved=false) {
+        this._saved = saved;
+        super.hide();
+    }
+
+    get is_new() {
+        this.data === NULL_PLAYLIST_ITEM;
+    }
+
+    get changes() { return super.changes.filter(k=>k!=this.interface.label.id&&k!=this.interface.color.id); }
+
+    constructor() {
+        super({
+            nullify_defaults: true,
+            "modal.close": ()=>{
+                if (!this._saved && this.is_new && !IS_ELECTRON) return window.confirm("The new item will not be saved. Continue?");
+                if (app.$._session.is_running && this.datas.some(d=>d === app.$._session.current_playing_item) && this.changes.length) {
+                    app.prompt_for_reload_of_current_item();
+                }
+                return true
+            },
+            "modal.title": function() {
+                if (this.is_new) return `Add [${this._new_type}]`;
+                return `Modify ${app.get_playlist_items_title(this.datas)}`;
+            },
+            "modal.footer":true,
+        });
+        
+        this.datas = [NULL_PLAYLIST_ITEM];
+
+        this.footer.append(
+            this.save_button = new UI.Button("Save", {
+                hidden:()=>!!this.data,
+                disabled:()=>!this.valid_visible,
+                click:()=>{
+                    app.playlist_add({
+                        filename: `livestreamer://${this._new_type}`,
+                        props: this.named_property_lookup_not_null
+                    });
+                    this.hide(true);
+                }
+            }),
+            this.reset_button = new UI.Button("Reset", {
+                // necessary to remove possibly unused playlist_props vars (instead of running this.reset() which only removes the recognized props).
+                // hidden:()=>this.is_new,
+                click:()=>{
+                    if (this.is_new) {
+                        this.reset();
+                    } else {
+                        app.request({
+                            // call: ["session", "clear_playlist_props"],
+                            // arguments: this.datas.map(data=>data.id)
+                            call: ["session", "update_values"],
+                            arguments: this.datas.map(data=>[`playlist/${data.id}/props`, {}])
+                        });
+                        app.$._push(...this.datas.map(data=>[`sessions/${app.$._session.id}/playlist/${data.id}/props`,{[utils.Observer.RESET_KEY]:1}]));
+                    }
+                }
+            })
+        );
+
+        this.on("property-change", (e)=>{
+            if (this.is_new) return;
+            if (e.name && e.trigger) {
+                app.playlist_update(e.datas.map(data=>[`${data.id}/${e.name}`, e._value]));
+                update_layout_next_frame();
+            }
+        });
+
+        this.on("show", ()=>{
+            update_layout();
+        });
+
+        this.interface = new MediaSettingsInterface(this);
+        // this.register_properties(...Object.values(this.interface).filter(p=>p instanceof UI.Property))
+
+        var update_layout = ()=>{
+            this.content.update_layout(this.interface.get_layout());
+        }
+        var update_layout_next_frame = dom_utils.debounce_next_frame(update_layout);
+    }
+}
+
+export class MediaSettingsInterface {
+    get is_parent_modify() { return this.parent instanceof PlaylistModifySettings }
+    /** @param {UI.PropertyContainer} parent */
+    constructor(parent) {
+        this.parent = parent;
+        var _this = this;
+        
+        let get_default_stream_id = (streams, type)=>{
+            streams = streams.filter(s=>s.type === type);
+            return streams.indexOf(utils.get_default_stream(streams,type))+1;
+        };
+
+        let get_stream_options = (streams, type)=>{
+            streams = streams.filter(s=>s.type === type);
+
+            let stream_to_option = (s,i)=>{
+                var parts = [];
+                parts.push(`${i+1}. ${s.title||"Untitled"}`);
+                if (s.language) parts.push(s.language);
+                return {value: i+1, text: parts.join(" | ")};
+            };
+            var options = streams.map(stream_to_option);
+            options.unshift({value:0, text:"0. None"});
+
+            // var default_stream = get_default_stream(streams, type);
+            // var default_index = streams.indexOf(default_stream);
+            // var default_text = `Auto | ${options[default_index+1].text}`
+
+            // return [["auto", default_text], ...options];
+            return [[0, "None"], ...streams.map(stream_to_option)];
+        };
+        let get_streams = (item, type)=>{
+            var streams;
+            if (this.is_parent_modify) streams = utils.try(()=>item.media_info.streams);
+            else streams = utils.try(()=>app.$._session.current_playing_item.media_info.streams);
+            // else streams = app.$.stream.mpv.streams;
+            if (!streams) streams = [];
+            if (type) streams = streams.filter(s=>s.type == type);
+            return streams;
+        };
+
+        let prop_name = (name)=>{
+            if (this.is_parent_modify) return `props/${name}`;
+            return name;
+        }
+
+        /* let get_current_streams = (type)=>{
+            var streams = [];
+            var track_list = app.$.stream.mpv.props["track-list"] || EMPTY_ARRAY;
+            if (track_list.length > 0 && !this.is_parent_modify) {
+                streams = track_list.map(t=>({
+                    type: (t.type === "sub") ? "subtitle" : t.type,
+                    default: t.default,
+                    forced: t.forced,
+                    language: t.lang,
+                    title: t.title,
+                }));
+            }
+            if (type) streams = streams.filter(s=>s.type == type);
+            return streams;
+        }; */
+        
+        // var nullify = (v)=>v===undefined?null:v;
+        let get_default = function() {
+            var value;
+            var name = this.name.split("/").pop();
+            /* if (parent._mode === MediaSettingsMode.current) {
+                if (_this.is_parent_modify) {
+                    value = utils.get(app.$.session.player_default_override, name);
+                } else {
+                    value = utils.get(app.$.session.current_playing_item.props, name);
+                }
+            } */
+            /* if (value === undefined && parent._mode === MediaSettingsMode.current) {
+                value = utils.try(()=>app.$.session.current_playing_item.props[name]);
+            } */
+            if (_this.is_parent_modify || parent._mode === MediaSettingsMode.current) {
+                value = utils.get(app.$._session.player_default_override, name);
+            }
+            if (value === undefined) {
+                value = utils.try(()=>app.get_property(`playlist/*/props/${name}`).default);
+            }
+            if (value === undefined) {
+                // value = utils.try(()=>app.get_property("player_default_override", name).default);
+            }
+            if (value === undefined) value = null;
+            return value;
+        }
+        
+        let get_options = function(){
+            var options;
+            var name = this.name.split("/").pop();
+            if (_this.is_parent_modify) {
+                options = utils.try(()=>app.get_property(`playlist/*/props/${name}`).options);
+            }
+            if (options === undefined) {
+                options = utils.try(()=>app.get_property(`player_default_override/${name}`).options);
+            }
+            return options || [];
+        };
+
+        this.aspect_ratio = new UI.Property(prop_name("aspect_ratio"), "Aspect Ratio", `<select></select>`, {
+            "options": [[-1,"Default"],  [1.777778,"16:9"], [1.333333,"4:3"], [2.35,"2.35:1"]],
+            "default": get_default,
+        });
+
+        this.deinterlace = new UI.Property(prop_name("deinterlace_mode"), "Deinterlace", `<select></select>`, {
+            "options": [["auto","Auto"],[false, "Off"],[true, "On"]],
+            "default": get_default,
+        });
+
+        
+
+        this.audio_track = new UI.Property(prop_name("audio_track"), "Audio Track", `<select></select>`, {
+            "nullify_defaults": true,
+            "options": (item)=>{
+                return get_stream_options(get_streams(item), "audio")
+            },
+            // "default": "auto",
+            "default": (item)=>{
+                return get_default_stream_id(get_streams(item), "audio");
+            },
+            "disabled": ()=>parent._mode === MediaSettingsMode.all,
+        });
+        /* if (this.is_parent_modify) {
+        } else {
+            this.audio_track = new UI.Property(prop_name("aid"), "Audio Track", `<select></select>`, {
+                "options": ()=>{
+                    var streams = get_current_streams("audio");
+                    return [[false, "None"], ...streams.map(stream_to_option)]
+                },
+                "default": ()=>{
+                    return get_default_stream_id(get_current_streams("audio"));
+                },
+                "disabled": ()=>parent._mode === MediaSettingsMode.all,
+            });
+        } */
+       
+        this.audio_delay = new UI.TimeSpanProperty(prop_name("audio_delay"), "Audio Delay (Seconds)", {
+            "step":0.05,
+            "timespan.format": "s.SSS",
+            "default": get_default,
+        });
+        
+        this.audio_channels = new UI.Property(prop_name("audio_channels"), "Audio Channels", `<select></select>`, {
+            "default": get_default,
+            "options":()=>[["left", "Left → Mono"],["right", "Right → Mono"],["mix", "L + R → Mono"],["stereo", "Stereo"]],
+        });
+        
+        this.subtitle_track = new UI.Property(prop_name("subtitle_track"), "Subtitle Track", `<select></select>`, {
+            "nullify_defaults": true,
+            "options": (item)=>{
+                return get_stream_options(get_streams(item), "subtitle")
+            },
+            // "default": "auto",
+            "default": (item)=>{
+                return get_default_stream_id(get_streams(item), "subtitle");
+            },
+            "disabled": ()=>parent._mode === MediaSettingsMode.all,
+        });
+        /* this.subtitle_track.output_modifiers.push((v)=>{
+            return (v == null) ? get_default_stream_id(get_streams(item), "subtitle") : v;
+        }) */
+        /* if (this.is_parent_modify) {
+        } else {
+            this.subtitle_track = new UI.Property(prop_name("sid"), "Subtitle Track", `<select></select>`, {
+                "options": ()=>{
+                    var streams = get_current_streams("subtitle");
+                    return [[false, "None"], ...streams.map(stream_to_option)]
+                },
+                "default": ()=>{
+                    return get_default_stream_id(get_current_streams("subtitle"));
+                },
+                "disabled": ()=>parent._mode === MediaSettingsMode.all,
+            });
+        } */
+        this.subtitle_delay = new UI.Property(prop_name("sub_delay"), "Subtitle Delay", `<div class="input-wrapper suffix number secs"><input type="number" step="0.05"></div>`, {
+            "precision":3,
+            "default": get_default,
+        });
+        this.subtitle_delay.output_modifiers.push((v)=>Number(v).toFixed(2));
+        
+        this.subtitle_scale = new UI.Property(prop_name("sub_scale"), "Subtitle Scale (%)", `<input type="number" step="1">`, {
+            "precision":2,
+            "default": get_default,
+        });
+        this.subtitle_scale.input_modifiers.push((v)=>+v/100);
+        this.subtitle_scale.output_modifiers.push((v)=>Math.round(+v*100));
+
+        this.subtitle_pos = new UI.Property(prop_name("sub_pos"), "Subtitle Position (%)", `<input type="number" step="1">`, {
+            "precision":2,
+            "default": get_default,
+        });
+        this.subtitle_pos.output_modifiers.push((v)=>Math.round(+v));
+
+        this.playback_speed = new UI.Property(prop_name("speed"), "Playback Speed", `<input type="number" step="0.05">`, {
+            "precision":2,
+            "default": get_default,
+            "hidden": ()=>!app.dev_mode
+        });
+        this.playback_speed.output_modifiers.push((v)=>Number(v).toFixed(2));
+        this.pitch_correction = new UI.Property(prop_name("audio_pitch_correction"), "Audio Pitch Correction", `<select></select>`, {
+            "options": [[false, "Off"],[true, "On"]],
+            "default": get_default,
+            "hidden": ()=>!app.dev_mode
+        });
+        
+        this.volume_normalization = new UI.Property(prop_name("volume_normalization"), "Volume Normalization", `<select></select>`, {
+            "options":()=>{
+                return [[false,"Off"], ...(utils.try(()=>app.$.properties.player_default_override.props.volume_normalization.options)||EMPTY_ARRAY).map(([f,_])=>[f,f])]
+            },
+            "default": get_default,
+        });
+        
+        this.volume_multiplier = new UI.Property(prop_name("volume_multiplier"), "Volume Multiplier (%)", `<input type="number" step="5" min="0" max="200">`, {
+            "round":0.05,
+            "precision":2,
+            "default": 1,
+        });
+        this.volume_multiplier.input_modifiers.push((v)=>v/100);
+        this.volume_multiplier.output_modifiers.push((v)=>Math.round(v*100).toString());
+        
+        this.audio_visualization = new UI.Property(prop_name("audio_visualization"), "Audio Visualization", `<select></select>`, {
+            "options":()=>{
+                return [[false,"None"], ["waveform","Waveform"]];
+            },
+            "default": get_default,
+        });
+
+        // this.fps = new UI.Property(prop_name("force_fps"), "Frame Rate", `<select></select>`, {
+        //     "options": get_options,
+        //     "default": get_default,
+        // });
+
+        this.loop = new UI.Property(prop_name("loop_file"), "Loop", `<select></select>`, {
+            "options": [[false, "Off"],["inf", "On"]],
+            "default": get_default,
+        });
+
+        if (this.is_parent_modify) {
+
+            /** @param {PlaylistItem} item */
+            let default_duration = (item)=>{
+                return (item || parent.data).userdata.media_duration;
+            };
+            
+            this.filename = new UI.Property("filename", "File URI", `<input type="text">`, {
+                default: "",
+                nullify_defaults: false,
+                reset: false,
+                info: "A single wrong character will invalidate the file URI, edit with care."
+            });
+            this.filename.add_validator(UI.VALIDATORS.not_empty);
+            this.filename.add_validator(UI.VALIDATORS.media_exists);
+
+            this.playlist_mode = new UI.Property(prop_name("playlist_mode"), "Playlist Mode", `<select>`, {
+                "info": `Setting to 'Merged' or '2-Track', the media player will attempt to merge the playlist's contents as if it were a single file, with each item represented as a chapter. A merged playlist may only include local files (ie, no URIs or special items).`,
+                "options": get_options,
+                "default": get_default,
+            });
+
+            this.playlist_end_on_shortest_track = new UI.Property(prop_name("playlist_end_on_shortest_track"), "End Playlist on Shortest Track", `<select>`, {
+                "info": `Enabling sets the item to end when the track with the shortest duration ends. Disabling will pad the shortest track to match the duration of the longer track.`,
+                "options": ()=>{
+                    return [[false, "Off"], [true, "On"]];
+                },
+                "hidden": (item)=>item.props.playlist_mode != PLAYLIST_MODE.DUAL_TRACK,
+                "default": get_default,
+            });
+
+            this.playlist_revert_to_video_track_audio = new UI.Property(prop_name("playlist_revert_to_video_track_audio"), "Revert to Video Track Audio", `<select>`, {
+                "info": `If the audio track is shorter than the video track, revert to the audio supplied in the video track.`,
+                "options": ()=>{
+                    return [[false, "Off"], [true, "On"]];
+                },
+                "disabled": (item)=>item.props.playlist_end_on_shortest_track,
+                "hidden": (item)=>item.props.playlist_mode != PLAYLIST_MODE.DUAL_TRACK,
+                "default": get_default,
+            });
+
+            var clip_mode = 1;
+
+            this.clip_start = new UI.TimeSpanProperty(prop_name("clip_start"), "Clip Start", {
+                "timespan.format": "h:mm:ss.SSS",
+                "min": 0,
+                "max": default_duration,
+                "default": 0,
+            })
+
+            this.clip_end = new UI.TimeSpanProperty(prop_name("clip_end"), null, {
+                "label": ()=>dom_utils.is_visible(this.clip_start.elem) ? "Clip End" : "Duration",
+                "timespan.format": "h:mm:ss.SSS",
+                "min": 0,
+                "max": default_duration,
+                "default": default_duration,
+            });
+
+            this.clip_length = new UI.TimeSpanProperty(null, "Clip Length", {
+                "timespan.format": "h:mm:ss.SSS",
+                "reset": false,
+                // "max":default_duration,
+                "spinner": false,
+                "readonly": true,
+                "disabled": true,
+            });
+
+            var get_clip_length = ()=>{
+                return this.clip_end.value - this.clip_start.value;
+            };
+
+            this.clip_offset = new UI.TimeSpanProperty(prop_name("clip_offset"), "Clip Offset", {
+                "timespan.format": "h:mm:ss.SSS",
+                "default": 0,
+                "min": ()=>-get_clip_length(),
+                "max": ()=>get_clip_length(),
+            });
+
+            this.clip_loops = new UI.Property(clip_mode == 0 ? prop_name("clip_loops") : null, "Clip Loops", `<input type="number">`, {
+                "min": 0,
+                "step": 1,
+                "precision":8,
+                "default": 1,
+            });
+            // this.clip_loops.output_modifiers.push(v=>v.toFixed(6).replace(/0+$/, ""));
+
+            this.clip_duration = new UI.TimeSpanProperty(clip_mode == 1 ? prop_name("clip_duration") : null, "Duration", {
+                "min":0,
+                // "info": ()=>clip_mode==0?`${this.clip_length.input.value} × ${this.clip_loops.value.toFixed(3)}`:null,
+                "timespan.zero_infinity": ()=>this.override_default_duration!=null,
+                "timespan.format": "h:mm:ss.SSS",
+                "default":()=>this.override_default_duration==null?(this.clip_end.value-this.clip_start.value):this.override_default_duration,
+            });
+
+            this.clip_length.on("change", (e)=>{
+                if (e.trigger) {
+                    this.clip_end.set_value(this.clip_start.value + e.value, {trigger:true});
+                }
+            });
+
+            var update_durations = (e)=>{
+                var d = get_clip_length();
+                this.clip_length.set_value(d);
+                // this.clip_offset.set_value(this.clip_offset.value);
+                if (clip_mode == 0) {
+                    this.clip_duration.set_value(d * this.clip_loops.value);
+                    // this.clip_loops.update()
+                } else {
+                    var l = this.clip_duration.value / d;
+                    this.clip_loops.set_value(Number.isFinite(l) ? l : 0);
+                    this.clip_duration.update();
+                }
+            }
+
+            parent.on("show", ()=>update_durations());
+            this.clip_start.on("change", update_durations);
+            this.clip_end.on("change", update_durations);
+            if (clip_mode == 0) {
+                this.clip_loops.on("change", update_durations);
+                this.clip_duration.on("change", (e)=>{
+                    this.clip_loops.set_value((e.value / (this.clip_end.value - this.clip_start.value)), {trigger:e.trigger});
+                })
+            } else {
+                this.clip_duration.on("change", update_durations);
+                this.clip_loops.on("change", (e)=>{
+                    this.clip_duration.set_value((e.value * (this.clip_end.value - this.clip_start.value)), {trigger:true});
+                })
+            }
+
+            this.start_end_time_range = new RangeProperty(null, null, {
+                "min": 0,
+                "max": ()=>default_duration(),
+                "step": 0.001,
+                "default": (item)=>[0, default_duration(item)],
+                "hidden": ()=>!default_duration(),
+                "reset": false,
+                "title": `Clip Range`,
+            });
+            var on_change =(e)=>{
+                // console.log("ON CHANGE", e, this.clip_start.value, this.clip_end.value);
+                this.start_end_time_range.set_value([this.clip_start.value, this.clip_end.value]);
+            };
+            this.clip_start.on("change", on_change);
+            this.clip_end.on("change", on_change);
+            this.start_end_time_range.on("change", (e)=>{
+                this.clip_start.set_value(e.value[0], {trigger:e.trigger});
+                this.clip_end.set_value(e.value[1], {trigger:e.trigger});
+            });
+
+            // -------------------------------------
+
+            this.fade_in_time = new UI.TimeSpanProperty(prop_name("fade_in"), "Fade In Duration (Seconds)", {
+                "step":0.1,
+                "timespan.format": "s.SSS",
+                "default": get_default,
+            })
+
+            this.fade_out_time = new UI.TimeSpanProperty(prop_name("fade_out"), "Fade Out Duration (Seconds)", {
+                "step":0.1,
+                "timespan.format": "s.SSS",
+                "default": get_default,
+            });
+
+            /* this.fade_in_out_time = new UI.Property(prop_name("fade_in"), "Fade In/Out", `<div class="input-wrapper suffix number secs"><input type="number" min="0" step="0.1"></div>`, {
+                "default": 0,
+            });
+            this.fade_in_out_time.on("change", (e)=>{
+                if (e.trigger) {
+                    this.fade_in_time.set_value(e._value, true);
+                    this.fade_out_time.set_value(e._value, true);
+                }
+            }) */
+
+            var is_special = (item)=>item && item.filename.startsWith("livestreamer:");
+            var is_empty = (item)=>item && item.filename == "livestreamer://empty";
+
+            function get_background_options(item) {
+                var options = utils.deep_copy(get_options.apply(this));
+                if (is_special(item)) options = options.filter(o=>!["embedded","external"].includes(o[0]));
+                // if (is_empty(item)) options = options.filter(o=>!["default"].includes(o[0]));
+                return options
+            };
+
+            [this.background_mode, this.background_color, this.background_file, this.background_file_start, this.background_file_end] = create_background_properties({
+                "name": prop_name("background"),
+                "label": "Replace Video",  /* (item)=>{
+                    if (is_special(item)) return "Background";
+                    return "Add Video";
+                } */
+                "options":function(item){
+                    var options = get_background_options.apply(this,[item]);
+                    if (item.filename == "livestreamer://intertitle") {
+                        options = options.filter(o=>o[0]=="color" || o[0]==null || o[0]=="default");
+                    } else {
+                        var default_opt = options.find(o=>o[0]=="default") || options.find(o=>o[0]==null);
+                        var audio_display_default_opt = utils.try(()=>app.$.properties.background_mode.options.find(o=>o[0]==app.$._session.background_mode));
+                        if (default_opt && audio_display_default_opt) {
+                            default_opt[1] = `Default Background (${audio_display_default_opt[1]})`;
+                        }
+                    }
+                    return options;
+                },
+                "default": null,
+                /* "default": function(item) {
+                    if (item.filename == "livestreamer://intertitle") return "color";
+                    else return get_default.apply(this, [id]);
+                }, */
+            });
+
+            this.audio_file = new FileProperty(prop_name("audio_file"), "Add Audio", {
+                "file.options": { files: true, filter: ["audio/*"] },
+            });
+            this.audio_file.add_validator(UI.VALIDATORS.media_audio);
+
+            this.subtitle_file = new FileProperty(prop_name("subtitle_file"), "Add Subtitles", {
+                "file.options": { files: true, filter: [".idx", ".sup", ".srt", ".ass", ".txt"] },
+            })
+            this.subtitle_file.add_validator(UI.VALIDATORS.media_subtitle);
+            
+            var m = (v)=>+Number.parseFloat(v)/100;
+            var r = (v)=>`${(+v*100).toFixed(2)}`
+            var crop_html = `<input type="number" min="0" max="${CROP_LIMIT*100}" step="1">`
+            var crop_props = {
+                /* "step": 0.01,
+                "min": 0,
+                "max": CROP_LIMIT, */
+                "precision":4,
+                "default": get_default
+            }
+            this.crop_l = new UI.Property(prop_name("crop_left"), "Crop Left (%)", crop_html, crop_props);
+            this.crop_t = new UI.Property(prop_name("crop_top"), "Crop Top (%)", crop_html, crop_props);
+            this.crop_r = new UI.Property(prop_name("crop_right"), "Crop Right (%)", crop_html, crop_props);
+            this.crop_b = new UI.Property(prop_name("crop_bottom"), "Crop Bottom (%)", crop_html, crop_props);
+            [this.crop_l,this.crop_t,this.crop_r,this.crop_b].forEach(p=>{
+                p.input_modifiers.push(m);
+                p.output_modifiers.push(r);
+                p.on("change",function(){
+                    this.input.old_hash = null;
+                })
+            });
+
+            var auto_cropping = false;
+            this.auto_crop_button = new UI.Button(null, {
+                flex: 0,
+                "disabled":()=>auto_cropping,
+                "content":()=>auto_cropping ? `Crop Detecting <i class="fas fa-sync fa-spin"></i>` : `Crop Detect`,
+                "click":async ()=>{
+                    auto_cropping = true;
+                    await app.request({
+                        call: ["session", "detect_crop"],
+                        arguments: [parent.datas.map(data=>data.id)]
+                    }, {
+                        show_spinner: false,
+                        timeout: 0
+                    }).catch(NOOP);
+                    auto_cropping = false;
+                }
+            });
+
+            var get_current_crop_rect = ()=>{
+                return new utils.Rectangle({left:this.crop_l.value, top:this.crop_t.value, right:1-this.crop_r.value, bottom:1-this.crop_b.value});
+            };
+
+            var old_hash;
+            var last_cdi_container;
+            this.crop_detection_images = new UI.Property(null, "Crop Detection Images", `<div style="position:relative;width:100%;"></div>`, {
+                "reset": false,
+                "hidden": function() {
+                    return parent.datas.length != 1 || !parent.data.detected_crops;
+                },
+                "update": function() {
+                    var data = parent.data.detected_crops;
+                    var crop_rect = get_current_crop_rect();
+                    var hash = JSON.stringify([data, crop_rect, parent.datas.map(data=>data.id)]);
+                    if (hash === old_hash) return;
+                    old_hash = hash;
+                    // dom_utils.empty(this.content);
+                    var new_container = $(`<div class="crop-image-container"></div>`)[0];
+                    if (data && parent.datas.length == 1) {
+                        // var scale = 1 / data.length;
+                        data.forEach((d,i)=>{
+                            var p = new CropPreview(d.url, d.rect, crop_rect);
+                            var container = $(`<div></div>`)[0];
+                            container.appendChild(p.elem);
+                            new_container.appendChild(container);
+                            p.elem.onclick = ()=>show_crop_edit_modal(parent.data.id, i);
+                        });
+                    }
+                    this.content.append(new_container);
+                    var prev_container = last_cdi_container;
+                    if (prev_container) {
+                        new_container.style.position = "absolute";
+                        new_container.style.top = "0";
+                    }
+                    Promise.all([...new_container.querySelectorAll("img")].map(e=>{
+                        return new Promise((resolve)=>{
+                            e.onload = resolve;
+                            e.onerror = resolve;
+                        })
+                    })).then(()=>{
+                        if (prev_container) {
+                            prev_container.remove()
+                            new_container.style.position = "";
+                        }
+                    })
+                    last_cdi_container = new_container;
+                }
+            });
+            
+            function show_crop_edit_modal(id, index) {
+                var data = app.$._session.detected_crops[id];
+                var fb = new Fancybox(data.map((d,i)=>{
+                    var container = $(`<div></div>`)[0];
+                    var cp = new CropPreview(d.url, d.rect, get_current_crop_rect(), true);
+                    cp.on("save",(rect)=>{
+                        fb.close();
+                        app.request({
+                            call: ["session", "update_values"],
+                            arguments: [
+                                [`playlist/${id}/props/crop_left`, rect.left],
+                                [`playlist/${id}/props/crop_top`, rect.top],
+                                [`playlist/${id}/props/crop_right`, 1-rect.right],
+                                [`playlist/${id}/props/crop_bottom`, 1-rect.bottom],
+                            ]
+                        });
+                    });
+                    container.appendChild(cp.elem);
+                    return {type:"html",src:container};
+                }), {
+                    startIndex:index,
+                });
+            }
+
+            parent.on("show", ()=>{
+                old_hash = null;
+                this.crop_detection_images.update_next_frame(); // otherwise fancybox fucks up.
+                // really?
+            });
+
+            // -------------------------------------
+            
+            this.empty_duration = new UI.TimeSpanProperty(prop_name("empty_duration"), "Duration", {
+                "min":0,
+                "timespan.zero_infinity": true,
+                "timespan.format": "h:mm:ss.SSS",
+                "default":get_default,
+            });
+
+            // -------------------------------------
+            
+            this.title_text = new UI.TextArea(prop_name("title_text"), "Text", {
+                "default":get_default,
+                "placeholder":"Insert Text Here",
+                "reset": false,
+                "textarea.min_rows": 3,
+            });
+            this.title_text.add_validator(UI.VALIDATORS.not_empty);
+            
+            this.title_duration = new UI.TimeSpanProperty(prop_name("title_duration"), "Duration", {
+                "min":0,
+                "timespan.format": "h:mm:ss.SSS",
+                "default": get_default
+            });
+            this.title_fade_in_out = new UI.Property(prop_name("title_fade"), "Fade In/Out", `<div class="input-wrapper suffix number secs"><input type="number" min="0" step="0.1"></div>`, {
+                "precision":3,
+                "default": get_default
+            });
+
+            //Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+
+            this.title_font = new UI.Property(prop_name("title_font"), "Font", `<select>`, {
+                "default": get_default,
+                "options": get_options,
+            });
+            /* this.title_font.group_elem.append(new UI.Button(`<i class="fas fa-plus"></i>`, {
+                title: `Add New Font...`,
+                click: ()=>{
+                    app.font_menu.show()
+                }
+            })) */
+
+            this.title_size = new UI.Property(prop_name("title_size"), "Size", `<input type="number" min="10" max="100">`, {
+                "default": get_default,
+            });
+            this.title_color = new UI.Property(prop_name("title_color"), "Color", `<input type="color">`, {
+                "default": get_default,
+            });
+            this.title_style = new UI.Property(prop_name("title_style"), "Style", `<select>`, {
+                "default": get_default,
+                "options": get_options,
+            });
+            this.title_alignment = new UI.Property(prop_name("title_alignment"), "Alignment", `<select>`, {
+                "default": get_default,
+                "options": get_options,
+            });
+            this.title_spacing = new UI.Property(prop_name("title_spacing"), "Letter Spacing", `<input type="number" min="-50" max="50">`, {
+                "default": get_default,
+            });
+            this.title_outline_thickness = new UI.Property(prop_name("title_outline_thickness"), "Outline Thickness", `<input type="number" min="0"  step="0.5" max="50"></div>`, {
+                "precision":1,
+                "default": get_default
+            });
+            this.title_outline_color = new UI.Property(prop_name("title_outline_color"), "Outline Color", `<input type="color">`, {
+                "default": get_default
+            });
+            this.title_shadow_depth = new UI.Property(prop_name("title_shadow_depth"), "Shadow Depth", `<input type="number" min="0" max="50" step="0.5">`, {
+                "precision":1,
+                "default": get_default,
+            });
+            this.title_shadow_color = new UI.Property(prop_name("title_shadow_color"), "Shadow Color", `<input type="color">`, {
+                "default": get_default,
+            });
+            this.title_underline = new UI.Property(prop_name("title_underline"), "Underline", `<select>`, {
+                "default": get_default,
+                "options": YES_OR_NO,
+            });
+            this.title_rotation = new UI.MultiProperty(prop_name("title_rotation"), "3D Rotation (degrees)", `<input type="number"><input type="number"><input type="number">`, {
+                "default": get_default,
+            });
+            this.title_margin = new UI.Property(prop_name("title_margin"), "Margin", `<input type="number" min="0" max="100">`, {
+                "default": get_default,
+            });
+            
+            var alignments = ["bottom left", "bottom center", "bottom right", "center left", "center", "center right", "top left", "top center", "top right"];
+            var alignment_styles = [{"text-align":"left", bottom:0}, {"text-align":"center", bottom:0}, {"text-align":"right", bottom:0}, {top: "50%", transform: "translateY(-50%)", "text-align":"left"}, {top: "50%", transform: "translateY(-50%)", "text-align":"center"}, {top: "50%", transform: "translateY(-50%)", "text-align":"right"},{top:0, "text-align":"left"}, {top:0, "text-align":"center"}, {top:0, "text-align":"right"}];
+            (()=>{
+                var _title_hash, _anim_hash;
+                this.title_preview = new UI.Property(null, "Preview", `<div class="title-preview"></div>`, {
+                    "reset": false,
+                    "update": ()=>{
+                        var hash = JSON.stringify([this.title_text, this.title_size, this.title_color, this.title_style, this.title_alignment, this.title_spacing, this.title_outline_thickness, this.title_outline_color, this.title_shadow_depth, this.title_shadow_color, this.title_underline, this.title_rotation, this.title_margin, this.background_mode, this.background_color, this.background_file, this.background_file_start, this.background_file_end].map(p=>p.value));
+                        if (_title_hash != hash) {
+                            _title_hash = hash;
+                            update_preview();
+                        }
+                        var hash = JSON.stringify([this.title_duration,this.title_fade_in_out].map(p=>p.value));
+                        if (_anim_hash != hash) {
+                            _anim_hash = hash;
+                            restart_animation();
+                        }
+                    }
+                });
+                var elem = this.title_preview.content;
+                Object.assign(elem.style, {
+                    "width": "100%",
+                    "padding-top": "56.25%",
+                    "position": "relative",
+                    "overflow":"hidden",
+                    "border": "1px solid #ddd",
+                });
+                elem.onclick=()=>{
+                    restart_animation();
+                }
+
+                var timeline_elem = $(`<div class="timeline"><div></div></div>`)[0];
+                Object.assign(timeline_elem.style, {
+                    "z-index":10,
+                    "width":"100%",
+                    "bottom":0,
+                    "height": "6px",
+                    "background": "rgba(0,0,0,0.2)",
+                    "position":"absolute",
+                });
+                Object.assign(timeline_elem.firstElementChild.style, {
+                    "height": "100%",
+                    "background": "#fff",
+                    "opacity":0.8,
+                });
+                elem.append(timeline_elem);
+
+                var padding = $(`<div></div>`)[0];
+                Object.assign(padding.style, {
+                    "position":"absolute",
+                    "top": 0,
+                    "width": "100%",
+                    "height": "100%",
+                });
+                elem.append(padding);
+
+                var black_overlay = $(`<div></div>`)[0];
+                Object.assign(black_overlay.style, {
+                    "position":"absolute",
+                    "top": 0,
+                    "width": "100%",
+                    "height": "100%",
+                    "background": "black",
+                    "z-index": 5,
+                });
+                elem.append(black_overlay);
+
+                var inner = $(`<div></div>`)[0];
+                Object.assign(inner.style, {
+                    "position":"relative",
+                    "width": "100%",
+                    "height": "100%",
+                });
+                padding.append(inner);
+
+                var title_preview_style;
+
+                var container = $(`<div class="preview-container"></div>`)[0];
+                Object.assign(container.style, {
+                    "position":"absolute",
+                    "top":0,
+                    "bottom":0,
+                    "left":0,
+                    "right":0,
+                    "z-index":2,
+                });
+                inner.append(container);
+                var outline_elem = $(`<div class="preview-text"></div>`)[0];
+                container.append(outline_elem);
+                var text_elem = $(`<div class="preview-text"></div>`)[0];
+                container.append(text_elem);
+
+                var shadow_container = container.cloneNode(true);
+                Object.assign(shadow_container.style, {
+                    "z-index":1,
+                });
+                inner.prepend(shadow_container);
+
+                elem.onanimationend = ()=>{
+                    setTimeout(()=>restart_animation(), 500);
+                };
+
+                var restart_animation = ()=>{
+                    var duration = this.title_duration.value;
+                    var fade_duration = this.title_fade_in_out.value;
+                    if (!title_preview_style) {
+                        title_preview_style = $(`<style></style>`)[0];
+                        app.body.append(title_preview_style);
+                    }
+                    title_preview_style.textContent = `
+                    @keyframes title-preview-timeline {
+                        0% { width:0; }
+                        100% { width:100%; }
+                    }`;
+
+                    if (fade_duration) {
+                        var fade_in_duration_percent = (fade_duration / duration)*100;
+                        var fade_out_duration_percent = 100 - fade_in_duration_percent;
+                        title_preview_style.textContent += "\n" + `@keyframes title-preview-fade {
+                            0% { opacity:0; }
+                            ${fade_in_duration_percent}% { opacity:1; }
+                            ${fade_out_duration_percent}% { opacity:1; }
+                            100% { opacity:0; }
+                        }
+                        @keyframes black-overlay-fade {
+                            0% { opacity:1; }
+                            ${fade_in_duration_percent}% { opacity:0; }
+                            ${fade_out_duration_percent}% { opacity:0; }
+                            100% { opacity:1; }
+                        }`;
+                        black_overlay.style.animation = `black-overlay-fade linear ${duration}s 1 forwards`;
+                    } else {
+                        black_overlay.style.opacity = 0;
+                    }
+
+                    /* elem.querySelectorAll(".preview-text").forEach(e=>{
+                        e.style["animation"] = fade_duration ? `title-preview-fade linear ${duration}s 1 forwards` : "";
+                    }); */
+                    timeline_elem.firstElementChild.style["animation"] = `title-preview-timeline linear ${duration}s 1 forwards`
+                    dom_utils.restart_animation(elem);
+                }
+
+                var update_preview = ()=>{
+                    Object.assign(elem.style, {
+                        "background":this.background_mode.value == "color" ? this.background_color.value : "#000000",
+                    });
+
+                    var style = (this.title_style.value||"");
+                    var scale = 1.25;
+
+                    Object.assign(padding.style, {
+                        "padding":`${this.title_margin.value*scale}px`,
+                    });
+
+                    elem.querySelectorAll(".preview-text").forEach(e=>{
+                        e.innerHTML = this.title_text.value;
+                        Object.assign(e.style, {
+                            "white-space": "pre-wrap",
+                            "transition":"all 0.5s",
+                            "position": "absolute",
+                            "width":"100%",
+                            "user-select": "none",
+                            "top":"",
+                            "bottom":"",
+                            "left":"",
+                            "right":"",
+                            "text-align":"center",
+                            "transform": "",
+                            "font-weight": style.includes("bold") ? "bold" : "normal",
+                            "font-style": style.includes("italic") ? "italic" : "normal",
+                            "font-family": this.title_font.value,
+                            "font-size": `${this.title_size.value*scale}px`,
+                            "letter-spacing": `${this.title_spacing.value*scale}px`,
+                            "color":this.title_color.value,
+                            "text-decoration": this.title_underline.value ? "underline" : "",
+                        }, alignment_styles[this.title_alignment.value-1],
+                        );
+                    });
+                    
+                    var rotation = this.title_rotation.value || [0,0,0];
+                    elem.querySelectorAll(".preview-container").forEach(e=>{
+                        Object.assign(e.style, {
+                            "transition":"all 0.5s",
+                            "transform-origin": alignments[this.title_alignment.value-1],
+                            "transform-style": "preserve-3d",
+                            "transform": `perspective(100px) rotateY(${rotation[1]}deg) rotateX(${rotation[0]}deg) rotateZ(${rotation[2]}deg)`,
+                        });
+                    })
+                    Object.assign(outline_elem.style, {
+                        "opacity":this.title_outline_thickness.value?1:0,
+                        "color": "transparent",
+                        "-webkit-text-stroke-width": `${this.title_outline_thickness.value*scale*2}px`,
+                        "-webkit-text-stroke-color": this.title_outline_color.value,
+                    });
+                    var shadow_offset = this.title_shadow_depth.value*scale*1.25;
+                    shadow_container.style["transform"] = `translate(${shadow_offset}px,${shadow_offset}px) `+shadow_container.style["transform"];
+                    Object.assign(shadow_container.style, {
+                        "opacity":this.title_shadow_depth.value?1:0,
+                    });
+                    [...shadow_container.children].forEach(e=>{
+                        Object.assign(e.style, {
+                            "-webkit-text-stroke-width": `${this.title_outline_thickness.value*scale*2}px`,
+                            "-webkit-text-stroke-color": this.title_shadow_color.value,
+                            "color": this.title_shadow_color.value,
+                        });
+                    })
+                }
+            })();
+
+            // -------------------------------------
+
+            this.macro_function = new UI.Property(prop_name("function"), "Function", `<select>`, {
+                "options":get_options,
+                "default":get_default,
+            });
+            // this.macro_function.add_validator(UI.VALIDATORS.not_empty);
+
+            this.macro_handover_session = new UI.Property(prop_name("function_handover_session"), "Handover Session", `<select>`, {
+                "options":()=>app.get_handover_sessions_options(),
+                "default":get_default,
+                "reset":true,
+                "hidden":()=>this.macro_function.value != "handover"
+            });
+            this.macro_handover_session.add_validator(UI.VALIDATORS.not_empty);
+
+            // -------------------------------------
+
+            this.label = new UI.Property(prop_name("label"), "Label", `<input type="text">`, {
+                /** @param {PlaylistItem} item */
+                "default": (item)=>{
+                    return item.get_pretty_name({label:false}) || "";return item.get_pretty_name({label:false}) || "";
+                },
+            });
+
+            this.color = new UI.Property(prop_name("color"), "Item Color", `<select></select>`,{
+                "options": Object.keys(item_colors).map(k=>{
+                    return {value:k, text:utils.capitalize(k), style:{"background-color":item_colors[k]||"#fff"}};
+                }),
+                "update":function() {
+                    this.input.style["background-color"] = item_colors[this.value || "none"];
+                },
+                "default": "none",
+            });
+        }
+    }
+
+    get_default_layout(is_empty) {
+        var rows = [[this.loop, this.aspect_ratio, this.deinterlace]];
+        if (is_empty) rows.push([this.audio_delay, this.audio_channels])
+        else rows.push([this.audio_track, this.audio_delay, this.audio_channels]);
+        if (!is_empty) rows.push([this.subtitle_track, this.subtitle_delay, this.subtitle_scale, this.subtitle_pos]);
+        // if (IS_ELECTRON)
+        rows.push([this.playback_speed, this.pitch_correction]);
+        rows.push([this.volume_normalization, this.volume_multiplier, this.audio_visualization]);
+        return rows;
+    }
+
+    get_layout() {
+        if (!this.is_parent_modify) return this.get_default_layout();
+        
+        /** @type {Playlistitem[]} */
+        var items = this.parent.datas.filter(d=>d);
+        var background_layout = [
+            [this.background_mode, this.background_color, this.background_file, this.background_file_start, this.background_file_end]
+        ];
+        var clip_layout = [
+            [this.clip_start, this.clip_end, ...(this.clip_length ? [this.clip_length] : [])],
+            [this.start_end_time_range],
+            [this.clip_offset, this.clip_loops, this.clip_duration],
+        ];
+        var types = {};
+        var get_type = (item)=>{
+            if (item.is_playlist) return "playlist";
+            if (item.filename === "livestreamer://empty") return "empty";
+            if (item.filename === "livestreamer://macro") return "macro";
+            if (item.filename === "livestreamer://exit") return "exit";
+            if (item.filename === "livestreamer://intertitle") return "intertitle";
+            if (item.filename === "livestreamer://rtmp") return "rtmp";
+            return "normal";
+        }
+        var types = items.map(get_type);
+        
+        var is_playlist = this.parent._new_type === "playlist" || types.every(t=>t==="playlist");
+        var is_empty = this.parent._new_type === "empty" || types.every(t=>t==="empty");
+        var is_macro = this.parent._new_type === "macro" || types.every(t=>t==="macro");
+        var is_intertitle = this.parent._new_type === "intertitle" || types.every(t=>t==="intertitle");
+        var is_rtmp = this.parent._new_type === "rtmp" || types.every(t=>t==="rtmp");
+        var is_normal = !this.parent._new_type && types.every(t=>t==="normal");
+        
+        var is_2_track_playlist = items.every(i=>i.num_tracks == 2);
+        var is_merged_playlist = items.every(i=>i.is_merged_playlist);
+        var is_parent_merged = items.every(i=>i.root_merged_playlist);
+        var is_youtube = items.every(i=>utils.try(()=>i.media_info.probe_method === "youtube-dl"));
+        var is_image = items.every(i=>utils.try(()=>i.media_info.duration <= IMAGE_DURATION));
+        var exists = items.every(i=>utils.try(()=>i.media_info.exists));
+
+        var crop_layout = [
+            [this.crop_l, this.crop_t, this.crop_r, this.crop_b]
+        ];
+        if (is_normal && !is_youtube) {
+            crop_layout[0].push(this.auto_crop_button);
+            crop_layout.push(this.crop_detection_images);
+        }
+
+        var layout = [];
+        this.override_default_duration = null;
+        if (is_normal || is_empty) {
+            if (!is_empty) {
+                layout.push([this.filename]);
+                layout.push("---");
+            }
+            if (is_empty) {
+                layout.push([this.empty_duration]);
+            } else if (is_image) {
+                this.override_default_duration = 0; // infinity
+                layout.push([this.clip_duration]);
+                layout.push("---");
+            } else {
+                layout.push(...clip_layout);
+                layout.push("---");
+            }
+            layout.push([this.fade_in_time, this.fade_out_time]);
+            if (!is_parent_merged) {
+                layout.push(...background_layout);
+                layout.push([this.audio_file, this.subtitle_file]);
+                layout.push(...crop_layout);
+                layout.push("---");
+                layout.push(...this.get_default_layout(is_empty))
+            }
+        } else if (is_playlist) {
+            // layout.push([this.filename]);
+            layout.push([this.playlist_mode, this.playlist_end_on_shortest_track, this.playlist_revert_to_video_track_audio]);
+            if (is_merged_playlist) {
+                layout.push("---");
+                layout.push(...clip_layout);
+                layout.push("---");
+                layout.push([this.fade_in_time, this.fade_out_time]);
+                layout.push(...background_layout);
+                layout.push([this.audio_file, this.subtitle_file]);
+                layout.push(...crop_layout);
+                layout.push("---");
+                layout.push(...this.get_default_layout());
+            }
+        } else if (is_intertitle) {
+            this.override_default_duration = 5;
+            layout.push([this.title_text]);
+            layout.push([this.title_size, this.title_duration, this.title_fade_in_out]);
+            layout.push([this.title_font, this.title_size, this.title_color]);
+            layout.push([this.title_style, this.title_alignment, this.title_spacing]);
+            layout.push([this.title_underline,this.title_margin,this.title_rotation]);
+            layout.push([this.title_outline_thickness, this.title_outline_color, this.title_shadow_depth, this.title_shadow_color]);
+            layout.push(...background_layout);
+            layout.push([this.title_preview]);
+            layout.push("---");
+            layout.push([this.audio_file]);
+        } else if (is_macro) {
+            layout.push([this.macro_function]);
+            layout.push([this.macro_handover_session]);
+        } else if (is_rtmp) {
+
+        }
+        if (layout.length) layout.push("---");
+        layout.push([this.label, this.color]);
+        return layout;
+    }
+}
+
+export class FileProperty extends UI.Property {
+    constructor(name, label, settings = {}) {
+        var input = $(`<input type="text" class="file" readonly>`)[0];
+        super(name, label, input, Object.assign({
+            "setup": ()=>{
+                input.addEventListener("click", async (e)=>{
+                    var file_options = Object.assign({},this.get_setting("file.options"));
+                    if (!file_options.start && this.value) file_options.start = this.value;
+                    file_options.id = name;
+                    var paths = await open_file_manager(file_options);
+                    if (!paths) return;
+                    this.set_values(paths[0], {trigger:true});
+                });
+                return input;
+            },
+            "title": ()=>this.value,
+            "placeholder": ()=>`Choose a ${this.get_setting("file.options").folders ? "directory" : "file"}...`
+        }, settings));
+        this.output_modifiers.push((v)=>v?pretty_uri_basename(v):"");
+    }
+}
+
+
+export class EditAccessControlMemberMenu extends ModalPropertyContainer {
+    /** @param {AccessControlProperty} prop */
+    constructor(prop) {
+        var is_new = ()=>utils.is_empty(this.data);
+        super({
+            "modal.title": "Edit Access Control",
+            "modal.footer": ()=>this.data.username != "*",
+        });
+
+        var row = this.content.append(new UI.FlexRow());
+        this.username = new UI.Property("username", "Username", `<input type="text">`,{
+            "default": "",
+            "disabled": ()=>!is_new(),
+            "reset": false,
+        });
+        this.username.add_validator(UI.VALIDATORS.not_empty);
+        this.username.add_validator((v)=>(is_new() && prop.access_control.data[v]) ? "Username already registered" : true);
+        this.access = new UI.Property("access", "Access", `<select>`, {
+            "default": "allow",
+            "options": ()=>{
+                return [["owner",{disabled:this.data.username == "*"}],"allow","deny"]
+            },
+        });
+        this.password = new UI.Property("password", "Password", `<input type="text">`, {
+            "default": "",
+            "hidden": ()=>this.access.value!=="allow" || this.data.username != "*",
+        });
+        this.suspended = new UI.Property("suspended", "Suspended", `<select>`, {
+            "default": false,
+            "options": YES_OR_NO,
+            "disabled": ()=>this.data.username != "*" && this.access.value === "owner" && this.data.username === app.$._client.username,
+            "hidden": ()=>this.data.username == "*",
+        });
+        
+        row.append(this.username, this.access);
+        
+        if (prop.get_setting("access.allow_passwords")) row.append(this.password);
+        row.append(this.suspended);
+        
+        this.save_button = new UI.Button(`Save`, {
+            disabled:()=>!this.valid,
+            hidden: ()=>!is_new(),
+            click: ()=>{
+                if (!this.valid) return; // insurance
+                prop.access_control.edit(this.username.value, {access:this.access.value, password:this.password.value, suspended:this.suspended.value});
+                prop.debounced_update_value();
+                this.hide();
+            },
+        });
+        var delete_button = new UI.Button(`Delete`, {
+            hidden: ()=>is_new() || this.data.username == "*",
+            disabled: ()=>this.data.username == "*",
+            click: ()=>{
+                if (prop.access_control.edit(this.data.username, null)) {
+                    prop.debounced_update_value();
+                    this.hide();
+                }
+            },
+        });
+        this.footer.append(this.save_button, delete_button)
+
+        this.on("property-change", (e)=>{
+            if (is_new() || !e.name || !e.trigger) return;
+            if (e.name == "username") return;
+            if (prop.access_control.edit(this.data.username, {[e.name]:e.value})) {
+                prop.debounced_update_value();
+            }
+        });
+    }
+}
+
+export class AccessControlProperty extends UI.Property {
+    constructor(name, label, settings = {}) {
+        var elem = $(`<div class="access-control"></div>`)[0];
+        super(name, label, elem, {
+            "default": {
+                "*": { access: "allow" }
+            },
+            "reset": false,
+            "hidden": ()=>!this.access_control.self_can_edit,
+            "access.allow_passwords": true,
+            ...settings
+        });
+        
+        this.access_control = new AccessControl();
+        this.debounced_update_value = utils.debounce(this.update_value, 0);
+
+        var columns = {
+            "Username": (data)=>$(`<span>${data.username}</span>`)[0],
+            "Access": (data)=>(data.access === "allow" && data.password) ? "allow [password protected]" : data.access,
+            // "Password": (data)=>data.password ? ("*".repeat(data.password ? data.password.length : 0)) : "-",
+            "Controls": (data)=>{
+                var edit_button, delete_button, suspend_button;
+                if (this.access_control.owners.length == 0) return;
+                if (this.access_control.self_is_owner_or_admin) {
+                    edit_button = $(`<button title="Edit"><i class="fas fa-wrench"></i></button>`)[0];
+                    edit_button.onclick = ()=>{
+                        new EditAccessControlMemberMenu(this).show(data);
+                    };
+                    edit_button.disabled = data.access == "owner" && this.access_control.owners.length < 2;
+                    if (data.username !== "*" && data.access !== "owner") {
+                        suspend_button = $(`<button title="${data.suspended ? "Unsuspend" : "Suspend"}"><i style="opacity:${data.suspended?0.5:1.0};"class="far fa-pause-circle"></i></button>`)[0];
+                        suspend_button.onclick = ()=>{
+                            this.access_control.edit(data.username, {suspended: !data.suspended});
+                            this.debounced_update_value();
+                        };
+                    }
+                    if (data.username !== "*") {
+                        delete_button = $(`<button title="Delete"><i class="fas fa-trash-alt"></i></button>`)[0];
+                        delete_button.onclick = ()=>{
+                            this.access_control.edit(data.username, null);
+                            this.debounced_update_value();
+                        };
+                    }
+                }
+                var $buttons = $(`<div class="control-buttons"></div>`);
+                $buttons.append([edit_button, suspend_button, delete_button].filter(e=>!!e));
+                return $buttons[0];
+            }
+        };
+        var table_elem = $(`<table></table>`)[0];
+        var thead_elem = $(`<thead></thead>`)[0];
+        var tbody_elem = $(`<tbody></tbody>`)[0];
+        var tfoot_elem = $(`<tfoot><tr><td></td></tr></tfoot>`)[0];
+        var add_button = $(`<button class="button" style="width:100%"></button>`)[0];
+        table_elem.append(thead_elem);
+        table_elem.append(tbody_elem);
+        table_elem.append(tfoot_elem);
+        elem.append(table_elem);
+        var footer_cell = tfoot_elem.querySelector("td");
+        footer_cell.setAttribute("colspan", Object.keys(columns).length);
+        footer_cell.style.padding = 0;
+        footer_cell.append(add_button);
+        add_button.addEventListener("click", async ()=>{
+            if (this.access_control.owners.length == 0) {
+                this.access_control.claim();
+                this.debounced_update_value();
+            } else {
+                new EditAccessControlMemberMenu(this).show({});
+            }
+        });
+        thead_elem.append($(`<tr>${Object.keys(columns).map(c=>`<th>${c}</th>`)}</tr>`)[0]);
+        var render = ()=>{
+            dom_utils.empty(tbody_elem);
+            add_button.innerText = add_button.title = this.access_control.owners.length == 0 ? "Claim Ownership" : "Add User";
+            add_button.toggleAttribute("disabled", !this.access_control.self_can_edit);
+            for (let user of this.access_control.users) {
+                var tr = $(`<tr></tr>`)[0];
+                if (user.suspended) tr.style.color = "rgba(0,0,0,0.4)";
+                tbody_elem.append(tr);
+                $(Object.values(columns).map(column_cb=>column_cb(user))).toArray().forEach(c=>{
+                    var td = $(`<td></td>`)[0];
+                    $(td).append(c);
+                    tr.append(td);
+                });
+            }
+        }
+        this.on("change", (e)=>{
+            this.access_control.data = utils.deep_copy(e._value);
+            render();
+        });
+        render();
+    }
+
+    update_value() {
+        this.set_values(utils.deep_copy(this.access_control.data), {trigger:true});
+    }
+}
+
+export class RangeProperty extends UI.Property {
+    constructor(name, label, settings = {}) {
+        var input = $(`<div class="ui-slider-range"></div>`)[0];
+        input.style.width = "100%";
+        input.style.padding = "0 10px";
+        var value;
+
+        super(name, label, input, Object.assign({
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "default": [0, 100],
+            "spinner": false,
+            "setup": ()=>{
+                noUiSlider.create(input, {
+                    start: [0, 1],
+                    connect: true,
+                    behaviour: 'drag',
+                    range: {'min': 0, 'max': 1},
+                    step: 0,
+                    animate: false,
+                    format: {
+                        to: function (value) {
+                            return value.toFixed(3)
+                        },
+                        from: function (value) {
+                            return +value;
+                        }
+                    }
+                });
+                input.noUiSlider.on("slide", (_values)=>{
+                    value = _values.map(v=>+v);
+                    // this.emit("slide", { value });
+                    this.set_value(value);
+                });
+                input.noUiSlider.on("end", (_values)=>{
+                    value = _values.map(v=>+v);
+                    this.set_value(value, {trigger_if_changed:true});
+                });
+                return input;
+            },
+        }, settings));
+
+        var last_hash;
+        this.on("update", (e)=>{
+            var disabled = this.get_setting("disabled");
+            var range =  disabled ? {'min':0, 'max':1} : {'min':this.get_setting("min"), 'max':this.get_setting("max")};
+            var step = this.get_setting("step");
+            var value = this.value;
+            var hash = JSON.stringify([value, step, range]);
+            if (last_hash !== hash) {
+                last_hash = hash;
+                // console.log("..........", step, range)
+                input.noUiSlider.updateOptions({ step, range });
+                input.noUiSlider.set(value, false, false);
+            }
+        })
+
+        /* this.on("change", (e)=>{
+        }); */
+    }
+}
+
+/* if (!Element.prototype.scrollIntoViewIfNeeded) {
+    Element.prototype.scrollIntoViewIfNeeded = function (centerIfNeeded) {
+    centerIfNeeded = arguments.length === 0 ? true : !!centerIfNeeded;
+
+        var parent = this.parentNode,
+            parentComputedStyle = window.getComputedStyle(parent, null),
+            parentBorderTopWidth = parseInt(parentComputedStyle.getPropertyValue('border-top-width')),
+            parentBorderLeftWidth = parseInt(parentComputedStyle.getPropertyValue('border-left-width')),
+            overTop = this.offsetTop - parent.offsetTop < parent.scrollTop,
+            overBottom = (this.offsetTop - parent.offsetTop + this.clientHeight - parentBorderTopWidth) > (parent.scrollTop + parent.clientHeight),
+            overLeft = this.offsetLeft - parent.offsetLeft < parent.scrollLeft,
+            overRight = (this.offsetLeft - parent.offsetLeft + this.clientWidth - parentBorderLeftWidth) > (parent.scrollLeft + parent.clientWidth),
+            alignWithTop = overTop && !overBottom;
+
+        if ((overTop || overBottom) && centerIfNeeded) {
+            parent.scrollTop = this.offsetTop - parent.offsetTop - parent.clientHeight / 2 - parentBorderTopWidth + this.clientHeight / 2;
+        }
+    
+        if ((overLeft || overRight) && centerIfNeeded) {
+            parent.scrollLeft = this.offsetLeft - parent.offsetLeft - parent.clientWidth / 2 - parentBorderLeftWidth + this.clientWidth / 2;
+        }
+    
+        if ((overTop || overBottom || overLeft || overRight) && !centerIfNeeded) {
+            this.scrollIntoView(alignWithTop);
+        }
+    };
+} */
+
+
+
+export class Panel extends UI.PropertyContainer {
+    get collapsible() { return !!this.elem.dataset.collapsible; }
+    set collapsible(value) {
+        if (value) {
+            this.elem.dataset.collapsible = 1;
+        } else {
+            delete this.elem.dataset.collapsible;
+        }
+    }
+    constructor(title, settings) {
+        super({gap:0, ...settings});
+        this.panel_id = title.toLowerCase().replace(/[^\w]+/, "-");
+        app.panels[this.panel_id] = this;
+
+        this.elem.classList.add("drawer");
+        this.elem.dataset.id = this.panel_id;
+        var header_container_elem = $(`<div class="header"><div class="inner"></div><div class="collapse-arrow"><i class="fa-solid fa-chevron-down"></i></div></div>`)[0];
+        this.body_elem = $(`<div class="body"></div>`)[0];
+        this.body = new UI(this.body_elem);
+        this.header = new UI(header_container_elem);
+        this.header_elem = header_container_elem.querySelector(".inner");
+        this.collapse_arrow_elem = header_container_elem.querySelector(".collapse-arrow");
+
+        var title_elem = $(`<span></span>`)[0];
+        title_elem.innerHTML = title;
+        this.header_elem.append(title_elem);
+
+        this.elem.append(header_container_elem, this.body_elem);
+        
+        this.collapsible = true;
+        
+        header_container_elem.addEventListener("click", (e)=>{
+            if (!this.elem.dataset.collapsible) return;
+            var button = e.target.closest("button");
+            if (button) return;
+            var setting_id = `drawer:${this.panel_id}`;
+            if (app.settings.get(setting_id) === undefined) app.settings.set(setting_id, false);
+            else app.settings.toggle(setting_id);
+        });
+    }
+
+    toggle(value) {
+        this.elem.classList.toggle("hide", value)
+    }
+}
+export class MediaPlayerPanel extends Panel {
+
+    get video_buffer_length() {
+        return utils.try(()=>(this.flv_player._mediaElement.buffered.end(0)-this.flv_player.currentTime));
+    }
+
+    constructor() {
+        super("Media Player", {
+            data: ()=>app.$._session
+        });
+
+        this.elem.classList.add("player-interface-wrapper");
+
+        var bg = $(`<div class="buttons border-group">
+            <button class="time_display_ms" title="Show/Hide Millisecconds"><i class="ms"></i></button>
+        </div>`)[0];
+        this.header_elem.append(bg);
+
+        var tsc = $(`<div class="test-stream-container">
+            <div class="test-stream">
+                <div class="video-wrapper"></div>
+                <div class="overlay">
+                    <div class="buttons">
+                        <button class="reload" title="Reload"><i class="fas fa-sync"></i></button>
+                        <button class="popout" title="Pop-out Player"><i class="fas fa-external-link-alt"></i></button>
+                        <button class="toggle-info" title="Toggle Player Info"><i class="fas fa-circle-info"></i></button>
+                    </div>
+                    <span class="info"></span>
+                </div>
+            </div>
+        </div>`)[0];
+        this.body_elem.append(tsc);
+
+        this.test_stream_container_elem = this.elem.querySelector(".test-stream-container");
+        this.test_stream_elem = this.elem.querySelector(".test-stream");
+        this.test_stream_video_wrapper = this.test_stream_elem.querySelector(".video-wrapper");
+        this.test_stream_overlay_elem = this.test_stream_elem.querySelector(".overlay");
+        this.test_stream_info_elem = this.test_stream_elem.querySelector(".info");
+        this.test_stream_reload_button = this.test_stream_elem.querySelector("button.reload");
+        this.test_stream_popout_button = this.test_stream_elem.querySelector("button.popout");
+        this.test_stream_info_button = this.test_stream_elem.querySelector("button.toggle-info");
+        this.test_stream_info_button.onclick = ()=>{
+            dom_utils.toggle_class(this.test_stream_info_elem, "d-none");
+            dom_utils.toggle_attribute(this.test_stream_info_button, "data-toggled");
+        }
+
+        this.test_stream_popout_button.addEventListener("click", async (e)=>{
+            var id = app.$._session.id;
+            var w = windows["test-"+id];
+            if (w && !w.closed) {
+                w.focus();
+            } else {
+                var [width,height] = app.$._session.stream["resolution"].split("x").map(i=>parseInt(i));
+                var ratio = width / height;
+                height = Math.min(720, height);
+                width = height * ratio;
+                // yay this works well.
+                w = windows["test-"+id] = window.open(window.location.origin+"/main/blank.html", id, `width=${width},height=${height},scrollbars=1,resizable=1`);
+                w.onload=()=>{
+                    w.document.head.append($(`<title>Test Stream ${id}</title>`)[0]);
+                    /* await */ dom_utils.clone_document_head(app.root, w.document.head);
+                    var style = w.document.createElement("style");
+                    style.textContent =
+`body {
+    padding: 0;
+    margin: 0;
+}
+body > * {
+    width: 100% !important;
+    height: 100% !important;
+}
+video {
+    width: 100% !important;
+    height: 100% !important;
+}`;
+                    //+"\n"+dom_utils.get_all_css(document, true);
+                    w.document.head.append(style);
+                    w.document.body.append(this.test_stream_elem);
+                    this.refresh_player(true);
+                    
+                    w.addEventListener("unload", (e)=>{
+                        delete windows["test-"+id];
+                        this.test_stream_container_elem.append(this.test_stream_elem);
+                        this.refresh_player(true);
+                    });
+                }
+            }
+        });
+        this.test_stream_reload_button.addEventListener("click", (e)=>{
+            this.refresh_player(true);
+        })
+        
+        this.status_elem = $(`<div class="player-status"><div class="currently-playing"><span class="prefix"></span><span class="path"></span></div></div>`)[0];
+        this.additional_file_info_elem = $(`<div>-</div>`)[0];
+        this.status_prefix_elem = this.status_elem.querySelector(".prefix");
+        this.status_path_elem = this.status_elem.querySelector(".path");
+        this.body_elem.append(this.status_elem, this.additional_file_info_elem);
+        
+        this.seek_controls_elem = $(`<div class="seek-controls"></div>`)[0];
+        this.body_elem.append(this.seek_controls_elem);
+
+        this.seek = new MediaSeekBar();
+        this.seek_controls_elem.append(this.seek.elem);
+
+        this.player_inline_elem = new UI.Row({class:"player-inline"}).elem;
+        this.body_elem.append(this.player_inline_elem)
+        
+        this.player_controls_elem = new UI(`<div class="player-button-wrapper"></div>`);
+        this.player_inline_elem.append(this.player_controls_elem);
+        
+        this.player_controls_elem.append(
+            this.prev_button = new UI.Button(`<i class="fas fa-step-backward"></i>`, {
+                title:"Previous Playlist Item",
+                click: (e)=>{
+                    app.playlist_play(app.$._session.current_playing_item.previous);
+                },
+                disabled:()=>!app.$._session.current_playing_item.previous
+            }),
+            this.backward_button = new UI.Button(`<i class="fas fa-backward"></i>`, {
+                title:"-30 Seconds",
+                click: (e)=>{
+                    app.seek(-30,true);
+                },
+                disabled:()=>!app.$._media.seekable || app.$._media.time <= 0,
+            }),
+            this.toggle_play_pause_button = new UI.Button(null, {
+                title:"Play/Pause",
+                content: ()=>app.$._stream.mpv.props.pause ? `<i class="fas fa-play"></i>` : `<i class="fas fa-pause"></i>`,
+                click: (e)=>{
+                    var new_pause = !app.$._stream.mpv.props.pause;
+                    app.request({
+                        call: ["session", "mpv", "set_property"],
+                        arguments: ["pause", new_pause]
+                    });
+                    app.$._push([`streams/${app.$._stream.id}/mpv/props/pause`, new_pause]);
+                },
+                disabled:()=>!app.$._session.is_running,
+            }),
+            this.stop_button = new UI.Button(`<i class="fas fa-stop"></i>`, {
+                title:"Stop",
+                hidden:true,
+                click: (e)=>{
+                    app.request({
+                        call: ["session", "stop"],
+                    });
+                },
+                disabled: ()=>!app.$._session.is_running,
+            }),
+            this.forward_button = new UI.Button(`<i class="fas fa-forward"></i>`, {
+                title:"+30 Seconds",
+                click: (e)=>{
+                    app.seek(30,true);
+                },
+                disabled:()=>!app.$._media.seekable || app.$._media.time_left <= 0,
+            }),
+            this.next_button = new UI.Button(`<i class="fas fa-step-forward"></i>`, {
+                title:"Next Playlist Item",
+                click: (e)=>{
+                    app.playlist_play(app.$._session.current_playing_item.next);
+                },
+                disabled:()=>!app.$._session.current_playing_item.next
+            }),
+            this.prev_chapter_button = new UI.Button(`<i class="fas fa-fast-backward"></i>`, {
+                title:"Previous Chapter",
+                click: (e)=>{
+                    app.seek_chapter(-1,true)
+                },
+                disabled: ()=>!app.settings.get("show_chapters") || app.$._media.chapters.length == 0 || app.$._media.time <= app.$._media.chapters[0].start,
+                // hidden: ()=>!app.settings.get("show_chapters") || this.chapters.length == 0
+            }),
+            this.next_chapter_button = new UI.Button(`<i class="fas fa-fast-forward"></i>`, {
+                title:"Next Chapter",
+                click: (e)=>{
+                    app.seek_chapter(1,true)
+                },
+                disabled: ()=>!app.settings.get("show_chapters") || app.$._media.chapters.length == 0 || app.$._media.time >= app.$._media.chapters[app.$._media.chapters.length-1].start,
+                // hidden: ()=>!app.settings.get("show_chapters") || this.chapters.length == 0
+            }),
+            this.reload_button = new UI.Button(`<i class="fas fa-sync"></i>`, {
+                title:"Reload",
+                click: (e)=>{
+                    app.media_player.seek.seek();
+                    app.request({
+                        call: ["session", "reload"]
+                    });
+                },
+                disabled:()=>!app.$._session.is_running,
+                update: function(){
+                    // this.elem.classList.toggle("pending", app.$.session.current_playing_item.userdata.pending_changes);
+                }
+            }),
+            this.set_time_button = new UI.Button(`<i class="far fa-clock"></i>`, {
+                title:"Precise Seek",
+                click: (e)=>{
+                    app.set_time_pos_menu.show();
+                },
+                disabled:()=>!app.$._media.seekable,
+            })
+        );
+        
+        this.volume_wrapper = new UI(`<div class="player-volume-wrapper"></div>`);
+        this.player_inline_elem.append(this.volume_wrapper);
+
+        this.volume = new UI.Property("volume_target", null, `<div><input id="volume" type="range" min="0" max="200" step="1" value="100" title="Volume" style="width:100px"></div>`, {
+            default: 100,
+            reset: false,
+            reset_on_dblclick: true,
+            update: ()=>this.vol_input.update()
+        });
+
+        this.volume.on("change", (e)=>{
+            if (e.trigger) {
+                app.request({
+                    call: ["session", "update_values"],
+                    arguments: [["volume_target", +e._value]]
+                });
+                app.$._push([`sessions/${app.$._session.id}/volume_target`, +e._value]);
+            }
+        });
+        
+        this.vol_down_button = new UI.Button(`<i class="fas fa-volume-down"></i>`, {
+            class:"icon-btn",
+            title:"Volume - 5%",
+            click: (e)=>{
+                this.volume.set_values(utils.ceil_to_factor(this.volume.value-VOLUME_STEP,VOLUME_STEP), {trigger:true});
+            }
+        });
+        
+        /* this.vol_input = new UI.Property(null, null, `<input type="number" min="0" max="200" step="1">`, {
+            "default": 100,
+            reset: false,
+        })
+        this.volume.input_modifiers.push(v=>Math.round(parseFloat(v)));
+        this.volume.output_modifiers.push(v=>v+"%"); */
+        this.vol_input = new UI.Button(null, {
+            content: ()=>`<span style="font-size:10px">${Math.round(this.volume.value)}%</span>`,
+            click: (e)=>{
+                new SetVolumeSettings().show();
+            }
+        });
+        
+        this.vol_up_button = new UI.Button(`<i class="fas fa-volume-up"></i>`, {
+            class:"icon-btn",
+            title:"Volume + 5%",
+            click: (e)=>{
+                this.volume.set_values(utils.floor_to_factor(this.volume.value+VOLUME_STEP,VOLUME_STEP), {trigger:true});
+            }
+        })
+        
+        /* this.mute_button = new UI.Button(`<i class="fas fa-volume-xmark"></i>`, {
+            class:"icon-btn",
+            title:"Mute",
+            hidden: true,
+            click: (e)=>{
+                var new_muted = !app.$.stream.mpv.muted;
+                app.request({
+                    call:["session", "stream", "mpv", "set_property"],
+                    arguments: ["muted", new_muted]
+                });
+                app.$.push([`sessions/${app.$.session.id}/mpv/muted`, new_muted]);
+            },
+            update:function() {
+                this.elem.classList.toggle("mute", !!app.$.stream.mpv.muted);
+            }
+        }); */
+        
+        this.vol_speed = new UI.Property("volume_speed", null, `<select>`, {
+            title: "Volume Transition Speed",
+            default: 1.0,
+            reset:false,
+            options: [[0.5, "Very Slow"], [1.0, "Slow"], [2.0, "Medium"], [4.0, "Fast"], [8.0, "Very Fast"], [0, "Immediate"]],
+            hidden:true,
+        });
+        this.vol_speed.on("change",(e)=>{
+            if (e.trigger) {
+                app.request({
+                    call:["session", "update_values"],
+                    arguments: [["volume_speed", e.value]]
+                });
+                app.$._push([`sessions/${app.$._session.id}/volume_speed`, e._value]);
+            }
+        })
+        this.volume_wrapper.append(this.vol_input, this.vol_down_button, this.volume, this.vol_up_button /*,this.mute_button */, this.vol_speed);
+        
+        this.stats_elem = $(`<div class="stats">`)[0];
+        this.body_elem.append(this.stats_elem);
+        
+        // this.fader_controls_elem = $(`<div class="fader-controls"></div>`)[0];
+        // this.body.append(this.fader_controls_elem);
+
+        var detect_wrap = dom_utils.debounce_next_frame(()=>{
+            dom_utils.detect_wrapped_elements(this.player_inline_elem);
+        });
+        var resize_observer = new ResizeObserver(()=>detect_wrap());
+        resize_observer.observe(this.elem);
+        
+        this.on("destroy", ()=>{
+        });
+        this.on("update", ()=>{
+            var started = app.$._session.is_running;
+            dom_utils.set_inner_html(this.status_prefix_elem, `${app.$._media.status}: `);
+            app.build_playlist_breadcrumbs(this.status_path_elem, app.$._media.item, true, true);
+            
+            var stats_html = Object.entries(app.$._media.stats).map(([k,v])=>`<span>${k}: ${v}</span>`).join(" | ");
+            dom_utils.set_inner_html(this.stats_elem, stats_html);
+            dom_utils.toggle_class(this.stats_elem, "d-none", !started);
+            
+            if (app.$._media.curr_chapters.length) {
+                this.additional_file_info_elem.style.display = "";
+                this.additional_file_info_elem.innerHTML = `Chapter(s): `+app.$._media.curr_chapters.map(c=>app.chapter_to_string(c)).join(" | ")
+            } else {
+                this.additional_file_info_elem.style.display = "none";
+            }
+            
+            detect_wrap();
+
+            this.refresh_player();
+        });
+    }
+
+    async refresh_player(force) {
+        var test_video_url = `${window.location.protocol==="https:"?"wss:":"ws:"}//${window.location.host}/nms/test/${app.$._session.id}.flv`;
+        var show = !!(app.$._session.is_running && app.$._stream.test && test_video_url);
+        var is_popped_out = !!windows["test-"+app.$._session.id];
+        var is_playable = !!(show && app.$._session.get_connected_nms_session_with_appname("test"));
+
+        dom_utils.toggle_class(this.test_stream_container_elem, "d-none", !show);
+        dom_utils.toggle_class(this.test_stream_overlay_elem, "d-none", !is_playable);
+        dom_utils.toggle_class(this.test_stream_popout_button, "d-none", is_popped_out);
+        dom_utils.toggle_attribute(this.test_stream_popout_button, "data-toggled", is_popped_out);
+        
+        var buffer_length = this.video_buffer_length;
+        this.test_stream_info_elem.innerHTML = `Buffered: ${buffer_length ? buffer_length.toFixed(2) : "-"} secs`;
+
+        if (!force && !!this.flv_player == is_playable) return;
+
+        if (this.flv_player) {
+            this.flv_player.pause();
+            this.flv_player.unload();
+            this.flv_player.detachMediaElement();
+            this.flv_player.destroy();
+            this.flv_player = null
+            if (this.video_el) {
+                this.video_el.remove();
+                this.video_el = null;
+            }
+        }
+
+        if (is_playable) {
+
+            this.video_el = this.test_stream_elem.ownerDocument.createElement("video");
+            this.video_el.controls = true;
+            this.video_el.autoplay = false;
+            this.video_el.muted = true;
+            this.video_el.addEventListener('loadedmetadata', (e)=>{
+                // this.test_stream_container_elem.style.setProperty("--aspect-ratio", this.video_el.videoWidth / this.video_el.videoHeight)
+            });
+            this.test_stream_video_wrapper.append(this.video_el);
+            this.flv_player = flvjs.createPlayer({
+                type: "flv",
+                url: test_video_url,
+                hasAudio: true,
+                hasVideo: true,
+                isLive: true,
+                // deferLoadAfterSourceOpen: false,
+            },{
+                // enableStashBuffer: false,
+                accurateSeek: true,
+            });
+            
+            this.flv_player.on(flvjs.Events.MEDIA_INFO, (s)=>{
+                this.flv_media_info = s;
+            })
+            var initialized = false;
+            this.flv_player.on(flvjs.Events.STATISTICS_INFO, (s)=>{
+                this.flv_statistics = s;
+                if (!initialized) {
+                    if (this.video_buffer_length > (MIN_VIDEO_BUFFER_TIME/1000)) {
+                        this.flv_player.play();
+                        initialized = true;
+                    }
+                }
+            })
+            this.flv_player.attachMediaElement(this.video_el);
+            this.flv_player.load();
+        }
+    }
+}
+
+export class MediaSettingsPanel extends Panel {
+    toggle_mode(v) {
+        this._mode = v;
+        this.body.update_layout(this.interface.get_layout());
+    }
+    constructor() {
+        super("Media Settings", {
+            // nullify_defaults: true,
+            data: ()=>(this._mode === MediaSettingsMode.current) ? app.$._session.stream.mpv.props : app.$._session.player_default_override,
+            disabled: ()=>this._mode === MediaSettingsMode.current && !app.$._session.is_running,
+        });
+
+        this.header_elem.append($(`<div class="buttons border-group">
+            <button class="player-settings-toggle-current" title="Current File Media Settings">current</button>
+            <button class="player-settings-toggle-default" title="Default Media Settings">all</button>
+        </div>`)[0]);
+        
+        this.body_elem.id = "player-settings";
+        this.toggle_current_button = this.elem.querySelector("button.player-settings-toggle-current");
+        this.toggle_all_button = this.elem.querySelector("button.player-settings-toggle-default");
+        this.toggle_current_button.addEventListener("click", (e)=>{
+            this.toggle_mode(MediaSettingsMode.current);
+        });
+        this.toggle_all_button.addEventListener("click", (e)=>{
+            this.toggle_mode(MediaSettingsMode.all);
+        });
+        
+        this.on("update", ()=>{
+            var p = this.toggle_all_button.parentElement;
+            var toggle = (this._mode === MediaSettingsMode.current) ? "0" : "1";
+            if (p.dataset.toggle != toggle) p.dataset.toggle = toggle;
+        });
+        
+        this.on("property-change", (e)=>{
+            if (!e.name || !e.trigger) return;
+            app.request({
+                call: ["session","set_player_property"],
+                arguments: [e.name, e._value, this._mode === MediaSettingsMode.current]
+            });
+            /* if (this._mode === MediaSettingsMode.all) {
+                app.$.push([`sessions/${app.$.session.id}/player_default_override/${e.name}`, e._value]);
+            } else {
+                app.$.push([`streams/${app.$.stream.id}/mpv/props/${e.name}`, e._value]);
+            } */
+        });
+
+        this.interface = new MediaSettingsInterface(this);
+        this.toggle_mode(MediaSettingsMode.current);
+    }
+}
+
+export class LogViewerPanel extends Panel {
+    constructor(name) {
+        super(name);
+        this.body_elem.classList.add("no-padding");
+
+        this.logs_wrapper = $(`<div class="logs-wrapper"></div>`)[0];
+        this.logs_container = $(`<div class="logs"></div>`)[0];
+        this.body_elem.append(this.logs_wrapper);
+        this.logs_wrapper.append(this.logs_container)
+        
+        this._logs = {};
+        this._num_logs = 0;
+        this._default_logger_settings = {
+            show_dates: false,
+            show_times: true,
+            level_filters: {
+                info:true,
+                warn:true,
+                error:true,
+                debug:false,
+            }
+        };
+        this._logger_settings = utils.deep_copy(this._default_logger_settings)
+        this.i = 0;
+    
+        this.storage_name = `${this.panel_id}-log-viewer-settings`;
+        this.logs_container.classList.add("thin-scrollbar");
+        $(this.logs_wrapper).resizable({handles:"s"});
+        
+        var create_toggle_button = (text)=>{
+            var elem = $(`<button class="toggle-button">${text}</button>`)[0];
+            return elem;
+        }
+
+        this.bar = $(`<div class="logs-bar"></div>`)[0];
+        this.show_dates_button = create_toggle_button("Show Dates");
+        this.bar.append(this.show_dates_button);
+        this.show_dates_button.addEventListener("click", (e)=>{
+            this._logger_settings.show_dates = !this._logger_settings.show_dates;
+            this.save();
+        });
+        this.show_times_button = create_toggle_button("Show Times");
+        this.bar.append(this.show_times_button);
+        this.show_times_button.addEventListener("click", (e)=>{
+            this._logger_settings.show_times = !this._logger_settings.show_times;
+            this.save();
+        });
+        this.bar.append($(`<div class="sep"></div>`)[0]);
+        this.levels = $("<div></div>")[0];
+        this.level_buttons = {};
+        for (let k in this._default_logger_settings.level_filters) {
+            let button = create_toggle_button(k);
+            this.level_buttons[k] = button
+            button.addEventListener("click", (e)=>{
+                this._logger_settings.level_filters[k] = !this._logger_settings.level_filters[k];
+                this.save();
+            });
+            this.levels.append(button);
+        }
+        this.bar.append(this.levels);
+        this.bar_wrapper = $(`<div class="logs-bar-wrapper"></div>`)[0];
+        this.bar_wrapper.append(this.bar);
+        this.logs_wrapper.append(this.bar_wrapper);
+
+        setTimeout(()=>this.load(), 0);
+    }
+
+    update_logs(logs=null) {
+        var scroll_bottom = dom_utils.scroll_percent(this.logs_container)[1] == 1;
+        var log_elems = [];
+        if (logs) {
+            for (var log of Object.values(logs)) {
+                if (!log || !log.message) continue;
+                var d = new Date(log.ts);
+                var log_id = JSON.stringify([log.message, log.level]);
+                var log_elem;
+                if (this.last_log_elem && this.last_log_elem._log_id === log_id) {
+                    log_elem = this.last_log_elem;
+                } else {
+                    log_elem = $(`<p><span class="date"></span><span class="time"></span><span class="level"></span><span class="number"></span><span class="message"></span></p>`)[0];
+                    this.i++;
+                    if (!this._logs[log.level]) this._logs[log.level] = [];
+                    this._logs[log.level].push(log_elem);
+                }
+                log_elem.dataset.number = +(log_elem.dataset.number || 0) + 1;
+                log_elem.dataset.level = log.level;
+                log_elem.querySelector(".date").textContent = `[${d.toLocaleDateString("en-GB")}]`;
+                log_elem.querySelector(".time").textContent = `[${d.toLocaleTimeString("en-GB")}]`;
+                log_elem.querySelector(".number").textContent = (+log_elem.dataset.number > 1) ? log_elem.dataset.number : "";
+                var level_html;
+                var message = log_elem.querySelector(".message");
+                var message_html = "";
+                if (log.level === "error") {
+                    message.style["font-weight"] = "bold";
+                    message.style.color = "red";
+                    level_html = `<i title="Error" class="fas fa-exclamation-circle"></i>`;
+                } else if (log.level === "warn") {
+                    message.style.color = "orange";
+                    level_html = `<i title="Warning" class="fas fa-exclamation-triangle"></i>`;
+                } else if (log.level === "debug") {
+                    message.style.color = "green";
+                    level_html = `<i title="Warning" class="fas fa-bug"></i>`;
+                } else {
+                    level_html = `<i title="Info" class="fas fa-info-circle"></i>`;
+                }
+                message_html += log.message.replace(/\n/g,"<br>");
+                message.innerHTML = message_html;
+                log_elem._log_id = log_id
+                this.last_log_elem = log_elem;
+                log_elem.querySelector(".level").innerHTML = level_html;
+
+                this.logs_container.append(log_elem);
+
+                if (this._logs[log.level].length > logs_max_length) {
+                    this._logs[log.level].shift().remove();
+                }
+                log_elems.push(log_elem);
+            }
+        }
+        if (log_elems.length === 0) log_elems = Array.from(this.logs_container.children);
+
+        this.show_dates_button.classList.toggle("toggled", this._logger_settings.show_dates);
+        this.show_times_button.classList.toggle("toggled", this._logger_settings.show_times);
+        for (var k in this.level_buttons) {
+            this.level_buttons[k].classList.toggle("toggled", this._logger_settings.level_filters[k]);
+        }
+
+        for (var log_elem of log_elems) {
+            var level = log_elem.dataset.level
+            log_elem.classList.toggle("d-none", this._logger_settings.level_filters[level] === false);
+            log_elem.querySelector(".date").classList.toggle("d-none", !this._logger_settings.show_dates);
+            log_elem.querySelector(".time").classList.toggle("d-none", !this._logger_settings.show_times);
+        }
+
+        if (scroll_bottom) {
+            dom_utils.scroll_percent(this.logs_container, [0,1]);
+        }
+    }
+
+    save() {
+        app.settings.set(this.storage_name, this._logger_settings);
+        this.update_logs();
+    }
+
+    load() {
+        this._logger_settings = utils.deep_copy(Object.assign({}, this._default_logger_settings, app.settings.get(this.storage_name)));
+        // console.log(this.storage_name, this._logger_settings);
+        this.update_logs();
+    }
+
+    empty() {
+        this.logs_container.innerHTML = "";
+        utils.clear(this._logs);
+        this.last_log_elem = null;
+        this._num_logs = 0;
+        this.update_logs();
+    }
+}
+
+export class EncoderPanel extends Panel {
+    constructor() {
+        super("Encoder");
+
+        this.debounced_update_chart = utils.debounce(this.update_chart, 0);
+
+        var button_group = $(`<div class="buttons border-group">`)[0];
+        button_group.append($(`<button class="show_encoder_info" title="Toggle Encoder Info"><i class="fas fa-info-circle"></i></button>`)[0]);
+        // button_group.append($(`<button class="smooth_encoder_points" title="Toggle Smooth Graph"><i class="fas fa-bezier-curve"></i></button>`)[0]);
+        button_group.append($(`<button class="pause_encoder" title="Toggle Pause"><i class="fas fa-pause"></i></button>`)[0]);
+        
+        this.header_elem.append(button_group);
+
+        this.body_elem.classList.add("chart-wrapper");
+        this.body_elem.classList.add("no-padding");
+        var chart_wrapper =
+        $(`<div class="chart-wrapper">
+            <div class="chart-inner">
+                <canvas id="chart"></canvas>
+            </div>
+            <div class="chart-info thin-scrollbar"></div>
+        </div>`)[0]
+        this.body_elem.append(chart_wrapper);
+        
+        this.chart_elem = this.elem.querySelector("#chart");
+        this.chart_info_elem = this.elem.querySelector(".chart-info");
+        var ms_to_timespan = (value)=>{
+            value = +value;
+            return utils.ms_to_timespan_str(value, "hh:mm:ss")
+        }
+        
+        this.chart = new Chart(this.chart_elem, {
+            type: "line",
+            data: {},
+            options: {
+                animation: false,
+                maintainAspectRatio: false,
+                responsive:true,
+                /* legend: {
+                    labels: {
+                        generateLabels:()=>{
+                            return 
+                        }
+                    }
+                }, */
+                // resizeDelay: 100,
+                scales: {
+                    x: {
+                        type: "linear",
+                        ticks: {
+                            callback: function(value, index, values) {
+                                if (index == 0 || index == values.length - 1) return null;
+                                return ms_to_timespan(value);
+                            }
+                        },
+                        /* afterTickToLabelConversion: function(scaleInstance) {
+                            scaleInstance.ticks[0] = null;
+                            scaleInstance.ticks[scaleInstance.ticks.length - 1] = null;
+                            scaleInstance.ticksAsNumbers[0] = null;
+                            scaleInstance.ticksAsNumbers[scaleInstance.ticksAsNumbers.length - 1] = null;
+                        }, */
+                    },
+                    y: {
+                        type: "linear",
+                        ticks: {
+                            suggestedMin: 0.99,
+                            suggestedMax: 1.01,
+                            maxTicksLimit: 5,
+                        }
+                    }
+                },
+                plugins: {
+                    tooltip: {
+                        callbacks: {
+                            title: (ctxs)=>{
+                                return ctxs.map(ctx=>ms_to_timespan(ctx.raw.x)).join(", ");
+                            },
+                            label: (ctx)=>{
+                                return `${ctx.dataset.label} speed: ${ctx.raw.y.toFixed(3)}`;
+                            }
+                        }
+                    },
+                    legend: {
+                        labels: {
+                            boxWidth: Chart.defaults.font.size
+                        }
+                    }
+                },
+            },
+            /* plugins: [{
+                afterLayout: function(chart) {
+                    chart.legend.legendItems.forEach((label) => {
+                        var dataset = chart.data.datasets.find(ds=>ds.label===label.text);
+                        var avg = utils.sum(dataset.data.map(p=>p.y)) / dataset.data.length;
+                        label.text += ` [avg=${avg.toFixed(3)}]`;
+                    return label;
+                })
+                }
+            }] */
+        });
+
+    }
+
+    update_chart() {
+        if (app.settings.get("pause_encoder") && this.chart.data.datasets.length) return;
+        var max_window = 60*1000;
+        var datasets = this.chart.data.datasets;
+        var info_rows = [];
+        var speed_history = app.$._session.is_running ? app.$._session.stream.speed_history : (app.$._session.last_stream||EMPTY_OBJECT).speed_history;
+        if (!speed_history) speed_history = EMPTY_OBJECT;
+        const annotations = {};
+
+        for (var [g,values] of Object.entries(speed_history)) {
+            var dataset = datasets.find(d=>d.label==g);
+            if (!dataset) {
+                dataset = {
+                    label: g,
+                    borderColor: graph_colors[datasets.length],
+                    borderWidth: 1.0,
+                    pointRadius: 1.5,
+                    pointHitRadius: 2,
+                    pointStyle: "rect",
+                    fill: false,
+                    tension: 0.5,
+                    borderJoinStyle: "round"
+                }
+                datasets.push(dataset);
+            }
+            var data = Object.values(values).map(([x,y])=>({x,y}));
+            dataset.data = data;
+            var y_values = data.map(d=>d.y);
+            
+            var avg = utils.average(y_values);
+            var min = Math.min(...y_values);
+            var max = Math.max(...y_values);
+
+            var info = {
+                "": g,
+                avg: avg.toFixed(3)+"x",
+                min: min.toFixed(3)+"x",
+                max: max.toFixed(3)+"x",
+            };
+            info_rows.push(info);
+            
+            annotations[g] = {
+                type: 'line',
+                borderColor: dataset.borderColor,
+                borderDash: [6, 6],
+                borderDashOffset: 0,
+                borderWidth: 2,
+                scaleID: "y",
+                value: (ctx) => avg
+            };
+        }
+
+        datasets = datasets.filter(d=>speed_history[d.label]);
+        this.chart.data.datasets = datasets;
+        this.chart.options.plugins.annotation = { annotations };
+
+        // if (speed_history)
+        // this.chart.options.plugins.annotation = { annotations: { annotation } };
+        
+        /* if (app.settings.get("smooth_encoder_points")) {
+            for (var dataset of datasets) {
+                dataset.data = moving_average(dataset.data, 5);
+            }
+        } */
+        // this.chart.options.elements.line.tension = app.settings.get("smooth_encoder_points") ? 0 : 0.5;
+        
+        var table = dom_utils.build_table(info_rows);
+        dom_utils.set_children(this.chart_info_elem, table ? [table] : []);
+        var min_x = Math.max(...datasets.map(ds=>Math.min(...ds.data.map(d=>d.x))));
+        var max_x = Math.max(...datasets.map(ds=>Math.max(...ds.data.map(d=>d.x))));
+        /* datasets.forEach(ds=>{
+            ds.data = ds.data.filter((d,i)=>d.x > min_x);
+        }); */
+        // min = Math.min(...this.chart.data.datasets.map(ds=>ds.data[0].x));
+        this.chart.config.options.scales.x.min = min_x;
+        this.chart.config.options.scales.x.max = Math.max(max_x, max_window);
+        this.chart.update();
+    }
+
+    reset_chart(){
+        utils.clear(this.chart.data.datasets);
+        this.debounced_update_chart();
+    }
+}
+
+export const PLAYLIST_ZOOM_MIN = 0.01;
+export const PLAYLIST_ZOOM_MAX = 100;
+export const PLAYLIST_ZOOM_BASE = 1.3333;
+export class PlaylistPanel extends Panel {
+    get active_sortable() { return this.sortables.find(s=>s.is_active_sortable_in_group()) || this.sortables[0]; }
+    get active_track_index() { return this.sortables.indexOf(this.active_sortable); }
+    get timeline_width() { return Math.max(...[...this.tracks_elem.children].map(t=>t.lastElementChild ? t.lastElementChild.offsetLeft+t.lastElementChild.offsetWidth : 0)); }
+    get tracks() { return this._tracks; }
+    get orientation() { return this.timeline_mode ? Orientation.HORIZONTAL : Orientation.VERTICAL; }
+    get timeline_mode() { return this.timeline_mode_select.value == 1; }
+    set timeline_mode(value) {
+        this.timeline_mode_select.value = value;
+        this.sortables.forEach(s=>s.orientation = this.orientation);
+        this.update_view();
+    }
+    get selection() { return this.active_sortable.get_selection(); }
+
+    set_tracks(num_tracks, is_2_track) {
+        var tracks = (is_2_track) ? [{
+            title:"Video Track",
+            header: `<i class="fas fa-film"></i>`,
+        }, {
+            title:"Audio Track",
+            header: `<i class="fas fa-music"></i>`,
+        }] : [];
+        num_tracks = Math.max(1,num_tracks);
+        for (var i = 0; i < num_tracks; i++) {
+            if (!tracks[i]) tracks[i] = { header:`Track ${i+1}` };
+        }
+        var tracks_hash = JSON.stringify(tracks);
+        if (tracks_hash == this._tracks_hash) return;
+
+        console.log("Refreshing sortables...")
+        this._tracks_hash = tracks_hash;
+        this._tracks = tracks;
+        dom_utils.empty(this.tracks_elem);
+        dom_utils.empty(this.headers_elem);
+        dom_utils.empty(this.highlights_elem);
+        this.sortables.forEach(s=>s.destroy());
+
+        this.timeline_container_elem.classList.toggle("single-track", num_tracks == 1);
+
+        this.sortables = tracks.map((t,i)=>{
+            // var playlist_top = $(`<div class="playlist-top" title="${utils.capitalize(t.name)}">${t.icon}</div>`)[0];
+            // playlist_track.append(playlist_top);
+            var playlist_elem = $(`<ul class="playlist"></ul>`)[0];
+            this.tracks_elem.append(playlist_elem);
+
+            var playlist_header = $(`<div>${t.header}</div>`)[0];
+            playlist_header.title = t.title || t.header;
+            playlist_header.onclick = ()=>sortable.set_active_sortable_in_group();
+            this.headers_elem.append(playlist_header);
+
+            var playlist_highlight = $(`<div></div>`)[0];
+            this.highlights_elem.append(playlist_highlight);
+
+            var sortable = new ResponsiveSortable(playlist_elem, {
+                group: 'playlist-tracks',
+                // handle: ".handle",
+                filter: ".item-dropdown",
+                multiDrag: true, // Enable multi-drag
+                fallbackTolerance: 3, // So that we can select items on mobile
+                animation: 150,
+                avoidImplicitDeselect: true, // true - if you don't want to deselect items on outside click
+            });
+            sortable.orientation = this.orientation;
+            sortable.el.addEventListener("select", (evt)=>{
+                this.update_info();
+            });
+            sortable.el.addEventListener("unchoose", (e)=>{
+                this.scroll_into_view(e.item)
+            });
+            sortable.el.addEventListener("deselect", (evt)=>{
+                this.update_info();
+            });
+            sortable.el.addEventListener("active-change", (e)=>{
+                playlist_header.classList.toggle("active", e.active);
+                playlist_highlight.classList.toggle("active", e.active);
+            });
+            sortable.el.addEventListener("end", (evt)=>{
+                this.sync();
+            });
+            return sortable;
+        });
+        if (this.sortables[0]) this.sortables[0].set_active_sortable_in_group();
+    }
+
+    /** @param {Element} elem */
+    scroll_into_view(elem, opts) {
+        if (!elem) return;
+        /* var parent = elem.parentElement;
+        while (parent) {
+            if (opts.nearest) {
+                if ((elem.offsetTop < parent.scrollTop) || ((elem.offsetTop+elem.offsetHeight) > (parent.scrollTop + parent.offsetHeight))) {
+                    if ((elem.offsetTop + elem.offsetHeight/2) < (parent.scrollTop + parent.offsetHeight/2)) {
+                        parent.scrollTop = elem.offsetTop;
+                    } else {
+                        parent.scrollTop = elem.offsetTop - parent.offsetHeight + elem.offsetHeight;
+                    }
+                }
+                if ((elem.offsetLeft+elem.offsetWidth) > (parent.scrollLeft + parent.offsetWidth) && (elem.offsetWidth < parent.offsetWidth)) {
+                    parent.scrollLeft = elem.offsetLeft - parent.offsetWidth + elem.offsetWidth;
+                } else if (elem.offsetLeft <= parent.scrollLeft || elem.offsetWidth > parent.offsetWidth) {
+                    parent.scrollLeft = elem.offsetLeft;
+                }
+            } else {
+                parent.scrollTop = elem.offsetTop;
+                parent.scrollLeft = elem.offsetLeft;
+            }
+            parent = parent.parentElement;
+        } */
+        elem.scrollIntoView({block:"nearest", inline:"nearest"});
+        if (this.orientation === Orientation.VERTICAL) {
+            var r = elem.getBoundingClientRect();
+            var bottom = app.main_elem.offsetHeight-40;
+            if (r.bottom > bottom) {
+                app.main_elem.scrollBy(0, r.bottom-bottom);
+            }
+        }
+    }
+
+    set current(value) { this._current = value; }
+    /** @return {PlaylistItem} */
+    get current() { return this._current || app.$._session.playlist["0"] || NULL_PLAYLIST_ITEM; }
+
+    /** @param {Element} elem */
+    constructor() {
+        super("Playlist");
+
+        this.collapsible = false;
+        /** @type {PlaylistItem} */
+        this._current;
+        this._queued_selection_ids = [];
+        this.clipping = null;
+        this.rebuild_next_frame = dom_utils.debounce_next_frame(()=>this.rebuild());
+        // this.debounced_update_info = dom_utils.debounce_next_frame(()=>this.update_info());
+        // this.debounced_update_view = dom_utils.debounce_next_frame(()=>this.update_view());
+
+        this.header_elem.innerHTML =
+        `<div class="playlist-header">
+            <span>Playlist</span>
+            <span class="playlist-time-total" title='Playlist Total Duration'></span>
+            <span class="playlist-time-left"title='Playlist Time Remaining'></span>
+        </div>
+        <div class="playlist-controls">
+            <div class="timeline-controls buttons border-group">
+                <button class="playlist-goto-playhead" title="Go to Playhead"><i class="fas fa-map-marker"></i></button>
+            </div>
+            <div class="timeline-controls buttons border-group">
+                <input class="playlist-zoom-input" type="text"></input>
+                <button class="playlist-zoom-into" title="Zoom Into Selection"><i class="fas fa-arrows-alt-h"></i></button>
+                <button class="playlist-zoom-out" title="Zoom Out"><i class="fas fa-search-minus"></i></button>
+                <button class="playlist-zoom-in" title="Zoom In"><i class="fas fa-search-plus"></i></button>
+            </div>
+            <div class="buttons border-group">
+                <select class="playlist-mode" title="Playlist Mode">
+                    <option default value="0">List</option>
+                    <option value="1">Timeline</option>
+                </select>
+            </div>
+            <div class="buttons border-group">
+                <button class="playlist_sticky" title="Toggle Sticky Mode"><i class="fas fa-thumbtack"></i></button>
+                <button class="playlist_show_scheduled_times" title="Toggle Scheduled Times"><i class="far fa-clock"></i></button>
+                <button class="wrap_playlist_items" title="Toggle Line Wrap"><i class="fas fa-level-down-alt"></i></button>
+                <button class="show_extra_playlist_icons" title="Toggle Media Info Icons"><i class="far fa-play-circle"></i></button>
+            </div>
+        </div>`;
+
+        this.body_elem.innerHTML =
+        `<div class="playlist-info-wrapper">
+            <div class="playlist-path">
+                <button class="back"><i class="fas fa-arrow-left"></i></button>
+                <div class="info-path-wrapper">
+                    <div class="info-path"></div>
+                </div>
+            </div>
+            <div class="playlist-info">
+                <div class="info-text"></div>
+                <button class="toggle-selection"></button>
+            </div>
+        </div>
+        <div class="playlist-content">
+            <div class="timeline-container" tabindex="-1">
+                <div class="timeline-headers"></div>
+                <div class="timeline-and-ticks-wrapper">
+                    <div class="timeline-ticks"></div>
+                    <div class="timeline-wrapper">
+                        <div class="timeline-tracks thin-scrollbar"></div>
+                        <div class="timeline-overlay">
+                            <div class="timeline-playhead" style="--color:rgb(185,0,0);--triangle-size:3px"><div class="tri top-right"></div><div class="tri top-left"></div></div>
+                            <div class="timeline-cursor" style="--color:black;--triangle-size:3px"><div class="tri top-right"></div><div class="tri top-left"></div><div class="tri bottom-right"></div><div class="tri bottom-left"></div></div>
+                            <div class="timeline-limits"></div>
+                            <div class="timeline-highlights"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="playlist-buttons">
+                <button id="pl-add-file-remote" title="Add Files...">Add Files...</button>
+                <button id="pl-add-file-local" title="Upload Files...">Upload Files...</button>
+                <button id="pl-add-url" title="Add URLs...">Add URLs...</button>
+                <button id="pl-add-other" title="Other..."><i class="fas fa-ellipsis-h"></i></button>
+            </div>
+        </div>`;
+
+        this.body_elem.classList.add("no-padding");
+        this.body_elem.style.display = "flex";
+        this.body_elem.style.flex = "1";
+        this.body_elem.style["flex-direction"] = "column";
+        this.body_elem.style.gap = "0";
+
+        this.elem.classList.add("playlist-wrapper");
+        
+        this.zoom = 1.0;
+        /** @type {ResponsiveSortable[]} */
+        this.sortables = [];
+        this.duration = 0;
+        this.time = null;
+        this._tracks = [];
+
+        this.timeline_container_elem = this.elem.querySelector(".timeline-container");
+        this.wrapper_elem = this.elem.querySelector(".timeline-and-ticks-wrapper");
+        this.tracks_elem = this.elem.querySelector(".timeline-tracks");
+        this.ticks_elem = this.elem.querySelector(".timeline-ticks");
+        this.headers_elem = this.elem.querySelector(".timeline-headers");
+        this.overlay_elem = this.elem.querySelector(".timeline-overlay");
+        this.ticks_elem.title = `Place Timeline Cursor`;
+        
+        this.playhead_elem = this.elem.querySelector(".timeline-playhead");
+        this.cursor_elem = this.elem.querySelector(".timeline-cursor");
+        this.limits_elem = this.elem.querySelector(".timeline-limits");
+        this.highlights_elem = this.elem.querySelector(".timeline-highlights");
+        
+        this.playlist_time_total_elem = this.elem.querySelector(".playlist-time-total");
+        this.playlist_time_left_elem = this.elem.querySelector(".playlist-time-left");
+
+        this.playlist_info_wrapper_elem = this.elem.querySelector(".playlist-info-wrapper");
+        
+        // this.pl_toggle_sticky_button = this.playlist_wrapper_elem.querySelector(".playlist_sticky");
+        this.timeline_mode_select = this.elem.querySelector(".playlist-mode");
+        this.playlist_zoom_in_button = this.elem.querySelector(".playlist-zoom-in");
+        this.playlist_zoom_out_button = this.elem.querySelector(".playlist-zoom-out");
+        this.playlist_zoom_into_button = this.elem.querySelector(".playlist-zoom-into");
+        this.playlist_goto_playhead_button = this.elem.querySelector(".playlist-goto-playhead");
+        this.playlist_info = this.elem.querySelector(".playlist-info");
+        this.playlist_info_text = this.playlist_info.querySelector(".info-text");
+        this.playlist_path = this.elem.querySelector(".playlist-path");
+        this.playlist_path_text = this.playlist_path.querySelector(".info-path");
+        this.playlist_back_button = this.playlist_path.querySelector("button.back");
+        this.toggle_selection_button = this.playlist_info.querySelector(".toggle-selection");
+        this.playlist_zoom_input = this.elem.querySelector(".playlist-zoom-input");
+        this.pl_show_extra_icons_button = this.elem.querySelector("button.show_extra_playlist_icons");
+        this.pl_toggle_line_wrap_button = this.elem.querySelector("button.wrap_playlist_items");
+        this.toggle_milliseconds_button = this.elem.querySelector("button.time_display_ms");
+
+        this.pl_add_file_remote_button = this.elem.querySelector("#pl-add-file-remote");
+        this.pl_add_file_local_button = this.elem.querySelector("#pl-add-file-local");
+        this.pl_add_url_button = this.elem.querySelector("#pl-add-url");
+        this.pl_add_other_button = this.elem.querySelector("#pl-add-other");
+
+        this.ticks_bar = new TicksBar(this.ticks_elem, {
+            placement: "top",
+        });
+        
+        this.playlist_back_button.addEventListener("click", ()=>{
+            this.back();
+        })
+
+        this.timeline_container_elem.addEventListener("contextmenu", (e) => {
+            if (e.target.contentEditable == "true") return;
+            var sortable = Sortable.utils.get(e.target);
+            if (sortable) {
+                e.preventDefault();
+                e.stopPropagation();
+                this.open_context_menu(e.target, e);
+            }
+        });
+        
+        this.playlist_zoom_input.addEventListener("change",()=>{
+            this.set_timeline_view(parseFloat(this.playlist_zoom_input.value)/100);
+        })
+        
+        this.playlist_zoom_in_button.addEventListener("click", (e)=>{
+            this.inc_timeline_zoom(1);
+        });
+        this.playlist_zoom_out_button.addEventListener("click", (e)=>{
+            this.inc_timeline_zoom(-1);
+        });
+        this.playlist_zoom_into_button.addEventListener("click", (e)=>{
+            this.zoom_into_selected_playlist_items();
+        });
+        this.playlist_goto_playhead_button.addEventListener("click", (e)=>{
+            this.scroll_to_playhead();
+        });
+        this.timeline_mode_select.addEventListener("change", (e)=>{
+            app.settings.set("playlist_mode", +this.timeline_mode_select.value);
+            this.scroll_to_playhead();
+        });
+
+        if (IS_ELECTRON) {
+            this.pl_add_file_remote_button.style.display = "none";
+        }
+        this.pl_add_file_remote_button.addEventListener("click", async (e)=>{
+            var paths = await open_file_manager({
+                id: "load-file",
+                files: true,
+                multiple: true
+            }, true);
+            if (paths) app.playlist_add(paths);
+        });
+        this.pl_add_file_local_button.addEventListener("click", async (e)=>{
+            var files = await dom_utils.open_file_dialog({multiple:true}) // directories:true
+            app.playlist_add(files);
+        });
+
+        this.pl_add_url_button.addEventListener("click", async (e)=>{
+            var urls_str = await new Promise((resolve)=>{
+                app.playlist_add_url_menu.show(resolve);
+            });
+
+            if (urls_str) {
+                var urls = urls_str.split(/\n+/).map(s=>s.trim()).filter(s=>s);
+                app.playlist_add(urls);
+            }
+        });
+
+        dom_utils.tippy(this.pl_add_other_button, {
+            appendTo: app.elem,
+            allowHTML: true,
+            trigger: "click",
+            // hideOnClick: "toggle",
+            placement: "top-start",
+            interactive: true,
+            theme:"list",
+            onShow: (instance) =>{
+                var c = this.commands;
+                var items = [
+                    c.add_empty,
+                    c.add_playlist,
+                    c.add_rtmp,
+                    c.add_intertitle,
+                    c.add_handover_macro,
+                    c.add_stop_streaming_macro,
+                    c.add_playlist_exit,
+                    "-----",
+                    c.unload_current,
+                    c.rescan_all,
+                    "-----",
+                    c.save_playlist,
+                    c.generate_schedule,
+                ];
+                var list = create_menu(items, {click:()=>instance.hide()});
+                instance.setContent(list);
+            },
+        });
+
+        this.commands = {
+            play: new PlaylistCommand({
+                name: "Play",
+                description: "Play Selection",
+                icon: `<i class="fas fa-play"></i>`,
+                visible: (items)=>items.length>0,
+                click: (items)=>{
+                    app.playlist_play(items[0]);
+                },
+                shortcut: "P",
+            }),
+            info: new PlaylistCommand({
+                name: "Information",
+                description: "Information",
+                icon: `<i class="fas fa-info-circle"></i>`,
+                visible: (items)=>items.length>0,
+                click: (items)=>{
+                    app.playlist_info_menu.show(items);
+                },
+                shortcut: "I",
+            }),
+            modify: new PlaylistCommand({
+                name: "Modify...",
+                description: "Modify Selection...",
+                icon: `<i class="fas fa-sliders-h"></i>`,
+                visible: (items)=>items.length>0,
+                click: (items)=>{
+                    app.playlist_modify_menu.show(items);
+                },
+                shortcut: "M",
+            }),
+            delete_item: new PlaylistCommand({
+                name: "Delete",
+                description: "Delete Selection",
+                icon: `<i class="fas fa-trash-alt"></i>`,
+                visible: (items)=>items.length>0,
+                click: (items)=>{
+                    app.playlist_remove(items);
+                },
+                shortcut: "Delete",
+            }),
+            rescan: new PlaylistCommand({
+                name:  "Rescan",
+                description: "Rescan Selection",
+                icon: `<i class="fas fa-sync-alt"></i>`,
+                visible: (items)=>items.some(i=>i.is_scannable),
+                // disabled: (items)=>!items.every(i=>i.is_scannable),
+                click: (items)=>{
+                    app.playlist_rescan(items);
+                },
+                shortcut: "R",
+            }),
+            reveal: new PlaylistCommand({
+                name: "Navigate To",
+                description: "Navigate To Selection",
+                icon: `<i class="fas fa-arrow-up-right-from-square"></i>`,
+                visible: (items)=>items.some(i=>i.url.protocol.match(/^(file|https?):$/)),
+                disabled: (items)=>!items.every(i=>i.is_navigatable),
+                click: (items)=>{
+                    app.navigate_to(items.map(i=>i.filename));
+                },
+                shortcut: "Ctrl+F",
+            }),
+            download: new PlaylistCommand({
+                name: "Download",
+                description: "Download Selection",
+                icon: `<i class="fas fa-download"></i>`,
+                visible: (items)=>items.some(i=>i.is_downloadable),
+                // disabled: (items)=>!items.every(i=>i.is_downloadable),
+                click: (items)=>{
+                    app.playlist_download(items);
+                },
+            }),
+            cancel_download: new PlaylistCommand({
+                name: "Cancel Download",
+                icon: `<i class="fas fa-ban"></i>`,
+                visible: (items)=>items.some(i=>i.download),
+                click: (items)=>{
+                    app.playlist_cancel_download(items);
+                }
+            }),
+            cancel_upload: new PlaylistCommand({
+                name: "Cancel Upload",
+                icon: `<i class="fas fa-ban"></i>`,
+                visible: (items)=>items.some(i=>i.upload),
+                click: (items)=>{
+                    app.playlist_cancel_upload(items);
+                }
+            }),
+            rename: new PlaylistCommand({
+                name: "Rename",
+                description: "Rename Selection",
+                icon: `<i class="fas fa-i-cursor"></i>`,
+                visible: (items)=>items.length>0,
+                click: (items)=>{
+                    this.rename(items[0]);
+                },
+                shortcut: "F2",
+            }),
+            edit_playlist: new PlaylistCommand({
+                name: "Enter Playlist",
+                description: "Enter Selected Playlist",
+                icon: `<i class="fas fa-right-to-bracket"></i>`,
+                visible: (items)=>items.some(i=>i.is_playlist),
+                // disabled: (items)=>!items.every(i=>i.is_playlist),
+                click: (items)=>{
+                    if (items[0]) this.open(items[0]);
+                },
+                shortcut: "Enter",
+            }),
+            add_to_playlist: new PlaylistCommand({
+                name: "Add to New Playlist",
+                description: "Add Selection to New Playlist",
+                icon: `<i class="far fa-object-group"></i>`,
+                visible: (items)=>items.length>0,
+                click: (items)=>{
+                    app.playlist_group(items);
+                },
+                shortcut: "Ctrl+G",
+            }),
+            breakdown_playlist: new PlaylistCommand({
+                name: "Breakdown Playlist",
+                description: "Breakdown Selected Playlist",
+                icon: `<i class="far fa-object-ungroup"></i>`,
+                visible: (items)=>items.some(i=>i.is_playlist),
+                // disabled: (items)=>!items.every(i=>i.is_playlist),
+                click: (items)=>{
+                    app.playlist_breakdown(items);
+                },
+                shortcut: "Ctrl+U",
+            }),
+            split: new PlaylistCommand({
+                name: "Split...",
+                description: "Split Selection...",
+                icon: `<i class="fas fa-sitemap" style="transform:rotate(-90deg);"></i>`,
+                visible: (items)=>items.some(i=>i.is_splittable),
+                disabled: (items)=>!items.every(i=>i.is_splittable),
+                click: (items)=>{
+                    app.split_menu.show(items);
+                }
+            }),
+            slice_at_timeline_cursor: new PlaylistCommand({
+                name: "Slice at Timeline Cursor",
+                description: "Slice Selection at Timeline Cursor",
+                icon: `<i class="fas fa-slash"></i>`,
+                visible: (items)=>this.timeline_mode && this.cursor_position != null,
+                disabled: (items)=>!items.every(i=>i.is_splittable),
+                click: (items)=>{
+                    app.playlist_split(items, [this.cursor_position], false, true);
+                },
+                shortcut: "S",
+                mode: PLAYLIST_VIEW.TIMELINE,
+            }),
+            /* timeline_cursor_play: new Command({
+                name: "Play from Cursor",
+                icon: `<i class="fas fa-play"></i>`,
+                visible: this.timeline_mode && this.playlist.cursor_position != null,
+                click: ()=>{
+                    this.playlist_play()
+                }
+            }), */
+            timeline_cursor_to_start: new PlaylistCommand({
+                name: "Set Timeline Cursor to Start",
+                description: "Set Timeline Cursor to Start of Selection",
+                icon: `<i class="fas fa-arrow-right-to-bracket" style="transform:scaleX(-1);"></i>`,
+                visible: (items)=>items.length>0 && this.timeline_mode,
+                click: (items)=>{
+                    this.cursor_position = Math.min(...items.map(i=>i.userdata.timeline_start));
+                    this.update_view();
+                },
+                mode: PLAYLIST_VIEW.TIMELINE,
+            }),
+            timeline_cursor_to_end: new PlaylistCommand({
+                name: "Set Timeline Cursor to End",
+                description: "Set Timeline Cursor to End of Selection",
+                icon: `<i class="fas fa-arrow-right-to-bracket"></i>`,
+                visible: (items)=>items.length>0 && this.timeline_mode,
+                click: (items)=>{
+                    this.cursor_position = Math.max(...items.map(i=>i.userdata.timeline_end));
+                    this.update_view();
+                },
+                mode: PLAYLIST_VIEW.TIMELINE,
+            }),
+            copy: new PlaylistCommand({
+                name: "Copy",
+                description: "Copy Selection to Clipboard",
+                icon: `<i class="fas fa-copy"></i>`,
+                visible: (items)=>items.length>0,
+                click: (items)=>{
+                    this.selection_to_clipboard(false)
+                },
+                shortcut: "Ctrl+C",
+            }),
+            cut: new PlaylistCommand({
+                name: "Cut",
+                description: "Cut Selection to Clipboard",
+                icon: `<i class="fas fa-cut"></i>`,
+                visible: (items)=>items.length>0,
+                click: (items)=>{
+                    this.selection_to_clipboard(true)
+                },
+                shortcut: "Ctrl+X",
+            }),
+            paste: new PlaylistCommand({
+                name: "Paste from Clipboard",
+                icon: `<i class="fas fa-paste"></i>`,
+                // visible: (items)=>true,
+                disabled: (items)=>!this.clipboard,
+                click: (items)=>{
+                    this.paste_clipboard();
+                },
+                shortcut: "Ctrl+V",
+            }),
+            move_to_top: new PlaylistCommand({
+                name: "Move to Start",
+                description: "Move Selection to Start",
+                icon: ()=>`<i class="fas fa-angle-double-${this.timeline_mode?"left":"up"}"></i>`,
+                visible: (items)=>items.length>0,
+                click: (items)=>{
+                    this.move_selection_to_start();
+                },
+                shortcut: "Alt+Home",
+            }),
+            move_up: new PlaylistCommand({
+                name: "Move Back",
+                description: "Move Selection Back",
+                icon: ()=>`<i class="fas fa-angle-${this.timeline_mode?"left":"up"}"></i>`,
+                visible: (items)=>items.length>0,
+                click: (items)=>{
+                    this.move_selection_back();
+                },
+                shortcut: ()=>`Alt+Arrow${this.timeline_mode?"Left":"Up"}`,
+            }),
+            move_down: new PlaylistCommand({
+                name: "Move Forward",
+                description: "Move Selection Forward",
+                icon: ()=>`<i class="fas fa-angle-${this.timeline_mode?"right":"down"}"></i>`,
+                visible: (items)=>items.length>0,
+                click: (items)=>{
+                    this.move_selection_forward();
+                },
+                shortcut: ()=>`Alt+Arrow${this.timeline_mode?"Right":"Down"}`,
+            }),
+            move_to_bottom: new PlaylistCommand({
+                name: "Move to End",
+                description: "Move Selection to End",
+                icon: ()=>`<i class="fas fa-angle-double-${this.timeline_mode?"right":"down"}"></i>`,
+                visible: (items)=>items.length>0,
+                click: (items)=>{
+                    this.move_selection_to_end();
+                },
+                shortcut: "Alt+End",
+            }),
+            focus: new PlaylistCommand({
+                name: "Focus",
+                description: "Focus Selection",
+                click: (items)=>{
+                    this.zoom_into_selected_playlist_items()
+                },
+                shortcut: "F",
+                mode: PLAYLIST_VIEW.TIMELINE,
+            }),
+            playlist_back: new PlaylistCommand({
+                name: "Parent Playlist",
+                click: (items)=>{
+                    this.back();
+                },
+                shortcut: "Backspace | Escape",
+            }),
+            // ------------------------------
+            add_empty: new PlaylistCommand({
+                name: ()=>"Add Empty",
+                icon: `<i class="fas fa-plus"></i>`,
+                click: ()=>{
+                    app.playlist_add({
+                        filename:"livestreamer://empty",
+                        props: {
+                            background_mode: "default"
+                        }
+                    });
+                }
+            }),
+            add_playlist: new PlaylistCommand({
+                name: ()=>"Add Empty Playlist",
+                icon: `<i class="fas fa-plus"></i>`,
+                click: ()=>{
+                    app.playlist_add({
+                        filename:"livestreamer://playlist",
+                    });
+                }
+            }),
+            add_rtmp: new PlaylistCommand({
+                name: ()=>"Add RTMP Stream",
+                icon: `<i class="fas fa-plus"></i>`,
+                click: ()=>{
+                    app.playlist_add({
+                        filename:"livestreamer://rtmp",
+                    });
+                },
+                disabled: ()=>!!this.current.is_merged
+            }),
+            add_intertitle: new PlaylistCommand({
+                name: ()=>"Add Intertitle",
+                icon: `<i class="fas fa-plus"></i>`,
+                click: async()=>{
+                    var ids = await app.playlist_add({
+                        filename:"livestreamer://intertitle",
+                    });
+                    // this.playlist_modify_settings.show(ids);
+                },
+                disabled: ()=>!!this.current.is_merged
+            }),
+            add_stop_streaming_macro: new PlaylistCommand({
+                name: ()=>"Add Macro: Stop",
+                icon: `<i class="fas fa-plus"></i>`,
+                click: async ()=>{
+                    var ids = await app.playlist_add({
+                        filename:"livestreamer://macro",
+                        props: {
+                            function: "stop"
+                        }
+                    });
+                },
+                disabled: ()=>!!this.current.is_merged
+            }),
+            add_handover_macro: new PlaylistCommand({
+                name: ()=>"Add Macro: Handover",
+                icon: `<i class="fas fa-plus"></i>`,
+                click: async ()=>{
+                    var ids = await app.playlist_add({
+                        filename:"livestreamer://macro",
+                        props: {
+                            function: "handover"
+                        }
+                    });
+                },
+                disabled: ()=>!!this.current.is_merged
+            }),
+            add_playlist_exit: new PlaylistCommand({
+                name: ()=>"Add Playlist Exit",
+                icon: `<i class="fas fa-plus"></i>`,
+                click: async ()=>{
+                    var ids = await app.playlist_add({
+                        filename:"livestreamer://exit",
+                    });
+                },
+                visible: ()=>!!this.current.parent
+            }),
+            unload_current: new PlaylistCommand({
+                name: ()=>"Unload Current File",
+                icon: `<i class="fas fa-minus-circle"></i>`,
+                disabled: ()=>!app.$._session.current_playing_item !== NULL_PLAYLIST_ITEM,
+                click: ()=>app.playlist_play(NULL_PLAYLIST_ITEM),
+            }),
+            rescan_all: new PlaylistCommand({
+                name: ()=> "Rescan All",
+                icon: `<i class="fas fa-sync-alt"></i>`,
+                // click: ()=>app.playlist_rescan_all(),
+                click: ()=>app.playlist_rescan(this.current.children),
+            }),
+            save_playlist: new PlaylistCommand({
+                name: ()=>"Save Playlist...",
+                icon: `<i class="fas fa-save"></i>`,
+                click: ()=>app.save_playlist_menu.show(),
+            }),
+            generate_schedule: new PlaylistCommand({
+                name: ()=>"Generate Schedule...",
+                icon: `<i class="fas fa-calendar-alt"></i>`,
+                click: ()=>app.schedule_generator_menu.show()
+            })
+        }
+
+        for (let color_key in item_colors) {
+            let color = item_colors[color_key] || "#fff";
+            this.commands[`color_${color_key}`] = new PlaylistCommand({
+                click: (items)=>{
+                    var v = color_key === "none" ? null : color_key;
+                    items.map(i=>i.props.color = v);
+                    app.request({
+                        call: ["session", "update_values"],
+                        arguments: items.map(i=>[`playlist/${i.id}/props/color`, v])
+                    });
+                    app.playlist.rebuild();
+                },
+                render:(items, elem)=>{
+                    elem.classList.add("color");
+                    var colors = new Set(items.map(i=>i.props.color||"none"));
+                    var inner = colors.has(color_key) ? ((colors.size == 1) ? `✓` : "-") : "";
+                    var el = $(`<div class="color" style="background: ${color}; outline: 1px solid #ddd; text-align: center;">${inner}</div>`)[0];
+                    elem.append(el);
+                },
+                title: utils.capitalize(color_key),
+            })
+        }
+        
+        /*  move_to_bottom: new PlaylistCommand({
+            name: "Move to End",
+            description: "Move Selection to End",
+            icon: ()=>`<i class="fas fa-angle-double-${this.timeline_mode?"right":"down"}"></i>`,
+            visible: (items)=>items.length>0,
+            click: (items)=>{
+                this.move_selection_to_end();
+            },
+            shortcut: "Alt+End",
+        }), */
+        
+        this.timeline_container_elem.addEventListener("wheel", (e)=>{
+            if (!this.timeline_mode) return;
+            e.preventDefault();
+            var d = e.shiftKey ? 0.25 : 1;
+            if (e.deltaY > 0) d *= -1;
+            this.inc_timeline_zoom(d, e);
+        });
+
+        this.tracks_elem.addEventListener("scroll", ()=>this.update_view());
+
+        ondrag(this.timeline_container_elem, (e)=>{
+            if (e.button == 0 && e.altKey) {
+                var orig_e = e;
+                var pos = [this.tracks_elem.scrollLeft, this.tracks_elem.scrollTop];
+                return (e)=>{
+                    this.tracks_elem.scrollLeft = pos[0] + orig_e.clientX - e.clientX;
+                    this.tracks_elem.scrollTop = pos[1] + orig_e.clientY - e.clientY;
+                }
+            }
+        });
+
+        (()=>{
+            this.timeline_container_elem.addEventListener('touchmove', (e)=>{
+                if (e.touches.length > 1) e.preventDefault();
+            });
+            let mc = new Hammer.Manager(this.timeline_container_elem, {touchAction: 'none', cssProps: {userSelect:"auto"}});
+            let pinch = new Hammer.Pinch({enable:true});
+            mc.add([pinch]);
+            var x_percent;
+            var init_zoom;
+            mc.on("pinchstart", (e)=>{
+                var r = this.timeline_container_elem.getBoundingClientRect();
+                init_zoom = this.zoom;
+                x_percent = (e.center.x - r.x) / r.width;
+            });
+            mc.on("pinchmove", (e)=>{
+                this.set_timeline_view(init_zoom * e.scale, null, x_percent);
+            });
+        })();
+
+        var get_x = (e)=> {
+            var r = this.ticks_elem.getBoundingClientRect();
+            return e.clientX - r.x;
+        };
+
+        // this.ticks_elem.style.cursor = "none" // "text";
+        $(this.ticks_elem).on("click", (e)=>{
+            var data = this.ticks_bar.parse_event(e);
+            this.cursor_position = data.time;
+            this.update_view();
+        });
+
+        var on_resize;
+        window.addEventListener("resize", on_resize = ()=>{
+            this.update_view();
+        });
+        
+        window.addEventListener("keydown", this.on_keydown = (e)=>{
+            if (dom_utils.has_focus(this.timeline_container_elem)) {
+                this.try_command_shortcut(e);
+            }
+        }, true);
+
+        this.on("destroy", ()=>{
+            window.removeEventListener("resize", on_resize);
+            this.sortables.forEach(s=>s.destroy());
+            this.sortables = [];
+        });
+        
+        this.update_position_next_frame = dom_utils.debounce_next_frame(()=>this.update_position());
+
+        this.set_tracks(1);
+        this.update_info();
+        this.update_view();
+    }
+    /** @return {PlaylistCommand[]} */
+    get all_commands() {
+        return Object.values(this.commands);
+    }
+
+    back(){
+        var current = this.current;
+        var parent = current.parent;
+        if (!parent) return;
+        if (app.$._session.is_running && current == app.$._session.current_playing_item && current.calculate_contents_hash() != current.__private.hash_on_open) {
+            app.prompt_for_reload_of_current_item();
+        }
+        this.open(parent, [current]);
+    }
+
+    move_selection_to_start() {
+        var elems = this.get_selection();
+        elems.reverse();
+        elems.forEach((e,i)=>e.parentElement.prepend(e));
+        elems.forEach(e=>this.scroll_into_view(e));
+        this.sync();
+    }
+    move_selection_back() {
+        var elems = this.get_selection();
+        var first_index = Math.max(0,dom_utils.get_index(elems[0])-1);
+        elems.forEach((e,i)=>dom_utils.insert_at(e.parentElement, e, first_index+i));
+        this.scroll_into_view(elems[0]);
+        this.sync();
+    }
+    move_selection_forward() {
+        var elems = this.get_selection();
+        var last_index = Math.min(elems[0].parentElement.childElementCount, dom_utils.get_index(elems[elems.length-1])+2);
+        elems.forEach((e,i)=>dom_utils.insert_at(e.parentElement, e, last_index));
+        this.scroll_into_view(elems[elems.length-1])
+        this.sync();
+    }
+    move_selection_to_end() {
+        var elems = this.get_selection();
+        elems.forEach((e,i)=>e.parentElement.append(e));
+        elems.forEach(e=>this.scroll_into_view(e));
+        this.sync();
+    }
+
+    focus() {
+        this.timeline_container_elem.focus();
+    }
+
+    /** @param {KeyboardEvent} e */
+    try_command_shortcut(e) {
+        if (e.key === "Alt") return;
+        if (e.key === "Control") return;
+        for (var c of Object.values(this.commands)) {
+            var shortcut = c.shortcut();
+            if (!shortcut) continue;
+            for (var k of shortcut.split(/\s*[\|]\s*/)) {
+                var keys = k.split(/\s*[\+]\s*/);
+                var keys_lower = new Set([...keys, ...keys.map(k=>k.toLowerCase())]);
+                if (keys_lower.has("ctrl") == e.ctrlKey && keys_lower.has("alt") == e.altKey && keys_lower.has("shift") == e.shiftKey && keys_lower.has(e.key.toLowerCase())) {
+                    if (this.context_menu) this.context_menu.hide();
+                    c.click(this.get_selection_datas());
+                    e.preventDefault();
+                    e.stopPropagation();
+                    return;
+                }
+            }
+        }
+    }
+
+    /* get_commands() {
+        var items = this.get_selection_datas();
+        return Object.fromEntries(Object.entries(this.commands).map(([k,c])=>{
+            var c = {...c};
+            for (var k in c) {
+                if (typeof c[k] === "function") c[k] = c[k](items);
+            }
+            return [k, c];
+        }));
+    } */
+    
+    open_context_menu(parent, e) {
+        var items = this.get_selection_datas();
+        var c = this.commands;
+        var menu_groups = [
+            [c.play, c.info, c.modify, c.rescan, c.reveal, c.split, c.rename, c.delete_item],
+            [c.download, c.cancel_download, c.cancel_upload],
+            [c.edit_playlist, c.breakdown_playlist, c.add_to_playlist],
+            [/* c.timeline_cursor_play,*/ c.slice_at_timeline_cursor, c.timeline_cursor_to_start, c.timeline_cursor_to_end],
+            [c.copy, c.cut, c.paste],
+            [c.move_to_top, c.move_up, c.move_down, c.move_to_bottom],
+        ];
+        if (items.length) {
+            menu_groups.push([Object.keys(c).filter(c=>c.startsWith("color_")).map(k=>c[k])]);
+        }
+        var menu_items = [];
+        for (var g of menu_groups) {
+            if (g.flat().some(i=>i.visible(items))) {
+                if (menu_items.length) menu_items.push("-----");
+                menu_items.push(...g);
+            }
+        }
+        var menu = create_menu(menu_items, {
+            click: ()=>instance.hide(),
+            params: [items]
+        });
+        var instance = this.context_menu = create_context_menu(parent, menu, e);
+    }
+
+    sync() {
+        var playlist_changes = {};
+        this.sortables.forEach((s,t)=>{
+            s.get_items().forEach((e,i)=>{
+                playlist_changes[e.dataset.id] = {index: i, track_index: t};
+            });
+        });
+        app.playlist_update(playlist_changes)
+    }
+
+    selection_to_clipboard(cutting=false) {
+        var items = this.get_selection_datas();
+        if (!items.length) return;
+        var all_items = items.map(i=>[i, ...i.descendents]).flat().map(i=>i.copy());
+        var items_set = new Set(items);
+        this.clipboard = { items, items_set, all_items, cutting };
+        this.rebuild_next_frame();
+        this.update_playlist();
+    }
+
+    async paste_clipboard() {
+        if (!this.clipboard) return;
+        var clipboard = this.clipboard;
+        if (clipboard.cutting) {
+            this.clipboard = null;
+            app.playlist_move(clipboard.items);
+        } else {
+            app.playlist_add(clipboard.items);
+        }
+    }
+
+    rename(item) {
+        var el = this.get_element(item);
+
+        this.scroll_into_view(el);
+        // var new_name = window.prompt("Rename:", item.props.label || "");
+
+        var filename = el.querySelector(".filename");
+        var old_name = filename.innerText;
+        var default_name = item.get_pretty_name({label:false});
+
+        filename.contentEditable = true;
+        filename.innerHTML = item.props.label || default_name;
+        filename.focus();
+        window.getSelection().selectAllChildren(filename);
+        var blur_listener, keydown_listener;
+        filename.addEventListener("keydown", keydown_listener = (e)=>{
+            if (e.key === "Enter") {
+                e.preventDefault();
+                e.stopPropagation();
+                filename.blur();
+            }
+        });
+        filename.addEventListener("blur", blur_listener = ()=>{
+            filename.contentEditable = false;
+            filename.removeEventListener("blur", blur_listener);
+            filename.removeEventListener("keydown", keydown_listener);
+            var new_name = filename.innerText;
+            if (!new_name || new_name == default_name) new_name = null;
+            filename.innerHTML = `<span>${new_name || default_name}</span>`;
+
+            if (old_name != new_name) {
+                app.request({
+                    call: ["session", "update_values"],
+                    arguments: [[`playlist/${item.id}/props/label`, new_name]]
+                });
+                app.$._push([`sessions/${app.$._session.id}/playlist/${item.id}/props/label`,new_name]);
+            }
+            this.timeline_container_elem.focus({preventScroll: true});
+        });
+    }
+
+    async rebuild() {
+        var d0 = Date.now();
+        
+        await Promise.all(this.sortables.map(s=>s.last_drag));
+
+        let is_running = app.$._session.is_running;
+        
+        var current_playlist = this.current;
+        /** @type {PlaylistItem} */
+        // var last_playlist = this.last_playlist_on_rebuild || NULL_PLAYLIST_ITEM;
+        var current_item = app.$._session.current_playing_item;
+        var current_parents = new Set(current_item.parents);
+        var current_playlist_tracks = current_playlist.tracks;
+        
+        var day_seconds = 60 * 60 * 24;
+        var start_time = null;
+        var now = (Date.now()/1000) - (new Date().getTimezoneOffset()*60);
+        if (app.settings.get("playlist_show_scheduled_times")) {
+            if (is_running) {
+                start_time = (now - current_item.userdata.start - app.get_current_time_pos()) * 1000;
+            } else {
+                if (app.$._session.schedule_start_time) {
+                    start_time = +new Date(app.$._session.schedule_start_time);
+                } else {
+                    var d = app.settings.get("schedule_generator") || EMPTY_OBJECT;
+                    start_time = ((Math.floor(now/day_seconds)*day_seconds) + utils.timespan_str_to_seconds(d.start_time || "00:00", "hh:mm")) * 1000;
+                }
+                start_time += utils.sum([current_playlist, ...current_playlist.parents].map(item=>item.userdata && item.userdata.start || 0)) * 1000;
+            }
+            // console.log(new Date(start_time));
+        }
+
+        this.set_tracks(current_playlist_tracks.length, current_playlist && current_playlist.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK);
+
+        var new_items = [];
+
+        this.sortables.forEach((sortable,i)=>{
+            /** @type {PlaylistItem[]} */
+            var items = current_playlist_tracks[i] || EMPTY_ARRAY;
+            dom_utils.rebuild(sortable.el, items, {
+                add: (item, elem, index)=>{
+                    if (!elem) {
+                        // console.log(`added ${item.id}`)
+                        new_items.push(item);
+                        elem = $(`<li class="item"><div><div class="clips"></div><div class="front"><span class="play-icons"></span><span class="icons"></span><span class="filename"></span><span class="extra"></span><span class="badges"></span><div class="duration"></div></div></div></li>`)[0];
+                    }
+                    
+                    // if (item._hash == elem._hash) return;
+                    // elem._hash = item._hash;
+
+                    var ud = item.userdata;
+                    var is_current_item = item.id == current_item.id;
+                    var is_current_ancestor = current_parents.has(item);
+                    var is_cutting = !!(this.clipboard && this.clipboard.cutting && this.clipboard.items_set.has(item));
+                    
+                    var _hash = JSON.stringify([index, item, ud, is_current_item, is_current_ancestor, is_cutting, start_time, is_running]);
+                    if (_hash === elem._hash) return;
+                    elem._hash = _hash;
+                    elem._item = item;
+                    
+                    let media_info = item.media_info || EMPTY_OBJECT;
+                    let children = item.children;
+                    let root_merged_playlist = item.root_merged_playlist;
+                    var is_playlist = item.is_playlist;
+                    var problems = [];
+                    let name = item.get_pretty_name();
+                    let filename_parts = [`<span>${name}</span>`];
+                    let title_parts = [name];
+                    let main_icon;
+                    var icons = [];
+                    var play_icons = [];
+                    let background_color, outline_color;
+                    let badges = {};
+    
+                    dom_utils.toggle_class(elem, "cutting", is_cutting);
+                    var is_upload_dummy = item.filename.startsWith("upload://");
+                    
+                    var play_icons_elem = elem.querySelector(".play-icons");
+                    var icons_elem = elem.querySelector(".icons");
+                    var filename_elem = elem.querySelector(".filename");
+                    var duration_elem = elem.querySelector(".duration");
+                    var extra_elem = elem.querySelector(".extra");
+                    var badges_elem = elem.querySelector(".badges");
+                    var clips_elem = elem.querySelector(".clips");
+                    
+                    let blocks = [];
+
+                    if (ud.clipping) {
+                        if (ud.clipping.loops < 128) {
+                            let segments = get_clip_segments(ud.clipping);
+                            if (ud.clipping.loops > 1) {
+                                let t = 0, d = ud.duration;
+                                if (d) {
+                                    for (let s of segments) {
+                                        blocks.push({x:t/d, width:s.duration/d})
+                                        t += s.duration
+                                    }
+                                }
+                            } else {
+                                let d = ud.media_duration;
+                                if (d) {
+                                    for (let s of segments) {
+                                        blocks.push({x:s.start/d, width:s.duration/d});
+                                    }
+                                }
+                            }
+                        }
+                        blocks = blocks.filter(b=>b.width>0.0001);
+                        if (blocks.length == 1 && blocks[0].width == 1) blocks = [];
+                    }
+                    clips_elem.innerHTML = blocks.map(b=>`<div style="left:${b.x.toFixed(5)*100}%;width:${b.width.toFixed(5)*100}%;"></div>`).join("");
+                    clips_elem.classList.toggle("repeats", !!(ud.clipping && ud.clipping.loops > 1))
+                    
+                    
+                    if (ud.is_processing) {
+                        play_icons.push(`<i class="fas fa-sync fa-spin"></i>`);
+                    } else if (is_current_ancestor) {
+                        play_icons.push(`<i class="fas fa-arrow-right"></i>`);
+                    } else if (is_current_item) {
+                        if (is_running) {
+                            play_icons.push(`<i class="fas fa-play"></i>`);
+                        } else {
+                            play_icons.push(`<i class="fas fa-forward-step"></i>`);
+                        }
+                    } else {
+                        play_icons.push(`<span class="numbering">${String(index+1).padStart(2,"0")}</span>`);
+                    }
+                    
+                    if (is_upload_dummy) {
+                        icons.push(`<i class="fas fa-upload"></i>`);
+                    } else {
+                        if (media_info.exists === false) {
+                            problems.push({level:3, text:"Media does not exist."});
+                        } else if (!utils.is_empty(media_info) && !media_info.streams && media_info.protocol !== "livestreamer:" && !item.is_playlist && !ud.is_processing) {
+                            problems.push({level:1, text:"Possibly invalid media."});
+                        } else if (root_merged_playlist && !item.is_mergable) {
+                            problems.push({level:2, text:"Merged items must be local files or empties."});
+                        }
+                    }
+                    
+                    if (item.props.color) {
+                        background_color = item_colors[item.props.color];
+                        outline_color = new utils.Color(item_colors[item.props.color]).rgb_mix("#000",0.3).to_rgb_hex();
+                    }
+                    if (is_playlist) {
+                        main_icon = `<i class="fas fa-folder-open" title="Playlist"></i>`;
+                        let b = "playlist";
+                        if (item.props.playlist_mode == PLAYLIST_MODE.MERGED) b = "merged-playlist";
+                        if (item.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK) b = "2-track-playlist";
+                        badges["playlist"] = b;
+                        filename_parts.push(`<span class="playlist-count">${children.length}</span>`)
+                        title_parts.push(`(${children.length})`);
+                    }
+                    // userdata.number = String(i+1).padStart(2,"0")
+                    
+                    var is_special = item.filename.startsWith("livestreamer://");
+                    if (is_special) {
+                        var type = item.filename.replace("livestreamer://", "");
+                        if (!(type in badges)) badges[type] = type;
+                        if (type == "macro") {
+                            main_icon = `<i class="fa-solid fa-scroll"></i>`
+                        } else if (type == "intertitle") {
+                            main_icon = `<i class="fa-solid fa-paragraph"></i>`
+                        } else if (type == "macro") {
+                            main_icon = `<i class="fa-solid fa-scroll"></i>`
+                        } else if (type == "empty") {
+                            main_icon = `<i class="fa-solid fa-ghost"></i>`
+                        } else if (type == "exit") {
+                            main_icon = `<i class="fa-solid fa-arrow-left-long"></i>`
+                        } else if (type == "rtmp") {
+                            title_parts.push(item.is_rtmp_live ? "[Connected]" : "[Disconnected]");
+                            if (item.is_rtmp_live) {
+                                main_icon = `<i class="fas fa-link" style="color:#00cc00;" title="Connected"></i>`;
+                            } else {
+                                main_icon = `<i class="fas fa-unlink" title="Disconnected"></i>`;
+                            }
+                            // main_icon = `<i class="fa-solid fa-tower-broadcast"></i>`
+                        } 
+                    }
+                    
+                    if (media_info.downloadable && item.filename.match(/^https?:/)) {
+                        let icon = $(`<i class="fas fa-globe"></i>`)[0]; //  style="color:cornflowerblue"
+                        icon.title = item.filename;
+                        main_icon = icon.outerHTML;
+                        badges["web"] = new URL(item.filename).hostname.replace(/^www\./, "");
+                    }
+                    
+                    if (!ud.download) {
+                        if (media_info.streams) {
+                            var default_video = utils.sort(media_info.streams.filter(s=>s.type === "video"),
+                                (s)=>s.albumart,
+                                (s)=>[s.default | s.forced * 2, "DESCENDING"]
+                            )[0];
+                            var default_audio = utils.sort(media_info.streams.filter(s=>s.type === "audio"),
+                                (s)=>[s.default | s.forced * 2, "DESCENDING"]
+                            )[0];
+                            let has_video = default_video && default_video.codec && !default_video.albumart;
+                            let has_audio = default_audio && default_audio.codec;
+
+                            if (has_video) {
+                                var codec = default_video.codec.replace(/video$/, "").split(".")[0];
+                                var size = get_video_size(default_video.width, default_video.height, media_info.interlaced);
+                        
+                                if (!media_info.duration || media_info.duration <= IMAGE_DURATION) {
+                                    icons.push(`<i class="fa-solid fa-image"></i>`);
+                                    badges["image"] = `${codec} ${default_video.width}x${default_video.height}`;
+                                } else {
+                                    icons.push(`<i class="fa-solid fa-film"></i>`);
+                                    badges["video"] = `${codec} ${size.text}`;
+                                }
+                                if ((default_video.codec == "hevc" || default_video.codec == "av1") && size.height > 720) {
+                                    problems.push({level:2, text:"Highly compressed video codec may struggle to decode in realtime."});
+                                } else if (size.height > 1080) {
+                                    problems.push({level:2, text: "Ultra HD video may struggle to decode in realtime."});
+                                }
+                            }
+                            if (has_audio) {
+                                if (!has_video) icons.push(`<i class="fa-solid fa-music"></i>`);
+                                badges["audio"] = default_audio.codec.replace(/^pcm_.+$/, "pcm").split(".")[0];
+                            }
+                            if (root_merged_playlist && default_video && default_video.codec == "vc1") {
+                                problems.push({level:2, text: "VC-1 video codec can lead to playback issues within a merged playlist."});
+                            }
+                        }
+                    }
+                    {
+                        let d, t, extra_elem_children = [];
+                        if (ud.upload || item.filename.startsWith("upload://")) {
+                            d = ud.upload || { bytes:0, total:0, speed:0 };
+                            t = "upload";
+                        }
+                        if (ud.download) {
+                            d = ud.download
+                            t = "download";
+                        }
+                        if (d) {
+                            let bar = extra_elem.querySelector(`.progress`) || $(`<div class="progress"><span class="percent"></span><span class="speed"></span></div>`)[0];
+                            let icon = extra_elem.querySelector(`.fas`) || $(`<i class="fas"></i>`)[0];
+                            
+                            let p = d.total ? ( d.bytes / d.total) : 0;
+                            bar.title = `${utils.capitalize(t)}ing [${utils.format_bytes(d.bytes || 0)} / ${utils.format_bytes(d.total || 0)}]`;
+
+                            let percent_text = [];
+                            if (d.num_stages) percent_text.push(`${d.stage+1}/${d.num_stages}`);
+                            percent_text.push(`${(p * 100).toFixed(2)}%`);
+
+                            bar.style.setProperty("--progress",`${p*100}%`);
+                            bar.querySelector(".percent").innerHTML = percent_text.join(" | ");
+                            bar.querySelector(".speed").innerHTML = `${utils.format_bytes(d.speed || 0)}ps`;
+                            icon.className = `fas fa-${t}`;
+                            extra_elem_children = [icon, bar];
+                        }
+                        dom_utils.set_children(extra_elem, extra_elem_children);
+                    }
+
+                    dom_utils.set_inner_html(badges_elem, Object.entries(badges).map(([k,v])=>{
+                        var parts = v.split(" ");
+                        parts[0] = parts[0].toUpperCase();
+                        return `<i class="badge" data-badge-type="${k}">${parts.join(" ")}</i>`
+                    }).join(""));
+
+                    if (!is_special && ud.modified) {
+                        icons.push(`<i class="fas fa-wrench"></i>`);
+                    }
+    
+                    var duration_str;
+                    if (start_time != null) {
+                        let s = new Date(start_time + ud.start*1000);
+                        duration_str = `<i class="far fa-clock" style="padding-right:3px"></i>${String(s.getHours()).padStart(2,"0")}:${String(s.getMinutes()).padStart(2,"0")}`;
+                    } else {
+                        if (ud.duration || ud.media_duration) duration_str = utils.seconds_to_timespan_str(ud.duration || ud.children_duration, "h?:mm:ss");
+                    }
+
+                    duration_elem.innerHTML = duration_str || "  -  ";
+                    
+                    if (problems.length) {
+                        var problem_groups = utils.group_by(problems, p=>p.level);
+                        var err_icon_html;
+                        if (problem_groups["3"]) err_icon_html = `<i class="fas fa-times" style="color:red;"></i>`;
+                        else if (problem_groups["2"]) err_icon_html = `<i class="fas fa-exclamation-triangle" style="color:orange;"></i>`;
+                        else if (problem_groups["1"]) err_icon_html = `<i class="fas fa-question-circle" style="color:#6495ED;"></i>`;
+                        if (err_icon_html) {
+                            let icon = $(err_icon_html)[0];
+                            icon.title = problems.map(p=>" - "+p.text).join("\n");
+                            icons.push(icon.outerHTML);
+                        }
+                    }
+    
+                    dom_utils.set_inner_html(play_icons_elem, play_icons.join(""));
+
+                    // if (!main_icon) main_icon = `<i class="fa-solid fa-file"></i>`;
+                    dom_utils.set_inner_html(icons_elem, [main_icon, ...icons].join(""));
+    
+                    filename_elem.innerHTML = filename_parts.join(" ");
+    
+                    elem.style.setProperty("--duration", ud.timeline_duration);
+                    elem.style.setProperty("--start", ud.timeline_start);
+                    elem.style.setProperty("--end", ud.timeline_end);
+    
+                    elem.title = title_parts.join(" ");
+                    elem.classList.toggle("current", is_current_item);
+                    elem.style.setProperty("--background-color", background_color || "");
+                    elem.style.setProperty("--outline-color", outline_color || "");
+    
+                    elem.ondblclick = ()=>app.playlist_play(item);
+    
+                    return elem;
+                },
+                remove:(elem)=>{
+                    // console.log(`deleted ${elem.dataset.id}`)
+                    // if (elem.classList.contains("insert-marker")) return;
+                    var sortable = Sortable.utils.get(elem);
+                    if (sortable) sortable.deselect(elem);
+                    elem.remove();
+                }
+            });
+        });
+
+        console.debug("rebuild_playlist:", `${(Date.now()-d0)}ms`);
+
+        // var last_session = last_playlist.session;
+        // var current_session = current_playlist.session;
+
+        // var selection = [];
+        // if (last_session === current_session) {
+        //     if (last_playlist === current_playlist) {
+        //         selection = [...new_items]
+        //     } else {
+        //         if (last_playlist.parent === current_playlist) {
+        //             selection = [last_playlist];
+        //         } else {
+        //             var first = this.get_datas()[0];
+        //             if (first) selection = [first];
+        //         }
+        //         this.reset_scroll();
+        //     }
+        //     if (selection.length) {
+        //         this.set_selection(selection);
+        //     }
+        // } else {
+        //     this.set_selection([]);
+        // }
+
+        // this.last_playlist_on_rebuild = current_playlist;
+        
+        this.update_info();
+        
+        this.emit("rebuild");
+    }
+
+    zoom_into_selected_playlist_items() {
+        var ud = this.current.userdata;
+        var start, end;
+        if (ud.clipping) [start,end] = [ud.clipping.start, ud.clipping.end];
+        else {
+            var items = this.get_selection_datas();
+            if (!items || !items.length) items = this.get_datas();
+            start = Math.min(...items.map(item=>item.userdata.timeline_start));
+            end = Math.max(...items.map(item=>item.userdata.timeline_end));
+        }
+        this.set_timeline_view([start, end]);
+    }
+
+    scroll_to_playhead() {
+        this.set_timeline_view(null, this.time || 0);
+    }
+
+    set_selection(items) {
+        if (!Array.isArray(items)) items = [items];
+        this.sortables.forEach(s=>s.deselect_all());
+        var elems = new Set(items.map(item=>this.get_element(item)).filter(e=>e));
+        elems.forEach((elem,i)=>{
+            Sortable.utils.get(elem).click(elem, false, i!=0);
+        });
+    }
+
+    /* queue_selection(ids) {
+        this._queued_selection_ids.push(ids);
+    } */
+
+    get_element(item) {
+        var id;
+        if (item instanceof Element) id = item.dataset.id;
+        else if (typeof item == "object") id = item.id;
+        else if (typeof item == "string") id = item;
+        return this.get_elements().find(e=>e.dataset.id == id);
+    }
+    get_elements() {
+        return this.sortables.map(s=>s.get_items()).flat();
+    }
+    get_selection() {
+        return this.sortables.map(s=>s.get_selection()).flat();
+    }
+    get_first_selected() {
+        return this.get_selection()[0];
+    }
+    get_datas() {
+        return this.get_elements().map(e=>app.get_playlist_item(e.dataset.id)).filter(i=>i);
+    }
+    get_selection_datas() {
+        return this.get_selection().map(e=>app.get_playlist_item(e.dataset.id)).filter(i=>i);
+    }
+    get_selection_indices() {
+        return this.get_selection().map(e=>dom_utils.get_index(e));
+    }
+    get_first_selected_data() {
+        return this.get_selection_datas()[0];
+    }
+
+    /** @param {PlaylistItem} item */
+    open(item, selection) {
+        if (!item) item = app.$._session.playlist["0"];
+        if (!item.is_playlist) return;
+        this.sortables.forEach(s=>s.forget_last_active());
+        this.current = item;
+        this.cursor_position = null;
+        this.update_playlist();
+        this.rebuild_next_frame();
+        item.__private.hash_on_open = item.calculate_contents_hash()
+        this.once("rebuild", ()=>{
+            if (this.timeline_mode && this.clipping) this.set_timeline_view([this.clipping.start, this.clipping.end], this.time);
+            else this.scroll_into_view(this.get_elements()[0]);
+            if (selection) this.set_selection(selection);
+        })
+    }
+    
+    update_info() {
+        var selected_items = this.get_selection_datas();
+        var len = this.get_elements().length;
+        var info = {};
+        info["Selection"] = `<i class="far fa-square-check"></i> [${selected_items.length}/${len}]`;
+        if (selected_items.length) {
+            var duration = utils.sum(selected_items.map(i=>i.userdata.duration));
+            info["Duration"] = `<i class="far fa-clock"></i> (${utils.seconds_to_timespan_str(duration, "h?:mm:ss")})`;
+        }
+        if (this.clipboard) {
+            info["Clipboard"] = `${this.clipboard.cutting ? `<i class="fas fa-scissors"></i>` : `<i class="far fa-clipboard"></i>`} [${this.clipboard.items.length}]`;
+        }
+        this.playlist_info_text.innerHTML = Object.entries(info).map(([name,text])=>`<span title="${name}">${text}</span>`).join("");
+        this.toggle_selection_button.innerHTML = `${selected_items.length?"Deselect":"Select"} All`;
+        this.toggle_selection_button.disabled = len == 0;
+        this.toggle_selection_button.onclick = ()=>{
+            if (selected_items.length) this.active_sortable.deselect_all();
+            else this.active_sortable.select_all();
+            this.timeline_container_elem.focus({preventScroll: true});
+        };
+    };
+
+    setup_resize() {
+        var on_scroll;
+        var resize_observer = new ResizeObserver(()=>this.update_position_next_frame());
+        // var intersection_observer = new IntersectionObserver(()=>this.update_position_next_frame());
+        app.main_elem.addEventListener("scroll", on_scroll=()=>this.update_position_next_frame());
+        var parent = this.elem.parentElement;
+        resize_observer.observe(parent);
+
+        /* var top, left;
+        var tick = ()=>{
+            if (parent.offsetTop != top || parent.offsetLeft != left) {
+                top = parent.offsetTop;
+                left = parent.offsetLeft;
+                this.update_position();
+            }
+            requestAnimationFrame(tick);
+        }
+        requestAnimationFrame(tick); */
+
+        // intersection_observer.observe(parent);
+
+        // this.on("update", ()=>this.update_position());
+        this.on("destroy", ()=>{
+            resize_observer.disconnect();
+            // intersection_observer.disconnect();
+            app.main_elem.removeEventListener("scroll", on_scroll);
+        });
+    }
+
+    update_position() {
+        if (app.settings.get("playlist_sticky")) {
+            var r = this.elem.parentElement.getBoundingClientRect();
+            var min_height = 400;
+            var max_height = r.bottom - r.top;
+            var padding = 10;
+            var top = Math.max(-r.top + padding, 0);
+            var bottom = Math.min(top + r.bottom, top + window.innerHeight - padding) - padding;
+            var height = Math.min(bottom - top, window.innerHeight - r.top - padding);
+            var width = r.right - r.left;
+            var offset = Math.min(0, height - min_height);
+            var fixed_top = Math.max(r.top, padding);
+            if (top > 0) fixed_top += offset;
+            height -= offset;
+
+            // weird way of doing it...
+            if (width < window.innerWidth * 0.7) {
+                height = utils.clamp(height, min_height, max_height);
+                if (height > 400) { // .playlist-wrapper min-height
+                    Object.assign(this.elem.style, {
+                        // position: "fixed",
+                        // top: `${fixed_top}px`,
+                        position: "absolute",
+                        top: `${fixed_top-r.top}px`,
+                        width: `${width}px`,
+                        height: `${height}px`,
+                    });
+                    return;
+                }
+            }
+        }
+        Object.assign(this.elem.style, {
+            position: "",
+            top: ``,
+            width: ``,
+            height: ``,
+        });
+    };
+
+    update_view() {
+
+        if (this.timeline_mode) {
+            this.view_start = this.tracks_elem.scrollLeft / this.zoom;
+            this.view_duration = this.tracks_elem.clientWidth / this.zoom;
+            this.view_end = this.view_start + this.view_duration;
+
+            if (this.clipping) {
+                this.limits_elem.innerHTML = [
+                    `<div style="left:0; width:${Math.max(0,(this.clipping.start - this.view_start)/this.view_duration*100).toFixed(3)}%"></div>`,
+                    `<div style="right:0; width:${Math.max(0,(this.view_end - this.clipping.end)/this.view_duration*100).toFixed(3)}%"></div>`,
+                ].join("");
+            }
+            
+            this.limits_elem.style.display = this.clipping ? "" : "none";
+
+            // var max_width = Math.max(...this.sortables.map(s=>s.el.offsetWidth));
+            // this.elem.style.setProperty("--timeline-width", `${max_width}px`);
+            this.timeline_container_elem.style.setProperty("--timeline-width", `${this.duration * this.zoom}px`);
+
+            this.ticks_bar.update(this.view_start, this.view_end);
+
+            this.cursor_elem.style.left = `${((this.cursor_position || 0)-this.view_start) * this.zoom}px`;
+            this.cursor_elem.style.display = (this.cursor_position == null) ? "none" : "";
+        
+            this.playhead_elem.style.display = (this.time == null || this.time < 0 || this.time > this.duration) ? "none" : "";
+            this.playhead_elem.style.left = `${(this.clip_time - this.view_start) / this.view_duration * 100}%`;
+            
+            this.playlist_zoom_out_button.disabled = this.playlist_zoom <= PLAYLIST_ZOOM_MIN;
+            this.playlist_zoom_in_button.disabled = this.playlist_zoom >= PLAYLIST_ZOOM_MAX;
+            this.playlist_zoom_input.value = (this.zoom*100).toFixed(2)+"%";
+            this.playlist_goto_playhead_button.disabled = this.time == null;
+        }
+
+        this.scrollbar_width = Math.max(...get_scrollbar_width(this.tracks_elem));
+        this.timeline_container_elem.style.setProperty("--scrollbar-width", `${this.scrollbar_width}px`);
+    }
+
+    update_playlist() {
+        var current = this.current;
+        var current_ud = current.userdata;
+        var duration = current_ud.duration;
+        var timeline_duration = current_ud.timeline_duration;
+        var self_and_parents = [app.$._session.current_playing_item, ...app.$._session.current_playing_item.parents];
+        var a_index = self_and_parents.indexOf(current);
+        var timeline_time = utils.sum(self_and_parents.slice(0, a_index).map(item=>utils.try(()=>item.userdata.timeline_start)||0)) + Math.min(app.get_current_time_pos(), app.$._session.current_playing_item.userdata.timeline_duration);
+        var time = utils.sum(self_and_parents.slice(0, a_index).map(item=>utils.try(()=>item.userdata.start)||0)) + Math.min(app.get_current_time_pos(), app.$._session.current_playing_item.userdata.duration);
+
+        this.time = timeline_time;
+        this.duration = timeline_duration;
+        this.clipping = current_ud.clipping;
+        if (this.clipping) {
+            this.clip_time = utils.loop(this.time + this.clipping.offset + this.clipping.start, this.clipping.start, this.clipping.end);
+        } else {
+            this.clip_time = this.time;
+        }
+
+        this.playlist_back_button.disabled = !current.parent;
+        
+        dom_utils.set_inner_html(this.playlist_time_total_elem, `(${utils.seconds_to_timespan_str(duration)})`);
+        dom_utils.set_inner_html(this.playlist_time_left_elem, `[-${utils.seconds_to_timespan_str(duration-time)}]`);
+
+        this.playlist_time_left_elem.style.display = current === app.$._session.playlist["0"] ? "" : "none"
+        
+        app.build_playlist_breadcrumbs(this.playlist_path_text, current, true);
+
+        this.update_view();
+    }
+    
+    get timeline_window_duration() {
+        return this.tracks_elem.clientWidth / this.zoom;
+    }
+    get timeline_window_start() {
+        return this.tracks_elem.scrollLeft / this.zoom;
+    }
+    get_timeline_scroll_percent = (ox=0.5)=>(this.timeline_window_start + this.timeline_window_duration * ox) / this.duration;
+    set_timeline_scroll_percent = (v, ox=0.5)=>{
+        this.tracks_elem.scrollLeft = this.duration * (v - (this.timeline_window_duration / this.duration * ox)) * this.zoom;
+    }
+    set_timeline_zoom(v){
+        this.zoom = utils.clamp(v, PLAYLIST_ZOOM_MIN, PLAYLIST_ZOOM_MAX);
+        if (isNaN(this.zoom) || !isFinite(this.zoom)) this.zoom = 1.0;
+        this.timeline_container_elem.style.setProperty("--playlist-zoom", this.zoom);
+    }
+    reset_scroll(){
+        this.tracks_elem.scrollLeft = this.tracks_elem.scrollTop = 0;
+    }
+
+    inc_timeline_zoom(v=0, e) {
+        this.set_timeline_view(Math.pow(PLAYLIST_ZOOM_BASE, utils.log(this.zoom, PLAYLIST_ZOOM_BASE) + v), null, e);
+    }
+
+    set_timeline_view(zoom, time, e=null) {
+        var ox = 0.5;
+        if (e instanceof MouseEvent) {
+            var pt = {x:e.clientX, y:e.clientY};
+            var rect = this.tracks_elem.getBoundingClientRect();
+            ox = utils.clamp(get_rect_pt_percent(rect, pt).x);
+        } else if (e instanceof Number) {
+            ox = e;
+        }
+        if (Array.isArray(zoom)) {
+            this.set_timeline_zoom(this.zoom * this.timeline_window_duration / (zoom[1]-zoom[0]));
+            this.set_timeline_scroll_percent((zoom[0] + zoom[1]) / 2 / this.duration);
+        } else {
+            var scroll_x = (time == null) ? this.get_timeline_scroll_percent(ox) : (time / this.duration);
+            if (zoom != null) this.set_timeline_zoom(zoom);
+            this.set_timeline_scroll_percent(scroll_x, ox);
+        }
+        
+        this.update_view();
+    }
+}
+
+//------------------------------------------------------
+
+export class Loader {
+    constructor() {
+        var html = `<div class="loader">
+            <div class="icon"><i></i><i></i><i></i></div>
+            <div class="msg">Loading...</div>
+        </div>`
+        this.el = $(html)[0];
+        this.el.style.zIndex = 999999999
+    }
+    update(opts) {
+        var msg = this.el.querySelector(".msg");
+        if ("text" in opts) {
+            msg.innerHTML = opts.text;
+        }
+        if ("visible" in opts) {
+            if (opts.visible) document.body.append(this.el);
+            else this.el.remove();
+        }
+    }
+    destroy() {
+        this.el.remove();
+    }
+}
+
+export class App extends utils.EventEmitter {
+    get server_now() { return Date.now() + this.$.server_time_diff; }
+    get playlist_item_props_class() { return utils.try(()=>this.$.properties.playlist.enumerable_props.props.props); }
+    get focused_element() { return this.root.activeElement; }
+    get dev_mode() { return this.conf["debug"] || new URLSearchParams(window.location.search.slice(1)).has("dev"); }
+    
+    /** @type {Remote} */
+    $;
+
+    async init() {
+        this.loader = new Loader();
+        var messenger = new dom_utils.WindowCommunicator();
+        var key;
+        if (window.self == window.top) {
+            key = dom_utils.Cookie.get("ls_key") || new URLSearchParams(window.location.search).get("ls_key");
+        } else {
+            key = await messenger.request(window.parent, "key");
+        }
+        if (key) dom_utils.Cookie.set("ls_key", key, { expires: 365 });
+
+        messenger.destroy();
+        
+        var elem = this.elem = document.querySelector("#livestreamer");
+        this.body = elem.parentElement;
+        this.root = elem.getRootNode();
+        
+        new UI.Root();
+
+        this.conf = await fetch("conf").then(r=>r.json()); // crazy...;
+
+        this.rtmp_host = utils.build_url({
+            "protocol": "rtmp:",
+            "port": (this.conf["nms.rtmp_port"] == 1935) ? "" : this.conf["nms.rtmp_port"],
+            "pathname": "/"
+        });
+
+        App.instance = this;
+        app = this;
+
+        // var q = new URLSearchParams(window.location.search.slice(1));
+
+        Remote.init();
+        this.font_cache = {};
+        this.num_requests = 0;
+        this.upload_queue = new UploadQueue();
+        // this.expected_changes = {};
+        this.clipboard = null;
+        this.plugins = {};
+        this.target_config_menus = {};
+
+        this.debounced_update_$ = dom_utils.debounce_next_frame(this.update_$);
+        this.advanced_functions = [];
+
+        this.main_elem = elem.querySelector(".main");
+        
+        /* Object.assign(Chart.defaults.line, {
+            hover: {
+                mode: "nearest"
+            }
+        }); */
+
+        this.show_help_button = this.root.querySelector("#show-help");
+        this.show_config_button = this.root.querySelector("#show-config");
+        this.show_admin_button = this.root.querySelector("#show-admin");
+        this.show_admin_button.classList.toggle("d-none", true); // !app.user.is_admin
+
+        this.session_elem = this.root.querySelector("#session");
+        this.session_controls_wrapper_elem = this.root.querySelector(".session-controls-wrapper");
+        this.session_load_save_elem = this.root.querySelector("#session-load-save");
+        this.session_inner_elem = this.root.querySelector("#session-inner");
+        this.session_ui_elem = this.root.querySelector("#session-ui");
+
+        this.stream_settings_elem = this.root.querySelector(".stream-settings");
+
+        this.no_sessions_elem = this.root.querySelector("#no-sessions");
+        this.session_password_elem = this.root.querySelector("#session-password");
+        this.new_session_button = this.root.querySelectorAll(".new-session");
+        this.destroy_session_button = this.root.querySelector("#destroy-session");
+        this.minimize_session_button = this.root.querySelector("#minimize-session");
+        // if (!this.dev_mode) this.minimize_session_button.classList.add("d-none");
+        this.sign_out_session_button = this.root.querySelector("#sign-out-session");
+        this.config_session_button = this.root.querySelector("#config-session");
+        this.load_session_button = this.root.querySelector("#load-session");
+        this.save_session_button = this.root.querySelector("#save-session");
+        this.history_session_button = this.root.querySelector("#history-session");
+        this.sessions_tabs_elem = this.root.querySelector("#sessions-tabs");
+        this.sessions_select = this.root.querySelector("#sessions-select");
+        this.users_elem = this.root.querySelector("#users");
+        this.request_loading_elem = this.root.querySelector("#request-loading");
+        
+        this.settings = new dom_utils.LocalStorageBucket("livestreamer", {
+            "playlist_mode": 0,
+            "playlist_show_scheduled_times": false,
+            "playlist_sticky": true,
+            "show_extra_playlist_icons": true,
+            "wrap_playlist_items": false,
+            "time_display_ms": false,
+            "test_stream_info": true,
+            "show_chapters": true,
+            "show_encoder_info": true,
+            "smooth_encoder_points": false,
+            "pause_encoder": false,
+            "sessions_display": "tabs",
+            "open_file_manager_in_new_window": false,
+            "time_left_mode": TimeLeftMode.TIME_LEFT,
+            "layout":null,
+            "session-order": null,
+        });
+        
+        var session_ui = new UI(this.session_ui_elem);
+        var row = session_ui.append(new UI.Row());
+        row.append(new UI.Column());
+        row.append(new UI.Column());
+        this.areas = [...row.elem.children];
+        this.areas.forEach(a=>a.classList.add("area"));
+
+        /** @type {Record<string,Panel>} */
+        this.panels = {};
+        
+        this.stream_settings = new StreamSettings();
+        this.stream_settings_elem.append(this.stream_settings);
+
+        this.playlist = new PlaylistPanel();
+        this.areas[0].append(this.playlist);
+        this.playlist.setup_resize()
+        
+        this.media_player = new MediaPlayerPanel();
+        this.media_settings = new MediaSettingsPanel();
+        this.encoder = new EncoderPanel();
+        this.session_logger = new LogViewerPanel("Session Log", {ffmpeg: false});
+
+        this.areas[1].append(this.media_player,this.media_settings,this.encoder,this.session_logger);
+        this.default_layout = this.get_layout();
+        
+        this.app_log_section = this.elem.querySelector(".app-logs-section");
+        this.app_logger = new LogViewerPanel("Application Log");
+        this.app_log_section.append(this.app_logger);
+
+        this.elem.addEventListener("click",(e)=>{
+            var button = e.target.closest("button");
+            if (button) {
+                for (var k of this.settings.keys) {
+                    if (button.classList.contains(k)) {
+                        this.settings.toggle(k);
+                    }
+                }
+            }
+            if (e.target.matches("a")) {
+                var url = dom_utils.get_anchor_url(e.target);
+                if (url.origin === "/file-manager/index.html", window.location.origin === url.origin) {
+                    // open file-manager
+                }
+                if (url.origin === "/main/index.html", window.location.origin === url.origin) {
+                    if (url.hash) {
+                        this.try_attach_to(url.hash.slice(1));
+                        e.preventDefault();
+                    }
+                }
+            }
+        });
+
+        this.settings.on("change", (e)=>{
+            if (e.name.startsWith("drawer:")) {
+                var panel = this.panels[e.name.slice(7)];
+                if (panel) panel.toggle(!e.value)
+            } else {
+                if (typeof e.value === "boolean") {
+                    this.body.toggleAttribute(`data-${e.name}`, e.value);
+                    [...this.elem.querySelectorAll(`button.${e.name}`)].forEach(c=>{
+                        if (e.value) delete c.dataset.toggled; else c.dataset.toggled = 1;
+                    });
+                } else {
+                    var t = typeof e.value;
+                    if (t != "object" && t != "function") {
+                        this.body.setAttribute(`data-${e.name}`, e.value);
+                    }
+                }
+            }
+            if (e.name === "playlist_mode") {
+                this.playlist.timeline_mode = e.value;
+            }
+            if (e.name === "playlist_sticky") {
+                this.playlist.update_position_next_frame();
+            }
+            if (e.name === "smooth_encoder_points" || e.name === "pause_encoder") {
+                this.encoder.debounced_update_chart();
+            }
+            this.$._push([`settings/${e.name}`, e.value]);
+        });
+
+        this.passwords = new dom_utils.LocalStorageBucket("livestreamer-passwords");
+        this.passwords.on("change", (e)=>{
+            this.$._push([`passwords/${e.name}`, e.value]);
+        });
+
+        // -------------------------------
+
+        this.sessions_select.addEventListener("change", ()=>{
+            window.location.hash = `#${this.sessions_select.value}`;
+        })
+        
+        Object.assign(Fancybox.defaults, {parentEl: this.body});
+
+        dom_utils.tippy.setDefaultProps({
+            distance: 0,
+            // boundary just doesn't work... maybe due to shadow dom, have to use popperOptions
+            popperOptions: {
+                strategy: 'fixed',
+                /* modifiers: [
+                    {
+                        name: 'preventOverflow',
+                        options: {
+                            altAxis: true
+                            // boundary: this.elem,
+                        },
+                    }
+                ] */
+            }
+        });
+
+        /* var style = [];
+        for (var k in item_colors) {
+            if (!item_colors[k]) continue;
+            var outline = new utils.Color(item_colors[k]).rgb_mix("#000",0.3).to_rgb_hex();
+            style.push(`[data-bg-color="${k}"] { background: ${item_colors[k]} !important; outline-color: ${outline} !important; }`);
+        }
+        this.main_elem.append($(`<style>${style.join("")}</style>`)[0]); */
+        
+        window.addEventListener("keydown", this.on_keydown = (e)=>{
+            if (!isNaN(e.key) && e.ctrlKey) {
+                var sessions = this.sessions_ordered;
+                var i = +e.key-1;
+                this.try_attach_to(sessions[i] ? sessions[i].id : null);
+            } else if (e.key === "s" && e.ctrlKey) {
+                this.save_session();
+            } else if (e.key === "F1") {
+                this.toggle_help()
+            } else {
+                return;
+            }
+            e.preventDefault();
+            e.stopPropagation();
+        });
+
+        this.set_loading(true, "Connecting...");
+
+        var ws_url = window.location.origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")+"/main/"+"?key="+key;
+        this.ws = new dom_utils.WebSocket(ws_url);
+
+        this.ws.on("open", ()=>{
+            Remote.init();
+            var on_change;
+            var last_session_id = this.settings.get("last_session_id");
+            this.on("change", on_change=()=>{
+                if (this.try_attach_to(last_session_id)) this.off("change", on_change);
+            })
+            this.ws.on("data", ()=>{
+
+            })
+            var check;
+            this.on("change", check = (e)=>{
+                if (!this.$.init) return;
+                this.set_loading(false);
+                this.off("change", check);
+            });
+        });
+        this.ws.on("data", (data)=>{
+            if (this.dev_mode) {
+                // console.debug("ws:", data);
+            }
+            if (data.init) {
+                this.$.init = true;
+                this.$.server_time_diff = Date.now() - data.init.ts;
+                this.$.client_id = data.init.client_id;
+                // -----
+                // var session_hash = window.location.hash.slice(1);
+                // if (!session_hash) session_hash = this.settings.get("last_session_id");
+            }
+            if (data.$) {
+                this.$._push(data.$);
+            }
+        });
+        this.ws.on("close", ()=>{
+            this.set_loading(true, "Lost connection...");
+            this.remove_plugins();
+            Fancybox.close(true);
+        });
+
+        $(this.new_session_button).on("click", (e)=>{
+            this.request({
+                call: ["new_session"]
+            }, {
+                block: true,
+            });
+        });
+
+        this.config_session_button.addEventListener("click", ()=>{
+            this.session_config_menu.show()
+        });
+
+        this.destroy_session_button.addEventListener("click", (e)=>{
+            if (confirm(`Are you sure you want to delete '${this.$._session.name}'?`)) {
+                this.request({
+                    call: ["session", "destroy"],
+                    arguments: [true],
+                });
+                this.last_destroyed_session_id = this.$._session.id;
+            }
+        });
+
+        this.minimize_session_button.addEventListener("click", (e)=>{
+            this.try_attach_to(null);
+        });
+
+        this.playlist_modify_menu = new PlaylistModifySettings();
+        this.playlist_add_url_menu = new PlaylistAddURLMenu();
+        this.file_system_info_menu = new FileSystemInfoMenu();
+        this.session_config_menu = new SessionConfigurationSettings();
+        this.schedule_stream_menu = new ScheduleStreamSettings();
+        this.save_playlist_menu = new SavePlaylistSettings();
+        this.history_menu = new HistorySettings();
+        this.schedule_generator_menu = new ScheduleGenerator();
+        this.keyboard_shortcuts_menu = new KeyboardShortcuts();
+        // this.advanced_functions_menu = new AdvancedFunctionsMenu();
+        this.system_manager = new SystemManagerMenu();
+        this.file_manager_menu = new FileManagerMenu();
+        this.configure_targets_menu = new TargetConfigurationMenu();
+        this.configure_external_session_menu = new ExternalSessionConfigurationMenu();
+        this.user_config_menu = new UserConfigurationSettings();
+        this.admin_menu = new AdminSettings();
+        this.set_time_pos_menu = new SetTimePosSettings();
+        this.playlist_info_menu = new InfoSettings();
+        this.change_log_menu = new ChangeLog();
+        this.split_menu = new SplitSettings();
+        this.uploads_downloads_menu = new UploadsDownloadsMenu();
+        
+        // this.fonts_menu = new FontSettings();
+
+        this.target_config_menus["local"] = new NodeMediaServerTargetConfigMenu();
+
+        (()=>{
+            var row = new UI(this.session_password_elem).append(new UI.FlexRow());
+            this.session_password = new UI.Property(null, "Password", `<input type="text">`,{
+                "default":"",
+                "reset":false,
+                "placeholder": "Enter password",
+            });
+            this.session_password.input.addEventListener("keydown", (e)=>{
+                if (e.key === "Enter") button.click();
+            });
+            var button = $(`<button class="button" title="Sign in"><i class="fas fa-key"></i></button>`)[0];
+            button.addEventListener("click", ()=>{
+                this.passwords.set(this.$._session.id, this.session_password.value);
+            });
+            this.session_password.inner.append(button);
+
+            row.append(this.session_password);
+        })()
+
+        this.sign_out_session_button.addEventListener("click", (e)=>{
+            this.passwords.delete(this.$._session.id);
+        });
+        
+        this.areas.forEach(el=>{
+            new Sortable(el, {
+                group: "layout",
+                fallbackTolerance: 3, // So that we can select items on mobile
+                animation: 150,
+                handle: ".drawer>.header",
+                filter: (e)=>{
+                    if (e.target.closest(".drawer>.header")) {
+                        if (dom_utils.has_touch_screen() || e.target.closest("button,input,select")) return true;
+                    }
+                },
+                onEnd: ()=>this.save_layout(),
+                preventOnFilter: false,
+            });
+        });
+
+        this.settings.on("load", ()=>{
+            this.update_layout();
+        });
+        
+        this.session_sortable = new ResponsiveSortable(this.sessions_tabs_elem, {
+            fallbackTolerance: 3, // So that we can select items on mobile
+            animation: 150,
+            // filter: ".unmovable",
+            handle: ".handle",
+            onEnd: (evt)=>{
+                if (this.conf["main.session_order_client"]) {
+                    this.settings.set("session-order", [...this.sessions_tabs_elem.children].map(e=>e.dataset.id));
+                } else {
+                    this.request({
+                        call: ["rearrange_sessions"],
+                        arguments: [evt.oldIndex, evt.newIndex]
+                    });
+                }
+            },
+        });
+
+        this.sessions_tabs_elem.addEventListener("contextmenu", (e) => {
+            var elem = this.session_sortable.get_item(e.target);
+            if (!elem) return;
+            e.preventDefault();
+            var i = this.session_sortable.get_item_index(elem);
+            var item = this.sessions_ordered[i];
+            var menu_items = [
+                {
+                    name: ()=>`ID: ${item.id}`,
+                    click: ()=>window.navigator.clipboard.writeText(item.id),
+                }
+            ];
+            var menu = create_menu(menu_items, {click:()=>instance.hide()});
+            var instance = create_context_menu(elem, menu, e);
+        });
+
+        this.load_session_button.addEventListener("click", async (e)=>{
+            this.load_session();
+        });
+        this.save_session_button.addEventListener("click", async (e)=>{
+            this.save_session();
+        });
+        this.history_session_button.addEventListener("click", async (e)=>{
+            this.history_menu.show();
+        });
+
+        this.show_help_button.addEventListener("click", async ()=>{
+            this.toggle_help();
+        });
+
+        this.show_config_button.addEventListener("click", ()=>this.user_config_menu.show());
+
+        this.show_admin_button.addEventListener("click", ()=>this.admin_menu.show());
+
+        window.addEventListener("hashchange", ()=>{
+            console.log("hashcange", window.location.hash);
+            this.try_attach_to(window.location.hash.slice(1));
+        });
+
+        window.addEventListener("beforeunload", ()=>{
+            for (var w of Object.values(windows)) w.close();
+        });
+
+        var fd = new FileDrop(this.playlist.elem);
+        fd.on("drop", async (files)=>{
+            if (files.length) app.playlist_add(files);
+        })
+
+        if (IS_ELECTRON) {
+            window.prompt = async (message, default_value)=>{
+                var result = await fancybox_prompt(message, default_value);
+                if (result) return result;
+                else return null;
+            };
+        }
+
+        this.footer_buttons = new UI.Row().elem;
+        this.main_elem.append(this.footer_buttons);
+        this.footer_buttons.style["justify-content"] = "end";
+    
+        if (!IS_ELECTRON) {
+            var row = new UI.FlexRow({
+                gap:0
+            })
+            row.append(
+                new UI.Button(`<i class="fa-solid fa-folder-tree"></i>`, {
+                    click: ()=>{
+                        app.file_system_info_menu.show();
+                    },
+                    title: ()=>app.file_system_info_menu.modal_title
+                }),
+                new UI.Button(`File Manager`, {
+                    click: ()=>open_file_manager({new_window:true, standalone:true})
+                })
+            );
+            this.footer_buttons.append(row);
+        }
+        
+        /* this.footer_buttons.append(
+            new UI.Button(`Font Manager`, {
+                click: ()=>app.fonts_menu.show()
+            })
+        ) */
+        this.footer_buttons.append(
+            new UI.Button(`Configure Targets`, {
+                click: ()=>this.configure_targets_menu.show()
+            }),
+            new UI.Button(`System Manager`, {
+                click: ()=>this.system_manager.show()
+            }),
+            /* new UI.Button(`Advanced Functions`, {
+                click: ()=>this.advanced_functions_menu.show()
+            }), */
+            new UI.Button(`Uploads & Downloads`, {
+                click: ()=>this.uploads_downloads_menu.show()
+            }),
+            new UI.Button(`Controls`, {
+                click: ()=>this.keyboard_shortcuts_menu.show()
+            }),
+            new UI.Button(`Change Log`, {
+                click: ()=>this.change_log_menu.show(),
+                /** @this {UI} */
+                update: function() {
+                    var diff = (app.settings.get("last_change_log") != app.$.change_log.mtime);
+                    if (this.__last_diff != diff) {
+                        if (diff) {
+                            this.elem.animate([
+                                {
+                                    "boxShadow": "0px 0px 5px 0px rgba(0,153,255,1)"
+                                },
+                                {
+                                    "boxShadow": "0px 0px 0px 0px rgba(0,153,255,0)"
+                                },
+                                {
+                                    "boxShadow": "0px 0px 5px 0px rgba(0,153,255,1)"
+                                }
+                            ], {
+                                duration: 1500,
+                                easing: "ease-in-out",
+                                iterations: Infinity
+                            });
+                        } else {
+                            this.elem.getAnimations().forEach(a=>a.cancel());
+                        }
+                    }
+                    this.__last_diff = diff;
+                }
+            }),
+            new UI.Button(`Setup External Session`, {
+                click: ()=>this.configure_external_session_menu.show()
+            }),
+        );
+        
+        setInterval(()=>this.tick(), 1000/10);
+        this.tick();
+        
+        requestAnimationFrame(()=>{
+            this.passwords.load();
+            this.settings.load();
+        })
+    }
+
+    load_font(id) {
+        if (!this.font_cache[id]) {
+            this.font_cache[id] = app.request({
+                call: ["app", "get_font"],
+                arguments: [id]
+            });
+        }
+        return this.font_cache[id];
+    }
+    
+    get_property(...path) {
+        path = path.map(p=>p.split("/")).flat().filter(p=>p);
+        var curr = this.$.properties;
+
+        for (var i = 0; i<path.length; i++) {
+            /* if (!(path[i] in curr)) {
+                curr = null;
+                break;
+            } */
+            curr = curr[path[i]];
+            if (i != path.length-1) {
+                if (path[i+1] == "*") {
+                    curr = curr.enumerable_props
+                    i++;
+                } else {
+                    curr = curr.props;
+                }
+            }
+        }
+        return curr;
+    }
+
+    get_layout() {
+        return this.areas.map(e=>[...e.children].map(c=>c.dataset.id))
+    }
+    save_layout() {
+        this.settings.set("layout", this.get_layout())
+    }
+    update_layout() {
+        (this.settings.get("layout")||this.default_layout).forEach((blocks, i)=>{
+            this.areas[i].append(...blocks.map(id=>this.panels[id]).filter(b=>b));
+        });
+    }
+
+    /** @param {PlaylistItem[]} items */
+    playlist_rescan(items) {
+        if (!Array.isArray(items)) items = [items];
+        this.request({
+            call: ["session", "update_media_info_from_ids"],
+            arguments: [items.map(item=>item.id), true],
+        });
+    }
+
+    /* playlist_rescan_all() {
+        this.request({
+            call: ["session", "update_media_info_all"],
+            arguments: [true],
+        });
+    } */
+
+    /** @param {PlaylistItem[]} items */
+    playlist_split(items, splits, local_times=false) {
+        splits = utils.sort(splits);
+        if (!splits.length) return [];
+        var promises = [];
+        var add_items = [];
+        var remove_items = [];
+        items = items.filter(i=>i.is_splittable);
+        for (var item of items) {
+            var ud = item.userdata;
+            var clip_length = ud.clipping ? ud.clipping.length : ud.duration;
+            var clip_offset = item.props.clip_offset || 0;
+            var start = local_times ? 0 : ud.timeline_start;
+            var duration = ud.timeline_duration;
+            var end = start + duration;
+            // var segment_start = start;
+            var segment_end = start;
+            for (var i = 0; i <= splits.length; i++) {
+                var segment_start = segment_end;
+                segment_end = (i < splits.length) ? splits[i] : end;
+                var d = Math.max(0, segment_end - segment_start);
+                // var segment = [segment_start, segment_end];
+                if (!(utils.almost_equal(segment_start, start) && utils.almost_equal(segment_end, end)) && segment_start >= start && segment_end <= end && d>0 && !utils.almost_equal(d, 0)) {
+                    var new_item = item.copy();
+                    new_item.props.clip_offset = clip_offset;
+                    new_item.props.clip_duration = d;
+                    clip_offset = (clip_offset + d) % clip_length;
+                    add_items.push(new_item);
+                }
+            }
+            remove_items.push(item);
+        }
+        if (add_items.length) this.playlist_add(add_items, item.index+1, item.track_index);
+        if (remove_items.length) this.playlist_remove(remove_items);
+        // await Promise.all(promises);
+    }
+
+    /** @param {PlaylistItem[]} items */
+    playlist_group(items) {
+        if (!Array.isArray(items)) items = [items];
+        items.sort((a,b)=>a.index-b.index);
+        var index = items[0].index;
+        var name = items[0].get_pretty_name()
+        var track_index = items[0].track_index
+        var props = {};
+        // if (items.length == 1)
+        props.label = name;
+        var new_item = this.playlist_add({
+            filename: "livestreamer://playlist",
+            props
+        }, index, track_index)[0];
+        var changes = Object.fromEntries(items.map((item,i)=>[item.id, {parent_id: new_item.id, index: i, track_index: 0}]));
+        this.playlist_update(changes);
+
+        /* await app.request({
+            call: ["session", "create_playlist"],
+            arguments: [items.map(item=>item.id)]
+        }); */
+
+        // delete this.$.session.playlist[fake_id];
+        // this.$.push([`sessions/${this.$.session.id}/playlist/${new_item.id}`, null]);
+    }
+
+    /** @param {PlaylistItem[]} items */
+    playlist_breakdown(items) {
+        if (!Array.isArray(items)) items = [items];
+        items = items.filter(item=>item.is_playlist);
+        // var affected_ids = [];
+        var changes = {}
+        var selection = [];
+        items.forEach((item)=>{
+            var children = item.children;
+            children.forEach((c)=>{
+                // affected_ids.push(c.id);
+                changes[c.id] = {parent_id: item.parent_id, track_index: item.track_index};
+            });
+            var parent_items = item.parent.get_track(item.track_index);
+            var i = parent_items.indexOf(item);
+            parent_items.splice(i, 1, ...children);
+            selection.push(...children);
+            parent_items.forEach((p,i)=>{
+                if (!changes[p.id]) changes[p.id] = {};
+                changes[p.id].index = i;
+            });
+        });
+        items.forEach((item)=>changes[item.id] = null);
+        this.playlist_update(changes);
+
+        this.playlist.once("rebuild", ()=>{
+            this.playlist.set_selection(selection)
+        })
+    }
+
+    /** @param {PlaylistItem[]} items */
+    playlist_move(items, pos=null, track_index=null) {
+        var affected = new Set(items);
+        var parent = this.playlist.current;
+        var parent_session_id = parent.session.id;
+        if (track_index == null) track_index = this.playlist.active_track_index;
+        pos = this.fix_insert_pos(pos, track_index);
+        var parent_items = parent.get_track(track_index);
+        parent_items = parent_items.map(item=>affected.has(item)?null:item);
+        for (var [session_id, group] of Object.entries(utils.group_by(items, i=>i.session.id))) {
+            if (session_id == parent_session_id) {
+                parent_items.splice(pos, 0, ...group);
+            } else {
+                this.playlist_remove(group);
+                this.playlist_add(group, pos-1, track_index);
+            }
+            pos += group.length;
+        }
+        parent_items = parent_items.filter(i=>i);
+        var data = Object.fromEntries(parent_items.map((item,i)=>[item.id, {index:i, track_index, parent_id:parent.id}]));
+        this.playlist_update(data, parent_session_id);
+
+        this.playlist.once("rebuild", ()=>{
+            this.playlist.set_selection(items)
+        })
+    }
+
+    /** @param {any[]} items */
+    playlist_add(items, insert_pos=null, track_index=null) {
+        if (!Array.isArray(items)) items = [items];
+
+        if (track_index == null) track_index = this.playlist.active_track_index;
+        track_index = utils.clamp(track_index, 0, 1);
+        insert_pos = this.fix_insert_pos(insert_pos, track_index);
+        var parent = this.playlist.current;
+        var new_items = [];
+        var add_file = (d,i,parent_id,track_index)=>{
+            let filename = null;
+            var item = {};
+            var id = dom_utils.uuidv4();
+            if (d instanceof File) {
+                if (IS_ELECTRON) {
+                    filename = d.path;
+                } else {
+                    filename = `upload://${d.name}`;
+                    d.id = id;
+                    this.upload_queue.add(d, {
+                        first_and_last_pieces_first: !!d.name.match(/\.mp4$/i),
+                        media: true,
+                        session: this.$._session.id,
+                    });
+                }
+            } else if (typeof d === "string") {
+                filename = d;
+            } else {
+                filename = d.filename;
+            }
+            item.filename = filename
+            item.id = id
+            item.index = i;
+            item.track_index = track_index;
+            item.parent_id = parent_id;
+            if (d.props) item.props = d.props;
+
+            new_items.push(item);
+            if (d instanceof PlaylistItem) {
+                d.children.forEach((c,i)=>add_file(c, i, item.id, c.track_index||0));
+            }
+            return item;
+        }
+        items.forEach((f,i)=>add_file(f, insert_pos + i, parent.id, track_index));
+
+        var new_playlist = Object.fromEntries(new_items.map(f=>[f.id,f]));
+        parent.get_track(track_index).slice(insert_pos).forEach((item,i)=>{
+            new_playlist[item.id] = {index: insert_pos + items.length + i};
+        });
+
+        this.$._push([`sessions/${this.$._session.id}/playlist`, new_playlist]);
+        // no await...
+        this.request({
+            call: ["session","playlist_add"],
+            arguments: [new_items, insert_pos, this.playlist.current.id, track_index]
+        });
+
+        this.playlist.once("rebuild", ()=>{
+            this.playlist.set_selection(new_items)
+        });
+
+        this.playlist.focus();
+
+        return new_items;
+    }
+
+    /** @param {PlaylistItem[]} items */
+    async playlist_remove(items) {
+        if (!Array.isArray(items)) items = [items];
+        if (items.length == 0) return;
+        for (var item of items) {
+            var ul = item.upload;
+            if (ul) app.upload_queue.cancel(ul.id);
+        }
+        for (var [session_id, group] of Object.entries(utils.group_by(items, i=>i.session.id))) {
+            var all_deleted_items = new Set(group.map(i=>[i, ...i.descendents]).flat());
+            this.request({
+                call: ["sessions", session_id, "playlist_remove"],
+                arguments: [group.map(i=>i.id)]
+            });
+            this.$._push(...[...all_deleted_items].map(item=>[`sessions/${session_id}/playlist/${item.id}`, null]));
+            var next_item, current_item;
+            next_item = current_item = this.$._session.current_playing_item;
+            if (all_deleted_items.has(next_item)) {
+                if (this.$._session.is_running) {
+                    while (all_deleted_items.has(next_item)) {
+                        next_item = next_item.next;
+                    }
+                } else {
+                    next_item = NULL_PLAYLIST_ITEM;
+                }
+            }
+            if (next_item !== current_item) {
+                this.playlist_play(next_item);
+            }
+        }
+    }
+
+    /** @param {object} changes */
+    async playlist_update(changes, session_id) {
+        if (!session_id) session_id = app.$._session.id;
+        changes = utils.tree_from_entries(changes)
+        changes = cull(changes, this.$.sessions[session_id].playlist);
+        if (changes) {
+            this.$._push([`sessions/${session_id}/playlist`, changes]);
+            this.request({
+                call: ["sessions", session_id, "playlist_update"],
+                arguments: [changes]
+            });
+        } else {
+            this.playlist.rebuild_next_frame();
+        }
+    }
+    
+    /** @param {PlaylistItem[]} items */
+    playlist_download(items) {
+        this.request({
+            call: ["session", "download_and_replace"],
+            arguments: [items.map(item=>item.id)]
+        }, {
+            show_spinner: false
+        });
+    }
+    
+    /** @param {PlaylistItem[]} items */
+    playlist_cancel_download(items){
+        this.request({
+            call: ["session", "cancel_download"],
+            arguments: [items.map(item=>item.id)]
+        }, {
+            show_spinner: false
+        });
+    }
+    
+    /** @param {PlaylistItem[]} items */
+    playlist_cancel_upload(items) {
+        items.forEach(i=>app.upload_queue.cancel(i.id));
+        // this also cancels it for other users:
+        this.request({
+            call: ["session", "cancel_upload"],
+            arguments: [items.map(item=>item.id)]
+        }, {
+            show_spinner: false
+        });
+    }
+
+    /** @param {PlaylistItem} item */
+    playlist_play(item, start=0) {
+        var options = {pause:false};
+        var root_merged = item.root_merged_playlist;
+        if (root_merged) {
+            var t = 0;
+            for (var p of [item, ...item.get_parents(root_merged)]) {
+                t += p.userdata.start;
+                p = p.parent;
+                var ud = p.userdata;
+                if (ud.clipping) {
+                    // damn this gets complicated... but it works.
+                    t = utils.loop(t - ud.clipping.offset, ud.clipping.start, ud.clipping.end) - ud.clipping.start;
+                }
+            }
+            item = root_merged;
+            start += t;
+        }
+        options.start = start
+
+        /* this.$.push(
+            [`sessions/${this.$.session.id}/playlist_id`, item.id],
+            [`sessions/${this.$.session.id}/current_time`, start]
+        ); */
+        
+        this.media_player.seek.seek(options.start);
+        
+        return this.request({
+            call: ["session","playlist_play"],
+            arguments: [item.id, options]
+        });
+    }
+
+    /** @param {string[]} uris */
+    navigate_to(uris) {
+        if (!Array.isArray(uris)) uris = [uris];
+        var seen = new Set();
+        for (var uri of uris) {
+            if (seen.has(uri)) continue;
+            seen.add(uri);
+            var is_file = !utils.is_uri(uri) || uri.startsWith("file:");
+            if (IS_ELECTRON) {
+                if (is_file) electron.shell.showItemInFolder(utils.try_file_uri_to_path(uri.replace(/\//g, "\\")));
+                else electron.shell.openExternal(uri);
+            } else {
+                if (is_file) open_file_manager({start: utils.try_file_uri_to_path(uri)});
+                else window.open(uri, "_blank");
+            }
+        }
+    }
+
+    /** @param {number} t */
+    seek(t, relative=false) {
+        if (relative) t += this.get_current_time_pos();
+        if (t < 0) t = 0;
+        this.media_player.seek.seek(t);
+        app.$._push([`sessions/${app.$._session.id}/current_time`, t]);
+        
+        return this.request({
+            call: ["session", "seek"],
+            arguments: [t]
+        });
+    }
+
+    seek_chapter(i, relative=false) {
+        var chapters = this.get_current_chapters();
+        if (relative) {
+            var t = this.get_current_time_pos();
+            var c = this.get_current_chapter_at_time(t);
+            if (c) {
+                if ((c.start - t) < -5 && i < 0) i++;
+                i += c.index;
+            }
+        }
+        i = utils.clamp(i, 0, chapters.length-1);
+        c = chapters[i];
+        if (c) {
+            return this.seek(c.start);
+        }
+    }
+
+    fix_insert_pos(pos, track_index) {
+        var num_items = this.playlist.current.get_track(track_index).length;
+        if (pos == null) {
+            var last_active = this.playlist.sortables[track_index].get_last_active();
+            pos = (last_active) ? dom_utils.get_index(last_active) + 1 : num_items;
+        }
+        pos = utils.clamp(pos, 0, num_items);
+        return pos;
+    }
+
+    // ---------------
+    
+    get_playlist_item(id) {
+        return this.$._session.playlist[id];
+    }
+    get_media_info(filename) {
+        return this.$.media_info[filename];
+    }
+    get_items_with_media(filename) {
+        return Object.values(this.$._session.playlist).filter(i=>i.userdata.filenames.includes(filename));
+    }
+    /** @return {Chapter[]} */
+    get_current_chapters() {
+        return this.$._session.current_playing_item.userdata.chapters;
+    }
+    get_current_duration() {
+        var d;
+        if (this.$._stream.is_running) {
+            d = this.$._stream.mpv.duration || 0;
+        } else {
+            d = 0;
+            var item = this.$._session.current_playing_item;
+            if (item.is_playlist && !item.is_merged_playlist) d = 0;
+            else d = item.userdata.duration;
+        }
+        return round_ms(d || 0);
+    }
+
+    get_current_time_pos() {
+        if (this.$._stream.is_running) return this.$._session.stream.mpv.time;
+        return this.$._session.current_time;
+    }
+
+    get_current_seekable_ranges() {
+        if (this.$._stream.is_running) return this.$._stream.mpv.seekable_ranges;
+        return [];
+    }
+
+    get_current_chapters_at_time(t) {
+        return this.get_current_chapters().filter(c=>t>=c.start && t<c.end);
+    }
+    
+    /** @param {Element} parent_elem @param {PlaylistItem} item */
+    build_playlist_breadcrumbs(parent_elem, item, exclude_root=false, bold_current=false) {
+        var path = [item, ...item.parents].reverse().filter(p=>p);
+        var path_hash = JSON.stringify([this.playlist.current.id, path.map(i=>[i.id, i.hash])]);
+        if (parent_elem._path_hash === path_hash) return;
+        parent_elem._path_hash = path_hash;
+        dom_utils.empty(parent_elem);
+        parent_elem.classList.add("breadcrumbs");
+        path.forEach((item,i)=>{
+            var elem = $(`<a></a>`)[0];
+            var name = item.get_pretty_name() || "[Untitled]";
+            if (item.is_root) {
+                if (exclude_root) return;
+                elem.style.overflow = "visible";
+                elem.innerHTML = `<i class="fas fa-house"></i>`;
+            } else {
+                elem.innerHTML = name;
+            }
+            elem.href = "javascript:void(0)";
+            parent_elem.append(elem);
+            elem.onclick = ()=>item.reveal();
+            elem.title = name;
+            if (bold_current && !item.is_null && item.parent === this.playlist.current.parent) {
+                elem.style["font-weight"] = "bold";
+            }
+            if (i != path.length-1) {
+                parent_elem.append($(`<i></i>`)[0]);
+            }
+        });
+    }
+
+    get_current_chapter_at_time(t) {
+        return this.get_current_chapters_at_time(t).pop();
+    }
+
+    get_handover_sessions_options(include_none=true) {
+        var sessions = this.sessions_ordered.filter(s=>s.type==="InternalSession" && !s.is_running);
+        var names = sessions.map(s=>s.name);
+        names = utils.uniquify(names, (s,i,n)=>n>1?`${s} [${i+1}]`:s);
+        var options = names.map((n,i)=>[sessions[i].id,n])
+        if (include_none) options.unshift([null, "-"]);
+        return options;
+    }
+    /** @param {PlaylistItem[]} items */
+    get_playlist_items_title(items) {
+        var items = items.filter(i=>i);
+        if (items.length > 1) return `${items.length} Files`;
+        if (items.length == 1) {
+            return `'${items[0].get_pretty_name()}'`;
+        }
+        return `[No Item]`;
+    }
+
+    update_request_loading() {
+        this.request_loading_elem.classList.toggle("v-none", this.$.pending_requests.size == 0);
+    }
+
+    request_no_timeout(data) {
+        return this.ws.request(data, 0);
+    }
+
+    request(data, opts) {
+        opts = {
+            show_spinner: true,
+            block: false,
+            timeout: 60 * 1000,
+            ...opts
+        };
+        return new Promise(async (resolve)=>{
+            // replace undefineds with nulls
+            /* utils.deep_walk(data, function(k,v) {
+                if (v === undefined) this[k] = null;
+            }); */
+            if (this.dev_mode) {
+                console.debug(`request`, JSON.stringify(data));
+            }
+            var ws_promise = this.ws.request(data, opts.timeout);
+
+            if (opts.show_spinner) this.$.pending_requests.add(ws_promise);
+            var loader;
+            if (opts.block) {
+                loader = new Loader();
+                loader.update({visible:true, text:"Loading..."});
+            }
+            this.update_request_loading();
+
+            // delete this.expected_changes[r];
+            this.last_request = ws_promise
+                .then(d=>resolve(d))
+                .catch((e)=>{
+                    if (e instanceof utils.TimeoutError) return;
+                    if (this.dev_mode) {
+                        console.warn("Server error:\n" + e.toString());
+                        window.alert("Server error:\n" + e.toString());
+                    }
+                })
+                .finally(()=>{
+                    if (opts.show_spinner) this.$.pending_requests.delete(ws_promise);
+                    this.update_request_loading();
+                    if (opts.block) loader.destroy();
+                });
+        })
+    }
+
+    /* chat_blocklist_add = (...args)=>this.blocklist_command("chat_blocklist", "add", ...args);
+    chat_blocklist_remove = (...args)=>this.blocklist_command("chat_blocklist", "remove", ...args);
+    app_blocklist_add = (...args)=>this.blocklist_command("app_blocklist", "add", ...args);
+    app_blocklist_remove = (...args)=>this.blocklist_command("app_blocklist", "remove", ...args);
+    
+    blocklist_command(blocklist, command, ...args) {
+        return this.request({
+            call: [["app", blocklist, command], args],
+        });
+    } */
+
+    async try_attach_to(session_id) {
+        if (session_id && !this.$.sessions[session_id]) return;
+        if (!this.$.client_id) return;
+        session_id = session_id || "";
+        var new_hash = `#${session_id}`;
+        this.settings.set("last_session_id", session_id);
+        if (window.location.hash !== new_hash) {
+            window.history.replaceState({}, '', new_hash);
+        }
+        if (this.$._client.session_id != session_id) {
+            this.request({
+                call: ["attach_to"],
+                arguments: [session_id]
+            });
+            this.$._push([`clients/${this.$.client_id}/session_id`, session_id]);
+        }
+        return true;
+    }
+
+    set_loading(val, text) {
+        this.elem.style.display = val ? "none" : "";
+        this.loader.update({visible:val, text});
+    }
+
+    async update_$() {
+        var last_session = this.$._session;
+        var last_stream = this.$._session.stream;
+        var last_playlist_id = this.$._session.playlist_id;
+
+        var rebuild_playlist;
+        var changes = utils.tree_from_entries(this.$._changes);
+        this.$._changes.length = 0;
+        
+        // !! IMPORTANT FOR DATES AND THINGS LIKE THAT.
+        utils.deep_walk(changes, function(k,v) {
+            if (v && typeof v === "object" && v.toJSON && typeof v.toJSON === "function") {
+                this[k] = v.toJSON();
+            }
+        });
+        
+        this.$._update(changes);
+
+        var client_id = this.$.client_id;
+        var curr_stream = this.$._session.stream;
+        var is_new_session = this.$._session != last_session;
+        var is_new_stream = curr_stream != last_stream;
+        
+        var session_changes = is_new_session ? this.$._session : (changes.sessions||EMPTY_OBJECT)[this.$._session.id];
+        var stream_changes = (is_new_session || is_new_stream) ? curr_stream : (changes.streams||EMPTY_OBJECT)[curr_stream.id];
+        // remove_empty_objects_from_tree(changes);
+
+        var is_null_session = this.$._session === NULL_SESSION;
+        var access_control = new AccessControl(this.$._session.access_control);
+        var has_ownership = access_control.self_is_owner_or_admin || access_control.owners.length == 0;
+        var has_access = is_null_session || access_control.self_has_access(app.passwords.get(this.$._session.id)) || this.$._client.is_admin;
+        var requires_password = access_control.self_requires_password;
+        var is_external_session = this.$._session.type === "ExternalSession";
+        var is_running = this.$._session.is_running;
+
+        if (this.$._client.session_id !== window.location.hash.slice(1)) {
+            window.location.hash = this.$._client.session_id || ""
+        }
+        // var hash = this.$.session ? `#${this.$.session.id}` : "";
+        // if (window.location.hash !== hash) window.location.hash = hash;
+
+        this.session_elem.classList.toggle("d-none", is_null_session);
+        this.session_elem.dataset.type = this.$._session.type;
+
+        this.session_inner_elem.classList.toggle("d-none", !has_access);
+
+        this.session_controls_wrapper_elem.classList.toggle("d-none", is_null_session);
+        this.no_sessions_elem.classList.toggle("d-none", !is_null_session && has_access);
+        this.no_sessions_elem.querySelector(".no-session").classList.toggle("d-none", !has_access);
+        this.no_sessions_elem.querySelector(".no-access").classList.toggle("d-none", has_access);
+        this.no_sessions_elem.querySelector(".owner").classList.toggle("d-none", has_access);
+        dom_utils.set_inner_html(this.no_sessions_elem.querySelector(".owner"), `This session is owned by ${access_control.owners.map(u=>`[${u.username}]`).join(" | ")}`);
+        this.session_password_elem.classList.toggle("d-none", has_access || !requires_password);
+        
+        this.session_load_save_elem.style.display = is_external_session ? "none": "";
+
+        this.playlist.hidden = is_external_session;
+        this.media_player.hidden = is_external_session;
+        this.media_settings.hidden = is_external_session;
+
+        this.load_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
+        this.save_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
+        this.history_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
+        
+        this.sign_out_session_button.classList.toggle("d-none", has_ownership || !(requires_password && has_access));
+        this.config_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
+        this.destroy_session_button.toggleAttribute("disabled", !has_ownership);
+
+        if (is_new_stream) this.encoder.reset_chart();
+        if (is_new_session) {
+            this.playlist.sortables.forEach(s=>s.deselect_all());
+            this.session_logger.empty();
+            this.encoder.reset_chart();
+            this.session_password.reset();
+            this.playlist.open(null);
+
+            if (last_session != NULL_SESSION && !this.$.sessions[last_session.id] && this.last_destroyed_session_id != last_session.id) {
+                alert(`'${last_session.name}' was terminated by another user or internally.`);
+            }
+        }
+        // var ignore_vars = new Set(["output-frames","output-pts","estimated-display-fps", "estimated-vf-fps", "real-time-pos", "time-pos", "duration", "real-duration"]);
+        
+        /* for (var s of Object.values(changes.sessions)) {
+            for (var k of ["output-frames","output-pts","estimated-display-fps", "estimated-vf-fps", "real-time-pos", "time-pos", "duration", "real-duration"]) {
+                delete s.player[k];
+            }
+        } */
+        /* var rebuild_sessions = false;
+        if (changes.sessions) {
+            for (var s of Object.values(changes.sessions)) {
+                var paths = utils.deep_entries(s).map(e=>e[0]);
+                for (var k in s) {
+                    if (k != "time") rebuild_sessions = true;
+                }
+            }
+        } */
+
+        if (changes.clients || changes.sessions) {
+            this.rebuild_sessions();
+        }
+        if (changes.clients || (session_changes && session_changes.access_control)) {
+            this.rebuild_clients();
+        }
+        
+        /* if (changes.change_log && !this.seen_change_log) {
+            this.seen_change_log = true;
+            if (this.settings.get("last_change_log") != this.$.change_log.mtime) {
+                this.settings.set("last_change_log", this.$.change_log.mtime);
+                this.change_log_menu.show();
+            }
+        } */
+        
+        if (changes.plugins) {
+            for (var k in changes.plugins) this.init_plugin(this.$.plugins[k]);
+        }
+
+        if ((session_changes && session_changes.last_stream) || (stream_changes && stream_changes.speed_history)) {
+            this.encoder.debounced_update_chart();
+        }
+        
+        /* if (stream_changes) {
+            console.debug("stream_changes", stream_changes);
+        } */
+
+        if (stream_changes || session_changes) {
+            this.stream_settings.update_next_frame();
+            this.media_player.update_next_frame();
+            this.media_settings.update_next_frame();
+        }
+        if (session_changes) {
+            if (this.dev_mode) {
+                /* var walk = (o, path=[])=>{
+                    var path_str = path.join("/");
+                    if (ignore_logging_session_$.has(path_str)) return;
+                    if (typeof o === "object" && o !== null) {
+                        var copy = {...o};
+                        var all_deleted = true;
+                        for (var k of Object.keys(copy)) {
+                            var v = walk(copy[k], [...path, k]);
+                            if (v === undefined) delete copy[k];
+                            else {
+                                copy[k] = v;
+                                all_deleted = false;
+                            }
+                        }
+                        if (all_deleted) return;
+                        return copy;
+                    }
+                    return o;
+                }
+                var filtered_session_changes = walk(session_changes);
+                if (filtered_session_changes) {
+                    console.debug("session_changes", filtered_session_changes);
+                } */
+            }
+
+            if (session_changes.playlist && !Object.isFrozen(this.$._session)) {
+                var ids = new Set([...Object.keys(this.$._session.playlist_deleted), ...Object.keys(session_changes.playlist)]);
+                for (var id of ids) {
+                    let new_item = this.$._session.playlist[id];
+                    let old_item = this.$._session.playlist_deleted[id] || new_item;
+                    if (new_item) new_item.__private.num_updates++;
+                    let old_parent = old_item ? old_item.__private.parent : null;
+                    let new_parent = new_item ? new_item.parent : null;
+                    if (old_parent) {
+                        old_parent.__private.children.delete(old_item);
+                        old_parent.__private.children_ordered = null;
+                        old_item.__private.parent = null;
+                    }
+                    if (new_parent) {
+                        new_parent.__private.children.add(new_item);
+                        new_parent.__private.children_ordered = null;
+                        new_item.__private.parent = new_parent;
+                    }
+                }
+            }
+            var curr_playlist = this.playlist.current
+            if (curr_playlist.is_deleted) {
+                this.playlist.open(null);
+            }
+
+            /* if (session_changes.playlist !== undefined || session_changes.playlist_info !== undefined || session_changes.downloads !== undefined || session_changes.media_info !== undefined || session_changes.media_info_processing !== undefined || session_changes.media_info_processing || session_changes.is_connected_rtmp !== undefined) {
+                this.playlist.debounced_rebuild();
+            } */
+            
+            if (session_changes.logs) {
+                this.session_logger.update_logs(session_changes.logs);
+            }
+            if (session_changes.playlist) {
+            }
+            if (session_changes.player || session_changes.player_default_override) {
+            }
+
+            this.playlist_modify_menu.update_next_frame();
+            this.stream_settings.update_next_frame();
+            this.session_config_menu.update_next_frame();
+            this.schedule_stream_menu.update_next_frame();
+        }
+
+        {
+            let filenames = new Set();
+            let ids = new Set();
+            if (changes.downloads) {
+                utils.set_add(ids, Object.keys(changes.downloads));
+            }
+            if (changes.uploads) {
+                utils.set_add(ids, Object.keys(changes.uploads));
+            }
+            if (changes.uploads) {
+                for (var id in changes.uploads) {
+                    var ul = this.$.uploads[id];
+                    if (!ul || ul.status === UploadStatus.CANCELED) {
+                        this.upload_queue.cancel(id);
+                    }
+                }
+            }
+            if (changes.media_info) {
+                utils.set_add(filenames, Object.keys(changes.media_info));
+            }
+            if (changes.nms_sessions !== undefined) {
+                utils.set_add(ids, this.playlist.current.children.filter(i=>i.filename==="livestreamer://rtmp").map(i=>i.id));
+            }
+            if (session_changes) {
+                /* if (session_changes.downloads) {
+                    utils.set_add(ids, Object.keys(session_changes.downloads));
+                } */
+                if (session_changes.playlist) {
+                    utils.set_add(ids, Object.keys(session_changes.playlist));
+                }
+                /* if (session_changes.playlist_info) {
+                    utils.set_add(ids, Object.keys(session_changes.playlist_info));
+                } */
+            }
+            if (last_playlist_id !== this.$._session.playlist_id) {
+                utils.set_add(ids, [last_playlist_id, this.$._session.playlist_id]);
+            }
+            utils.set_add(ids, [...filenames].map(k=>this.get_items_with_media(k)).flat().map(i=>i.id));
+            
+            if (ids.size) {
+                /** @type {PlaylistItem[]} */
+                var items = [];
+                for (var id of ids) {
+                    let item = this.get_playlist_item(id);
+                    if (item) {
+                        items.push(item, ...item.parents);
+                    } else {
+                        var deleted_item = this.$._session.playlist_deleted[id];
+                        if (deleted_item) {
+                            items.push(...deleted_item.parents);
+                        }
+                    }
+                }
+                items.forEach(item=>item.__private.userdata = null);
+                rebuild_playlist = true;
+            }
+        }
+
+        if (changes.processes || changes.sysinfo || changes.process_info) {
+            this.system_manager.update();
+        }
+
+        if (changes.settings) {
+            this.user_config_menu.update();
+        }
+
+        if ((changes.settings && (changes.settings["playlist_show_scheduled_times"] !== undefined || changes.settings["schedule_generator"])) ||
+            (session_changes && (session_changes.schedule_start_time || ("playlist_id" in session_changes) || session_changes.last_stream)) ||
+            (stream_changes && "state" in stream_changes)) {
+                rebuild_playlist = true;
+        }
+        
+        if (changes.logs !== undefined) {
+            if (this.app_logger) this.app_logger.update_logs(changes.logs);
+        }
+
+        // this.media_player.update_video_player();
+
+        if (rebuild_playlist) {
+            this.playlist.rebuild();
+        }
+        
+        this.playlist.update_playlist();
+        
+        this.app_log_section.classList.toggle("d-none", !this.$._client.is_admin);
+
+        // we can forget old items now (I think)
+        utils.clear(this.$._session.playlist_deleted);
+        
+        if (!utils.is_empty(changes)) {
+            this.emit("change", changes);
+        }
+    }
+
+    add_notice(content, dismissable = true) {
+        throw new Error("not implemented yet");
+        var notice = $(`<div class="notice custom-notice">${content}</div>`)[0];
+        if (dismissable) notice.classList.add("is-dismissible");
+        notice.classList.add("below-h2"); // fixes fucking annoying wordpress automatically moving it after header on page load.
+        notices_elem.appendChild(notice);
+        return notice;
+    }
+
+    remove_plugins() {
+        console.log("remove_plugins");
+        for (var k in this.plugins) this.plugins[k].destroy();
+        this.plugins = {};
+    }
+
+    async init_plugin(d) {
+        console.log("init_pugin", d.id);
+        if (this.plugins[d.id]) {
+            this.plugins[d.id].destroy();
+            delete this.plugins[d.id];
+        }
+        try {
+            var plugin_js = await (await fetch(d.js)).text();
+            this.plugins[d.id] = eval.apply(window, [plugin_js]);
+        } catch (e) {
+            console.error(`Plugin '${d.id}' failed to load...`)
+            console.error(e);
+        }
+    }
+
+    tick() {
+        dom_utils.toggle_class(this.body, "is-touch", dom_utils.has_touch_screen());
+    }
+
+    rebuild_clients() {
+        console.debug("rebuild_clients");
+
+        dom_utils.empty(this.users_elem);
+        var session_id = this.$._client.session_id;
+        if (!session_id) return;
+        
+        var clients = Object.values(this.$.clients).filter(c=>c.session_id == session_id);
+        var users_stacked = {};
+        clients.forEach(c=>{
+            if (users_stacked[c.username] === undefined) users_stacked[c.username] = [];
+            users_stacked[c.username].push(c);
+        });
+
+        var users = Object.values(users_stacked).map(u=>u[0].username);
+        utils.sort(users, a=>a.username);
+        var owners = new AccessControl(this.$._session.access_control).owners.map(u=>u.username);
+        var groups = {"owners":owners, "users":users};
+        for (var [k,group] of Object.entries(groups)) {
+            if (group.length == 0) continue;
+            for (var username of group) {
+                var elem = $(`<span class="user"></span>`)[0];
+                var text = username;
+                if (this.$._client.username == username) {
+                    text = `Me`;
+                    elem.classList.add("is-self");
+                }
+                if (k === "owners") {
+                    $(elem).append(`<i class="fas fa-user-tie"></i>`);
+                    elem.classList.add("is-owner");
+                } else {
+                    $(elem).append(`<i class="fas fa-user"></i>`);
+                    var num = users_stacked[username] ? users_stacked[username].length : 0;
+                    if (num > 1) text += ` (${num})`;
+                }
+                $(elem).append(`<span>${text}</span>`);
+                elem.title = `${username} (${utils.capitalize(k.slice(0,-1))})`;
+                this.users_elem.append(elem);
+            }
+        }
+    }
+
+    get sessions_ordered() {
+        if (this.conf["main.session_order_client"]) {
+            var order = this.settings.get("session-order") || EMPTY_ARRAY;
+            return utils.sort(Object.values(this.$.sessions), (s)=>{
+                var i = order.indexOf(s.id);
+                if (i == -1) return Number.MAX_SAFE_INTEGER;
+                return i;
+            }, (s)=>s.index);
+        } else {
+            return utils.sort(Object.values(this.$.sessions), (s)=>s.index);
+        }
+    }
+
+    async rebuild_sessions() {
+        await this.session_sortable.last_drag;
+
+        var items = this.sessions_ordered;
+        var session_id = this.$._client.session_id;
+        dom_utils.rebuild(this.sessions_tabs_elem, items, {
+            add: (item, elem, i)=>{
+                if (!elem) elem = $(`<a class="session-tab"><div class="handle"><i class="fa-solid fa-grip-lines"></i></div><span class="name"></span><span class="icons"></span></a>`)[0];
+                var access_control = new AccessControl(item.access_control);
+                var has_access = access_control.self_has_access(app.passwords.get(item.id));
+                var requires_password = item.access_control.self_requires_password;
+                var is_active = item.id == session_id;
+                var is_owner = item.access_control.self_is_owner;
+                var state = item.stream.state;
+                var hash = JSON.stringify([item.name, item.schedule_start_time, state, is_owner, is_active, has_access, requires_password]);
+                if (elem._hash == hash) return;
+                elem._hash = hash
+
+                var handle = elem.querySelector(".handle");
+                // dom_utils.toggle_class(handle, "d-none", !access_control.self_can_edit)
+                elem.setAttribute("href", `#${item.id}`);
+                elem.querySelector(".name").textContent = item.name;
+                elem.setAttribute("title", item.name);
+                // elem.classList.toggle("unmovable", !item.movable);
+                var icons = elem.querySelector(".icons");
+                icons.innerHTML = "";
+                var option_data = {text: item.name, value:item.id};
+                if (is_owner) {
+                    icons.innerHTML += `<i class="fas fa-user-tie"></i>`;
+                    option_data.text += ` [Owner]`
+                } else if (!requires_password && !has_access) {
+                    icons.innerHTML += `<i class="fas fa-lock"></i>`;
+                    option_data.text += ` [Locked]`
+                }
+                if (requires_password) {
+                    icons.innerHTML += `<i class="fas fa-key"></i>`;
+                    option_data.text += ` [Password]`;
+                }
+                elem.option_data = option_data;
+                elem.classList.toggle("locked", !has_access);
+                var schedule_start_time = item.schedule_start_time ? +new Date(item.schedule_start_time) : 0;
+                if (["starting","stopping"].includes(state)) {
+                    icons.innerHTML += `<i class="fas fa-sync fa-spin"></i>`;
+                } else if (state === "started") {
+                    icons.innerHTML += `<i class="fas fa-circle blinking"></i>`;
+                } else if (schedule_start_time > Date.now()) {
+                    icons.innerHTML += `<i class="far fa-clock"></i>`;
+                }
+                elem.classList.toggle("active", is_active);
+                elem.classList.toggle("live", state !== "stopped");
+                return elem;
+            },
+        });
+        dom_utils.set_select_options(this.sessions_select, [["","-",{style:{"display":"none"}}], ...[...this.sessions_tabs_elem.children].map(e=>e.option_data)]);
+        dom_utils.set_value(this.sessions_select, this.$._client.session_id || "");
+    }
+
+    get_user(id) {
+        for (var client of Object.values(this.$.clients)) {
+            if (client.user_id == id) {
+                return { "id": client.user_id, "username": client.username };
+            }
+        }
+        return null;
+    }
+
+    get user_time_format() { return this.settings.get("time_display_ms") ? "h:mm:ss.SSS" : "h:mm:ss"; }
+
+    async load_session() {
+        var files = await open_file_dialog(".json,.csv,.txt");
+        var text = await read_file(files[0]);
+        /* var filename = files[0].name;
+        if (filename.match(/\.txt$/i)) {
+        } else if (filename.match(/\.json$/i)) {
+        } else if (filename.match(/\.csv$/i)) {
+        }
+        if (text.startsWith("//")) {
+            var n = text.indexOf(`\n`);
+            var info = text.slice(0, n);
+            text = text.slice(n);
+        }
+        text = text.trim(); */
+        var data;
+        try { data = JSON.parse(text); } catch {}
+        if (data) {
+            this.request({
+                call: ["session","load"],
+                arguments: [data]
+            });
+        }
+    }
+
+    async save_session() {
+        var data = await this.request({
+            call: ["session", "get_user_save_data"]
+        });
+        var name = `${utils.sanitize_filename(this.$._session.name)}-${utils.date_to_string()}`
+        await save_local_file(`${name}.json`, JSON.stringify(data, null, "  "));
+    }
+
+    async toggle_help() {
+        if (!this.help_container) {
+            this.help_container = $(await fetch("./help.html").then(d=>d.text()))[0];
+            this.elem.append(this.help_container);
+            var close_button = this.help_container.querySelector("button.close");
+            close_button.onclick = ()=>this.toggle_help();
+        }
+        dom_utils.toggle_class(this.body, "show-side-panel");
+    }
+    chapter_to_string(c, show_time=false) {
+        var item = this.get_playlist_item(c.id);
+        var title = c.title || (item ? item.get_pretty_name() : null);
+        var parts = [`${String(c.index+1).padStart(2,"0")}.`];
+        if (title) parts.push(title);
+        if (show_time) parts.push(`[${utils.seconds_to_timespan_str(c.start)}]`);
+        return parts.join(" ");
+    }
+
+    filename_to_elfinder_hash(uri) {
+        if (!utils.is_uri(uri)) uri = utils.path_to_file_uri(uri);
+        var volume = Object.values(this.$.volumes).find(v=>uri.startsWith(v.uri) || v.uri == (uri+"/"));
+        if (volume) {
+            var relpath = decodeURI(uri.slice(volume.uri.length));
+            if (!relpath.startsWith("/")) relpath = "/"+relpath;
+            return volume.id + btoa(unescape(encodeURIComponent(relpath))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'.').replace(/\.+$/,'');
+        }
+    }
+    prompt_for_reload_of_current_item() {
+        if (window.confirm(`The item is currently playing and requires reloading to apply changes.\nDo you want to reload?`)) {
+            app.request({
+                call: ["session", "reload"]
+            });
+        }
+    }
+
+    destroy() {
+        this.removeAllListeners();
+        // UI.destroy();
+        // window.removeEventListener("keydown", this.on_keydown);
+        // window.removeEventListener("hashchange", this.on_hashchange);
+        // window.removeEventListener("beforeunload", this.beforeunload);
+        // this.playlist.destroy();
+    }
+};
+
+/* window.addEventListener("message", (e)=>{
+    console.log(e);
+    var d = JSON.parse(e.data);
+    if (d.event) {
+        console.log(d.event);
+    }
+}); */
+
+export var app = new App();
+app.init();
