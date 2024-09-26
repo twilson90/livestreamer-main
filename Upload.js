@@ -1,8 +1,7 @@
-const fs = require("fs-extra");
-const path = require("node:path");
-const core = require("@livestreamer/core");
-const utils = require("@livestreamer/core/utils");
-const DataNode = require("@livestreamer/core/DataNode");
+import fs from "fs-extra";
+import path from "node:path";
+import { core, utils, DataNode } from "@livestreamer/core";
+import { app } from "./internal.js";
 
 const log_interval = 1 * 1000;
 
@@ -170,6 +169,4 @@ class Upload extends DataNode {
     }
 }
 
-module.exports = Upload;
-
-const app = require(".");
+export default Upload;

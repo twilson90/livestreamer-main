@@ -1,6 +1,5 @@
-const SessionBase = require("./SessionBase");
-const core = require("@livestreamer/core");
-const utils = require("@livestreamer/core/utils");
+import {  utils } from "@livestreamer/core";
+import { SessionBase } from "./internal.js";
 
 class ExternalSession extends SessionBase {
     nms_session;
@@ -31,4 +30,4 @@ class ExternalSession extends SessionBase {
     }
 }
 
-module.exports = ExternalSession;
+export default ExternalSession;

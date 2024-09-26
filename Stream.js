@@ -1,11 +1,7 @@
-const fs = require("fs-extra");
-const path = require("node:path");
-const execa = require("execa");
-const core = require("@livestreamer/core");
-const DataNode = require("@livestreamer/core/DataNode");
-const utils = require("@livestreamer/core/utils");
-const Logger = require("@livestreamer/core/Logger");
-const FFMPEGWrapper = require("@livestreamer/core/FFMPEGWrapper");
+import fs from "fs-extra";
+import path from "node:path";
+import { core, utils, DataNode, FFMPEGWrapper, MPVWrapper, Logger } from "@livestreamer/core";
+import { SessionBase, InternalSession, ExternalSession, app } from "./internal.js";
 
 const default_fps = 30;
 const TICK_RATE = 30;
@@ -77,7 +73,6 @@ class Stream extends DataNode {
             state: State.STOPPED,
         });
         app.streams[this.id] = this;
-        app.$.streams[this.id] = this.$;
         this.logger = new Logger("stream");
         this.logger.on("log",(log)=>{
             (this.session||session).logger.log(log);
@@ -117,11 +112,11 @@ class Stream extends DataNode {
             if (settings.test) {
                 let path = `/test/${this.session.id}`;
                 this.$.internal_stream_paths.push(path)
-                outputs.push(utils.build_url({"protocol":"rtmp:", "host": "127.0.0.1", "port": core.conf["nms.rtmp_port"], "pathname":path }));
+                outputs.push(utils.build_url({"protocol":"rtmp:", "host": "127.0.0.1", "port": core.conf["media-server.rtmp_port"], "pathname":path }));
             } else {
                 let path = `/internal/${this.session.id}`;
                 this.$.internal_stream_paths.push(path)
-                outputs.push(utils.build_url({"protocol":"rtmp:", "host": "127.0.0.1", "port": core.conf["nms.rtmp_port"], "pathname":path }));
+                outputs.push(utils.build_url({"protocol":"rtmp:", "host": "127.0.0.1", "port": core.conf["media-server.rtmp_port"], "pathname":path }));
             }
             if (!outputs.length) error = `No outputs specified`;
         } else if (stream_method == "file") {
@@ -154,12 +149,12 @@ class Stream extends DataNode {
             // `-re`
         ];
         
-        var hwenc = (use_hardware && core.conf["ffmpeg_hwenc"]);
-        var hwaccel = (use_hardware && core.conf["ffmpeg_hwaccel"]);
+        var hwenc = (use_hardware && core.conf["core.ffmpeg_hwenc"]);
+        var hwaccel = (use_hardware && core.conf["core.ffmpeg_hwaccel"]);
             
         if (this.session instanceof ExternalSession) {
             ffmpeg_args.push(
-                "-i", utils.build_url({"protocol":"rtmp:", "host":"127.0.0.1", "port":core.conf["nms.rtmp_port"], "pathname": this.session.nms_session.publishStreamPath}),
+                "-i", utils.build_url({"protocol":"rtmp:", "host":"127.0.0.1", "port":core.conf["media-server.rtmp_port"], "pathname": this.session.nms_session.publishStreamPath}),
                 "-c", "copy",
             );
             if (this.session.nms_session.publishArgs.volume_normalization == "1") {
@@ -172,8 +167,8 @@ class Stream extends DataNode {
         } else {
             
             if (use_hardware) {
-                if (!core.conf["ffmpeg_hwaccel"]) this.logger.warn(`ffmpeg_hwaccel must be set in config to use hardware acceleration.`);
-                if (!core.conf["ffmpeg_hwenc"]) this.logger.warn(`ffmpeg_hwenc must be set in config to use hardware acceleration.`);
+                if (!core.conf["core.ffmpeg_hwaccel"]) this.logger.warn(`ffmpeg_hwaccel must be set in config to use hardware acceleration.`);
+                if (!core.conf["core.ffmpeg_hwenc"]) this.logger.warn(`ffmpeg_hwenc must be set in config to use hardware acceleration.`);
             }
 
             if (this.is_realtime) {
@@ -196,8 +191,8 @@ class Stream extends DataNode {
             }
             if (hwaccel) {
                 ffmpeg_args.push(
-                    "-hwaccel", core.conf["ffmpeg_hwaccel"],
-                    "-hwaccel_output_format", core.conf["ffmpeg_hwaccel"],
+                    "-hwaccel", core.conf["core.ffmpeg_hwaccel"],
+                    "-hwaccel_output_format", core.conf["core.ffmpeg_hwaccel"],
                     // "-extra_hw_frames", "10"
                 );
             }
@@ -219,7 +214,7 @@ class Stream extends DataNode {
 
             } else {
                 ffmpeg_args.push(
-                    "-c:v", hwenc ? `h264_${core.conf["ffmpeg_hwenc"]}` : "libx264",
+                    "-c:v", hwenc ? `h264_${core.conf["core.ffmpeg_hwenc"]}` : "libx264",
                     "-preset", hwenc ? `p7` : this.$.h264_preset,
                 );
                 if (hwaccel) {
@@ -379,8 +374,8 @@ class Stream extends DataNode {
                     // `--demuxer-lavf-o-add=copyts`,
                     // `--demuxer-lavf-o-add=use_wallclock_as_timestamps=1`,
                 );
-                if (use_hardware && core.conf["mpv_hwdec"]) {
-                    mpv_args.push(`--hwdec=${core.conf["mpv_hwdec"]}-copy`);
+                if (use_hardware && core.conf["core.mpv_hwdec"]) {
+                    mpv_args.push(`--hwdec=${core.conf["core.mpv_hwdec"]}-copy`);
                 }
                 if (ffmpeg_copy) {
                     mpv_args.push(
@@ -426,7 +421,7 @@ class Stream extends DataNode {
                         `--oforce-key-frames=expr:gte(t,n_forced*2)`, // keyframe every 2 seconds.
                     );
                 } else {
-                    if (use_hardware && !core.conf["mpv_hwdec"]) {
+                    if (use_hardware && !core.conf["core.mpv_hwdec"]) {
                         this.logger.warn(`mpv_hwdec must be set in config to use hardware acceleration.`);
                     }
                     /* mpv_args.push(
@@ -444,9 +439,9 @@ class Stream extends DataNode {
                         `--oac=pcm_s16le`,
                         `--of=nut` // nut, matroska, avi
                     );
-                    /* if (use_hardware) mpv_args.push(`--hwdec=${core.conf["mpv_hwdec"]}-copy`);
+                    /* if (use_hardware) mpv_args.push(`--hwdec=${core.conf["core.mpv_hwdec"]}-copy`);
                     mpv_args.push(
-                        use_hardware && core.conf["mpv_hwenc"] === "vaapi" ? `--ovc=mpeg2_vaapi` : `--ovc=mpeg2video`,
+                        use_hardware && core.conf["core.mpv_hwenc"] === "vaapi" ? `--ovc=mpeg2_vaapi` : `--ovc=mpeg2video`,
                         `--ovcopts-add=b=30m`,
                         `--ovcopts-add=maxrate=30m`,
                         `--ovcopts-add=minrate=15m`,
@@ -474,6 +469,10 @@ class Stream extends DataNode {
 
         if (this.ffmpeg && this.mpv) {
             this.mpv.process.stdout.pipe(this.ffmpeg.process.stdin);
+            this.ffmpeg.process.stdin.on("error", (e)=>{}); // needed to swallow 'Error: write EOF' when unpiping!!!
+            this.mpv.on("before-quit", ()=>{
+                this.mpv.process.stdout.unpipe(this.ffmpeg.process.stdin);
+            })
         }
 
         if (this.ffmpeg) {
@@ -489,19 +488,21 @@ class Stream extends DataNode {
         }
 
         if (stream_method == "ffplay") {
-            let mpv_viewer = execa(core.conf["mpv_executable"], ["-"]);
+            let mpv_viewer = utils.execa(core.conf["core.mpv_executable"], ["-"], {buffer:false});
             this.ffmpeg.process.stdout.pipe(mpv_viewer.stdin);
+            mpv_viewer.stdin.on("error", this.logger.error);
             this.ffmpeg.on("end", ()=>{
                 mpv_viewer.kill()
             });
             mpv_viewer.on("close", ()=>{
-                if (this.mpv) this.mpv.quit();
+                this.ffmpeg.process.stdout.unpipe(mpv_viewer.stdin);
+                this.mpv.quit();
             });
         }
 
         this.$.state = State.STARTED;
         
-        core.ipc_send("*", "stream.started", this.$);
+        core.ipc_broadcast("stream.started", this.$);
         this.emit("started");
 
         this.try_start_playlist();
@@ -565,35 +566,28 @@ class Stream extends DataNode {
         for (var target of Object.values(this.stream_targets)) {
             target.destroy();
         }
-        if (this.mpv) {
-            this.logger.info("Terminating MPV...");
-            let t0 = Date.now();
-            await this.mpv.quit();
-            this.mpv.destroy();
-            let t1 = Date.now();
-            this.logger.info(`MPV terminated in ${(t1-t0)/1000} secs.`);
-            this.mpv = null;
-        }
-        if (this.ffmpeg) {
-            this.ffmpeg.destroy();
-            this.ffmpeg = null;
-        }
+        this.logger.info("Terminating MPV...");
+        let t0 = Date.now();
+        await this.mpv.quit();
+        let t1 = Date.now();
+        this.logger.info(`MPV terminated in ${(t1-t0)/1000} secs.`);
+        this.ffmpeg.destroy();
 
         this.$.state = State.STOPPED;
 
-        core.ipc_send("*", "stream.stopped", this.$);
+        core.ipc_broadcast("stream.stopped", this.$);
         this.emit("stopped");
         
         this.logger.info(`Stream stopped, total duration was ${utils.ms_to_timespan_str(Math.round(Date.now()-this.$.start_time))}`);
 
-        delete app.streams[this.id];
         this.attach(null, true);
-
-        super.destroy();
+        this.destroy();
     }
 
-    destroy() {
-        this.stop();
+    async destroy() {
+        await this.stop();
+        delete app.streams[this.id];
+        super.destroy();
     }
 
     speed_history_keys = {};
@@ -641,14 +635,16 @@ class Stream extends DataNode {
 
         if (last_session) {
             // do not set this.session to null, need somewhere to write logs to. It should eventually get garbaged.
-            last_session.$.stream_id = null;
-            last_session.$.last_stream = utils.deep_copy(this.$);
+            last_session.$.stream = utils.deep_copy(this.$);
+            last_session.$.stream.state = State.STOPPED;
+            last_session.stream = null;
         }
 
         if (session) {
             this.$.session_id = session.id;
             this.session = session;
-            session.$.stream_id = this.id;
+            this.session.stream = this;
+            session.$.stream = this.$;
         }
 
         this.try_start_playlist();
@@ -702,12 +698,12 @@ class StreamTarget extends DataNode {
                 this.logger.warn(`StreamTarget ended unexpectedly, attempting restart soon.`);
                 this.reconnect_timeout = setTimeout(()=>{
                     this.logger.info(`Restarting StreamTarget.`);
-                    this.stop();
-                    this.start();
+                    this.restart();
                 }, 5000);
             }
         });
     }
+
     start() {
         if (this.#state === State.STARTED) return;
         this.#state = State.STARTED;
@@ -724,6 +720,10 @@ class StreamTarget extends DataNode {
         if (this.#state === State.STOPPED) return;
         this.#state = State.STOPPED;
         this.ffmpeg.stop();
+    }
+    restart() {
+        this.stop();
+        this.start();
     }
 
     destroy() {
@@ -849,7 +849,7 @@ class EDL {
     }
 }
 
-class MPVSessionWrapper extends require("../MPVWrapper") {
+class MPVSessionWrapper extends MPVWrapper {
     #mpv_last_speed_check = Date.now();
     #mpv_last_pts = 0;
     #tick_interval;
@@ -896,7 +896,7 @@ class MPVSessionWrapper extends require("../MPVWrapper") {
     }
 
     async start(mpv_args) {
-        var proc = await execa(core.conf["mpv_executable"], ["--list-options"]);
+        var proc = await utils.execa(core.conf["core.mpv_executable"], ["--list-options"]);
         let temp_mpv_out = proc.stdout
         for (let line of temp_mpv_out.split("\n")) {
             let m = line.trim().match(/^--([^=\s]+)(?:\s+(.+))?$/);
@@ -1372,7 +1372,7 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
                 
                 filename = `memory://${ass_str}`;
             } else if (ls_path == "rtmp") {
-                filename = utils.build_url({protocol:"rtmp:", "host": "127.0.0.1", "port": core.conf["nms.rtmp_port"], "pathname": `/private/${this.session.$.id}`});
+                filename = utils.build_url({protocol:"rtmp:", "host": "127.0.0.1", "port": core.conf["media-server.rtmp_port"], "pathname": `/private/${this.session.$.id}`});
                 // if localhost port is open and accepts request but stream is not live it breaks mpv completely. Can't figure it out.
                 // filename = "wss://localhost:8112/live/"..S.rtmp_key..".flv"
                 // filename = "https://localhost:8112/live/"..S.rtmp_key..".m3u8"
@@ -1973,10 +1973,11 @@ Format: Start,End,Style,Text`+"\n";
         let af_graph = [];
         // `asetpts=PTS-STARTPTS`,
         
-        if (this.stream.is_realtime && !this.$.seekable) {
-            vf_graph.push("realtime");
-            af_graph.push("arealtime");
-        }
+        // this fucks it up. Do not use.
+        // if (this.stream.is_realtime && !this.$.seekable) {
+        //     vf_graph.push("realtime");
+        //     af_graph.push("arealtime");
+        // }
 
         af_graph.push(
             `aformat=channel_layouts=stereo`,
@@ -2147,12 +2148,7 @@ function ass_color(color) { //rrggbbaa
     return `&H${parts.join("")}`;
 }
 
-module.exports = Stream;
-
-const app = require(".");
-const SessionBase = require("./SessionBase");
-const InternalSession = require("./InternalSession");
-const ExternalSession = require("./ExternalSession.js");
+export default Stream;
 
 /* cache-speed
 Current I/O read speed between the cache and the lower layer (like network). This gives the number bytes per seconds over a 1 second window (using the type MPV_FORMAT_INT64 for the client API).

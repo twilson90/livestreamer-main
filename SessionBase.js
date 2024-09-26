@@ -1,8 +1,5 @@
-const core = require("@livestreamer/core");
-const DataNode = require("@livestreamer/core/DataNode");
-const PropertyCollection = require("@livestreamer/core/PropertyCollection");
-const utils = require("@livestreamer/core/utils");
-const Logger = require("@livestreamer/core/Logger");
+import { core, utils, DataNode, PropertyCollection, Logger } from "@livestreamer/core";
+import { Stream, app } from "./internal.js";
 
 class SessionBase extends DataNode {
     /** @type {Logger} */
@@ -11,8 +8,8 @@ class SessionBase extends DataNode {
     get name() { return this.$.name; }
     get index() { return this.$.index; }
     get clients() { return Object.values(app.clients).filter(c=>c.session === this); }
-
-    get stream() { return app.streams[this.$.stream_id]; };
+    /** @type {Stream} */
+    stream;
 
     constructor(id, name) {
         super(id);
@@ -40,14 +37,13 @@ class SessionBase extends DataNode {
             core.logger.log(log);
         })
         this.$.logs = this.logger.create_observer();
-        this.$.stream_id = null;
 
         app.sessions[this.id] = this;
         app.$.sessions[this.id] = this.$;
         core.logger.info(`Initialized session [${this.id}]`);
 
         core.emit("session.created", this.$);
-        // core.ipc_send("*", "session.created", this.$);
+        // core.ipc_broadcast("session.created", this.$);
     }
 
     rename(new_name) {
@@ -84,7 +80,7 @@ class SessionBase extends DataNode {
         this.logger.info(`${this.name} was destroyed.`);
 
         // core.emit("session.destroyed", this.id);
-        // core.ipc_send("*", "session.destroyed", this.id);
+        // core.ipc_broadcast("session.destroyed", this.id);
 
         this.logger.destroy();
         super.destroy();
@@ -176,7 +172,4 @@ const PROPS_CLASS = class extends PropertyCollection {
 SessionBase.PROPS_CLASS = PROPS_CLASS;
 const PROPS = new PROPS_CLASS();
 
-module.exports = SessionBase;
-
-const Stream = require("./Stream");
-const app = require(".");
+export default SessionBase;

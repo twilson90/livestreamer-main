@@ -1,7 +1,8 @@
-const fs = require("fs-extra");
-const ClientBase = require("@livestreamer/core/ClientBase");
-const utils = require("@livestreamer/core/utils");
-const core = require("@livestreamer/core");
+import fs from "fs-extra";
+import ClientBase from "@livestreamer/core/ClientBase.js";
+import { core, utils } from "@livestreamer/core";
+import { app, InternalSession } from "./internal.js";
+
 
 class Client extends ClientBase {
     get session() { return app.sessions[this.$.session_id]; }
@@ -11,10 +12,17 @@ class Client extends ClientBase {
 
     init() {
         app.$.clients[this.id] = this.$;
-        this.send({ $: utils.deep_copy(app.$) });
+        var session_id = this.url.searchParams.get("session_id");
+        if (session_id) this.attach_to(session_id);
+        var $ = utils.deep_copy(app.$);
+        $.conf = {
+            ["debug"]: core.debug,
+            ["media-server.name"]: core.conf["media-server.name"],
+            ["media-server.rtmp_port"]: core.conf["media-server.rtmp_port"],
+            ["session-order-client"]: core.conf["session-order-client"],
+        }
+        this.send({ $ });
     }
-
-    // get is_blocked() { return App.instance.app_blocklist.is_blocked(this.$.username); }
 
     new_session() {
         var s = new InternalSession();
@@ -42,8 +50,4 @@ class Client extends ClientBase {
     }
 }
 
-module.exports = Client;
-
-const app = require(".");
-const InternalSession = require("./InternalSession.js");
-const Target = require("./Target.js");
+export default Client;

@@ -1,7 +1,7 @@
-const fs = require("fs-extra");
-const path = require("node:path");
-const DataNode = require("@livestreamer/core/DataNode");
-const core = require("@livestreamer/core");
+import fs from "fs-extra";
+import path from "node:path";
+import { DataNode } from "@livestreamer/core";
+import { app } from "./internal.js";
 
 class Target extends DataNode {
     get streams() { return Object.values(app.streams).filter(s=>s.stream_targets[this.id]); }
@@ -70,6 +70,4 @@ class Target extends DataNode {
     }
 }
 
-module.exports = Target;
-
-const app = require(".");
+export default Target;

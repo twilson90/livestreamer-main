@@ -1,10 +1,7 @@
-const fs = require("fs-extra");
-const path = require("node:path");
-const execa = require("execa");
-const core = require("@livestreamer/core");
-const utils = require("@livestreamer/core/utils");
-const PropertyCollection = require("@livestreamer/core/PropertyCollection");
-const SessionBase = require("./SessionBase");
+import fs from "fs-extra";
+import path from "node:path";
+import { core, utils, PropertyCollection } from "@livestreamer/core";
+import { SessionBase, Download, app } from "./internal.js";
 
 const video_exts = ["3g2","3gp","aaf","asf","avchd","avi","drc","flv","gif","m2v","m4p","m4v","mkv","mng","mov","mp2","mp4","mpe","mpeg","mpg","mpv","mxf","nsv","ogg","ogv","qt","rm","rmvb","roq","svi","vob","webm","wmv","yuv"];
 
@@ -185,7 +182,7 @@ class InternalSession extends SessionBase {
         await this.start_stream();
         this.$.schedule_start_time = null;
         core.emit("session.scheduled-start", this.id);
-        core.ipc_send("*", "session.scheduled-start", this.$);
+        core.ipc_broadcast("session.scheduled-start", this.$);
     }
 
     async tick() {
@@ -316,7 +313,7 @@ class InternalSession extends SessionBase {
                 `scale=trunc(ih*dar/2)*2:trunc(ih/2)*2`,
                 `setsar=1/1`
             ];
-            var proc = await execa(core.conf["ffmpeg_executable"], ["-skip_frame", "nokey", '-noaccurate_seek', "-ss", start, "-i", filepath, "-max_muxing_queue_size","9999", "-vf", vfs.join(","), "-vsync", "0", "-vframes", String(n), "-y", `%04d.jpg`], {cwd: dir});
+            var proc = await utils.execa(core.conf["core.ffmpeg_executable"], ["-skip_frame", "nokey", '-noaccurate_seek', "-ss", start, "-i", filepath, "-max_muxing_queue_size","9999", "-vf", vfs.join(","), "-vsync", "0", "-vframes", String(n), "-y", `%04d.jpg`], {cwd: dir});
             var files = await fs.readdir(dir);
             
             var lines = proc.stderr.split(/\r?\n/);
@@ -548,6 +545,9 @@ class InternalSession extends SessionBase {
         
         delete data.uploads;
         delete data.downloads;
+        if (data.stream) {
+            data.stream.state = "stopped";
+        }
 
         for (var k in data) {
             this.$[k] = PROPS.__get_default(k);
@@ -800,7 +800,6 @@ class InternalSession extends SessionBase {
         this.$.target_configs[name][key] = value;
     }
 }
-
 
 function save_diff(save1,save2) {
     var diff = utils.deep_diff(save1, save2);
@@ -1113,11 +1112,6 @@ const PROPS_CLASS = InternalSession.PROPS_CLASS = class extends SessionBase.PROP
 const PROPS = InternalSession.PROPS = new PROPS_CLASS();
 const PLAYER_PROPS = InternalSession.PLAYER_PROPS = new PER_FILE_CLASS();
 
-module.exports = InternalSession;
-
-const app = require(".");
-const Download = require("./Download");
-
 function diff_tree_to_list(t) {
     return utils.deep_entries(t, true, (k,v)=>Array.isArray(v)?false:true);
 }
@@ -1143,3 +1137,5 @@ function modify_prop($, names, modifier){
         }
     }
 }
+
+export default InternalSession;

@@ -1,45 +1,36 @@
-const path = require("node:path");
-const os = require("node:os");
-const fs = require("fs-extra");
-const showdown = require("showdown");
-const chokidar = require("chokidar");
-const upath = require("upath");
-const {glob} = require("glob");
-const compression = require("compression");
-const express = require("express");
-const bodyParser = require("body-parser");
-const multer = require("multer");
-const pidusage = require("pidusage");
-const pidtree = require("pidtree");
-const checkDiskSpace = require("check-disk-space").default;
-const readline = require("node:readline");
-const execa = require("execa");
+import path from "node:path";
+import os from "node:os";
+import fs from "fs-extra";
+import showdown from "showdown";
+import chokidar from "chokidar";
+import upath from "upath";
+import {glob} from "glob";
+import compression from "compression";
+import express from "express";
+import bodyParser from "body-parser";
+import multer from "multer";
+import pidusage from "pidusage";
+import pidtree from "pidtree";
+import checkDiskSpace from "check-disk-space";
+import readline from "node:readline";
+import child_process from "node:child_process";
+import { Download, Upload, SessionBase, InternalSession, ExternalSession, Client, Plugin, Target, Stream } from './internal.js';
+import { core, utils, Cache, CPU, ClientServer, WebServer, FFMPEGWrapper } from "@livestreamer/core";
 
-const core = require("@livestreamer/core");
-const App = require("@livestreamer/core/App");
-const utils = require("@livestreamer/core/utils");
-const Cache = require("@livestreamer/core/Cache");
-const CPU = require("@livestreamer/core/CPU");
-const ClientServer = require("@livestreamer/core/ClientServer");
-const WebServer = require("@livestreamer/core/WebServer");
-const FFMPEGWrapper = require("@livestreamer/core/FFMPEGWrapper");
-
+const __dirname = import.meta.dirname;
 const MAX_CONCURRENT_MEDIA_INFO_PROMISES = 8;
 const TICK_INTERVAL = 1 * 1000;
-const IS_WINDOWS = os.platform() === 'win32';
 
 /** @typedef {string} Domain */
 /** @typedef {Record<string,{access:string, password:string, suspended:boolean}>} AccessControl */
 
-class MainApp extends App {
+class MainApp {
     /** @type {Object.<string,Download>} */
     downloads = {};
     /** @type {Object.<string,SessionBase>} */
     sessions = {};
     /** @type {Object.<string,Target>} */
     targets = {};
-    /** @type {Object.<string,Stream>} */
-    streams = {};
     /** @type {Object.<string,Plugin>} */
     plugins = {};
     /** @type {Object.<string,Upload>} */
@@ -56,20 +47,18 @@ class MainApp extends App {
     null_stream_duration = 60
     netstats = [];
 
+    /** @type {Stream[]} */
+    get streams() { return Object.values(this.sessions).map(s=>s.stream).filter(s=>s).flat(); }
+
     get sessions_ordered() { return utils.sort(Object.values(this.sessions), s=>s.index); }
     
     /** @type {Record<string,Client>} */
     get clients() { return this.wss.clients; }
 
-    constructor(){
-        super("main");
-    }
-
     async init() {
         
         this.$ = new utils.Observer();
         this.$.sessions = {};
-        this.$.streams = {};
         this.$.nms_sessions = {};
         this.$.clients = {};
         this.$.logs = core.logger.create_observer();
@@ -83,44 +72,44 @@ class MainApp extends App {
         this.$.process_info = {};
         
         var update_processes = ()=>{
-            for (var m in core.apps) {
-                if (core.conf[m] && core.conf[m].enabled) {
-                    this.$.processes[m] = core.processes[m] ? core.processes[m] : {status:"stopped"};
-                }
+            for (var m in core.modules) {
+                var p = {...core.processes[m]} || {status:"stopped"}
+                Object.assign(p, {
+                    title: core.conf[`${m}.title`],
+                    description: core.conf[`${m}.description`],
+                })
+                this.$.processes[m] = p;
             }
         }
         update_processes();
-        core.on("update_processes", ()=>update_processes());
+        core.on("core.update-processes", ()=>update_processes());
 
-        core.on('add-plugins', (data)=>{
-            this.add_plugins(...data);
-        });
-        core.on("update_volumes", (data)=>{
-            core.logger.info(`update_volumes [${Object.keys(data).length}]`,)
+        core.on("file-manager.update-volumes", (data)=>{
+            core.logger.info(`update-volumes [${Object.keys(data).length}]`,)
             this.$.volumes = data;
         });
-        core.on("save-sessions", (data)=>{
+        core.on("main.save-sessions", (data)=>{
             this.save_sessions();
         });
-        core.on("nms.connected", async ()=>{
-            var nms_sessions = (await core.ipc_request("nms", { call:["get_published_sessions"] }).catch(console.error)) || [];
+        core.on("media-server.connected", async ()=>{
+            var nms_sessions = (await core.ipc_request("media-server", { call:["get_published_sessions"] }).catch((e)=>core.logger.error(e))) || [];
             Object.assign(this.$.nms_sessions, Object.fromEntries(nms_sessions.map(s=>[s.id,s])));
         });
-        core.on("nms.post-publish", (nms_session)=>{
+        core.on("media-server.post-publish", (nms_session)=>{
             if (nms_session.rejected) return;
             this.$.nms_sessions[nms_session.id] = nms_session;
             if (nms_session.appname === "livestream") {
                 new ExternalSession(nms_session);
             }
         });
-        core.on("nms.metadata-publish", (nms_session)=>{
+        core.on("media-server.metadata-publish", (nms_session)=>{
             this.$.nms_sessions[nms_session.id] = nms_session;
         });
-        core.on("nms.done-publish", (nms_session)=>{
+        core.on("media-server.done-publish", (nms_session)=>{
             Object.values(this.sessions).filter(s=>s instanceof ExternalSession && s.nms_session && s.nms_session.id == nms_session.id).forEach(s=>s.destroy());
             delete this.$.nms_sessions[nms_session.id];
         });
-        core.on("update_conf", ()=>{
+        core.on("core.update-conf", ()=>{
             core.logger.info("Config file updated.");
             update_conf();
         });
@@ -132,7 +121,7 @@ class MainApp extends App {
         this.targets_dir = path.resolve(core.appdata_dir, "targets");
         // this.fonts_dir = path.resolve(core.root_dir, ".fonts");
         this.screenshots_dir = path.resolve(core.appdata_dir, "screenshots");
-        this.change_log_path = path.resolve(core.root_dir, "changes.md");
+        this.change_log_path = path.resolve(core.cwd, "changes.md");
         this.sockets_dir = path.resolve(core.tmp_dir, "sockets");
         this.public_html_dir = path.resolve(__dirname, "public_html");
         this.mpv_lua_dir = path.resolve(__dirname, "mpv_lua");
@@ -163,8 +152,9 @@ class MainApp extends App {
         
         setInterval(()=>this.#tick(), TICK_INTERVAL);
 
-        let p = utils.execa(`nethogs`, ["-t"], { wsl: IS_WINDOWS });
-        let listener = readline.createInterface(p.stdout);
+        this.netstats = []
+        let nethogs = child_process.spawn(`nethogs`, ["-t"]);
+        let listener = readline.createInterface(nethogs.stdout);
         listener.on("line", line=>{
             if (String(line).match(/^Refreshing:/)) {
                 this.netstats = [];
@@ -177,6 +167,9 @@ class MainApp extends App {
             received *= 1024;
             this.netstats.push({program,pid,userid,sent,received})
         });
+        nethogs.on("error", (e)=>{
+            console.error(e.message);
+        })
 
         var update_change_log = async ()=>{
             var converter = new showdown.Converter();
@@ -207,6 +200,108 @@ class MainApp extends App {
         }
         
         await this.generate_null_media_files();
+
+        // this.oauth2 = new OAuth2(exp, core.https_url+"/oauth");
+        // this.$.oauth2 = this.oauth2.$;
+        
+        var save_interval_id = new utils.Interval(()=>{
+            this.save_sessions();
+        }, ()=>core.conf["main.autosave_interval"] * 1000);
+        var update_conf = ()=>{
+            this.load_targets();
+            save_interval_id.next();
+        };
+        update_conf();
+
+        for (var k in core.conf["main.plugins"]) {
+            this.add_plugin(k, ...core.conf["main.plugins"][k]);
+        }
+
+        core.on("input", async (c)=>{
+            const log = (s)=>process.stdout.write(s+"\n", "utf8");
+            let command = c[0];
+            if (command.match(/^replace-filenames$/)) {
+                let find = c[1] || "";
+                let replace = c[2] || "";
+                let i = 0;
+                let fix = (filename)=>{
+                    var new_filename = filename.replace(find, replace);
+                    if (new_filename != filename) i++;
+                    return new_filename;
+                };
+                let props = ["subtitle_file", "audio_file", "background_file"];
+                for (var session of Object.values(this.sessions)) {
+                    if (session.$.background_file) session.$.background_file = fix(session.$.background_file);
+                    for (var item of Object.values(session.$.playlist)) {
+                        item.filename = fix(item.filename);
+                        for (var k of props) {
+                            if (item.props[k]) item.props[k] = fix(item.props[k]);
+                        }
+                    }
+                }
+                log(`Replaced ${i} filenames.`);
+            } else if (command.match(/^(replace-symlinks|remove-bad-symlinks|symlinks-to-copies)$/)) {
+                let dir = c[1]
+                let remove = command == "remove-bad-symlinks";
+                let to_copy = command == "symlinks-to-copies";
+                let find = c[2]
+                let replace = c[3]
+                let i = 0;
+                let moved = {};
+                let scan = async (dir)=>{
+                    for (var f of await fs.readdir(dir)) {
+                        let abspath = path.resolve(dir, f);
+                        let stat = await fs.lstat(abspath).catch(()=>{});
+                        if (stat.isSymbolicLink()) {
+                            let linkpath = await fs.readlink(abspath);
+                            let exists = !!(await fs.stat(linkpath).catch(()=>{}));
+                            log(`Found link [${abspath} => ${linkpath}] exists:${exists}`);
+                            if (remove) {
+                                if (!exists) {
+                                    log(`Deleting ${abspath}...`);
+                                    await fs.unlink(abspath);
+                                    i++;
+                                }
+                            } else if (to_copy) {
+                                if (exists) {
+                                    await fs.unlink(abspath);
+                                    if (moved[linkpath]) {
+                                        log(`Replacing ${abspath} with copy of file [${moved[linkpath]}]`);
+                                        await fs.copy(moved[linkpath], abspath);
+                                    } else {
+                                        log(`Replacing ${abspath} with real file [${linkpath}]`);
+                                        await fs.move(linkpath, abspath);
+                                    }
+                                    moved[linkpath] = abspath;
+                                    i++;
+                                } else {
+                                    log(`Skipping bad symlink ${abspath} [${linkpath}]`);
+                                }
+                            } else {
+                                if (linkpath.includes(find)) {
+                                    let new_linkpath = linkpath.replace(find, replace);
+                                    log(`Replacing ${abspath} [${linkpath} => ${new_linkpath}]`);
+                                    await fs.unlink(abspath);
+                                    await fs.symlink(new_linkpath, abspath);
+                                    i++;
+                                }
+                            }
+                        } else if (stat.isDirectory()) {
+                            log(`Scanning ${abspath}...`);
+                            await scan(abspath);
+                        }
+                    }
+                }
+                await scan(dir);
+                log(`${remove?"Removed":"Replaced"} ${i} symlinks.`);
+            }
+        })
+        
+        await this.load_sessions();
+
+        this.#scan_media_info();
+
+        
         
         var exp = express();
 
@@ -216,7 +311,7 @@ class MainApp extends App {
             // password: core.conf["main.http_password"],
         });
 
-        this.wss = new ClientServer("main", this.web.wss, this.$, Client, true);
+        this.wss = new ClientServer();
         
         exp.use(bodyParser.urlencoded({
             extended: true,
@@ -325,10 +420,10 @@ class MainApp extends App {
 
         exp.use(compression({threshold:0}));
         exp.use("/", express.static(this.public_html_dir));
-        exp.use("/conf", (req, res, next)=>{
-            res.header("content-type", "application/json");
-            res.send(JSON.stringify(core.conf));
-        });
+        // exp.use("/conf", (req, res, next)=>{
+        //     res.header("content-type", "application/json");
+        //     res.send(JSON.stringify(core.conf));
+        // });
         exp.use("/plugins/:id/", (req, res, next)=>{
             var p = this.plugins[req.params.id];
             if (p) express.static(p.dir)(req, res, next);
@@ -336,114 +431,8 @@ class MainApp extends App {
         });
 
         exp.use("/screenshots", express.static(this.screenshots_dir));
-
-        // this.oauth2 = new OAuth2(exp, core.https_url+"/oauth");
-        // this.$.oauth2 = this.oauth2.$;
         
-        process.on('SIGINT', async ()=>{
-            core.logger.info("Process received SIGINT, saving all sessions...");
-            await this.save_sessions();
-            core.logger.info("All sessions saved");
-            process.exit(0);
-        });
-        var save_interval_id = new utils.Interval(()=>{
-            this.save_sessions();
-        }, ()=>core.conf["main.autosave_interval"] * 1000);
-        var update_conf = ()=>{
-            this.load_targets();
-            save_interval_id.next();
-        };
-        update_conf();
-
-        var plugins = [...core.conf["main.plugins"]];
-        plugins = utils.array_unique(plugins.map(p=>path.resolve(p).replace(/\\/g,"/")));
-        this.add_plugins(...plugins);
-
-        core.on("input", async (c)=>{
-            const log = (s)=>process.stdout.write(s+"\n", "utf8");
-            let command = c[0];
-            if (command.match(/^replace-filenames$/)) {
-                let find = c[1] || "";
-                let replace = c[2] || "";
-                let i = 0;
-                let fix = (filename)=>{
-                    var new_filename = filename.replace(find, replace);
-                    if (new_filename != filename) i++;
-                    return new_filename;
-                };
-                let props = ["subtitle_file", "audio_file", "background_file"];
-                for (var session of Object.values(this.sessions)) {
-                    if (session.$.background_file) session.$.background_file = fix(session.$.background_file);
-                    for (var item of Object.values(session.$.playlist)) {
-                        item.filename = fix(item.filename);
-                        for (var k of props) {
-                            if (item.props[k]) item.props[k] = fix(item.props[k]);
-                        }
-                    }
-                }
-                log(`Replaced ${i} filenames.`);
-            } else if (command.match(/^(replace-symlinks|remove-bad-symlinks|symlinks-to-copies)$/)) {
-                let dir = c[1]
-                let remove = command == "remove-bad-symlinks";
-                let to_copy = command == "symlinks-to-copies";
-                let find = c[2]
-                let replace = c[3]
-                let i = 0;
-                let moved = {};
-                let scan = async (dir)=>{
-                    for (var f of await fs.readdir(dir)) {
-                        let abspath = path.resolve(dir, f);
-                        let stat = await fs.lstat(abspath).catch(()=>{});
-                        if (stat.isSymbolicLink()) {
-                            let linkpath = await fs.readlink(abspath);
-                            let exists = !!(await fs.stat(linkpath).catch(()=>{}));
-                            log(`Found link [${abspath} => ${linkpath}] exists:${exists}`);
-                            if (remove) {
-                                if (!exists) {
-                                    log(`Deleting ${abspath}...`);
-                                    await fs.unlink(abspath);
-                                    i++;
-                                }
-                            } else if (to_copy) {
-                                if (exists) {
-                                    await fs.unlink(abspath);
-                                    if (moved[linkpath]) {
-                                        log(`Replacing ${abspath} with copy of file [${moved[linkpath]}]`);
-                                        await fs.copy(moved[linkpath], abspath);
-                                    } else {
-                                        log(`Replacing ${abspath} with real file [${linkpath}]`);
-                                        await fs.move(linkpath, abspath);
-                                    }
-                                    moved[linkpath] = abspath;
-                                    i++;
-                                } else {
-                                    log(`Skipping bad symlink ${abspath} [${linkpath}]`);
-                                }
-                            } else {
-                                if (linkpath.includes(find)) {
-                                    let new_linkpath = linkpath.replace(find, replace);
-                                    log(`Replacing ${abspath} [${linkpath} => ${new_linkpath}]`);
-                                    await fs.unlink(abspath);
-                                    await fs.symlink(new_linkpath, abspath);
-                                    i++;
-                                }
-                            }
-                        } else if (stat.isDirectory()) {
-                            log(`Scanning ${abspath}...`);
-                            await scan(abspath);
-                        }
-                    }
-                }
-                await scan(dir);
-                log(`${remove?"Removed":"Replaced"} ${i} symlinks.`);
-            }
-        })
-        
-        await this.load_sessions();
-
-        this.#scan_media_info();
-        
-        this.wss.init();
+        await this.wss.init("main", this.web.wss, this.$, Client, true);
     }
 
     async #scan_media_info() {
@@ -461,17 +450,17 @@ class MainApp extends App {
         var target_defs = [
 			{
                 "id": "local",
-				"name": core.conf["nms.name"],
+				"name": "Local Media Server",
 				"description": "Default streaming target",
 				// "title": "{{title}}", // not necessary
-				"rtmp_host": `rtmp://${core.conf["hostname"]}:${core.conf["nms.rtmp_port"]}`,
+				"rtmp_host": `rtmp://${core.conf["core.hostname"]}:${core.conf["media-server.rtmp_port"]}`,
 				"limit": 0,
                 /** @param {Stream} ctx */
                 "config": (ctx, config)=>{
                     return {
                         config,
                         "rtmp_key": `live/${ctx.id}`,
-                        "url": `${core.url}/nms/player/index.html?id=${ctx.id}`,
+                        "url": `${core.url}/media-server/player/index.html?id=${ctx.id}`,
                     }
                 },
 				"locked": true
@@ -506,19 +495,8 @@ class MainApp extends App {
         }
     }
 
-    get_targets() {
-        /** @type {Target[]} */
-        var targets = Object.values(this.$.targets);
-        // utils.sort(targets, t=>t.stream ? t.$.stream_priority : Number.MAX_SAFE_INTEGER);
-        return targets;
-    }
-
-    get_streams() {
-        return Object.values(this.$.streams);
-    }
-
     get_stream_targets() {
-        return Object.values(this.$.streams).map(s=>Object.values(s.stream_targets)).flat();
+        return this.streams.map(s=>Object.values(s.stream_targets)).flat().map(t=>t.$);
     }
 
     create_target(data) {
@@ -541,10 +519,8 @@ class MainApp extends App {
         Object.values(this.sessions).forEach(s=>s.tick());
     }
 
-    add_plugins(...plugins) {
-        for (var plugin_dir of plugins) {
-            new Plugin(plugin_dir);
-        }
+    add_plugin(id, dir, options) {
+        new Plugin(id, dir, options);
     }
 
     async cleanup_tmp_dirs() {
@@ -559,26 +535,21 @@ class MainApp extends App {
 
     async generate_null_media_files() {
         var [w,h] = [1280,720];
-        var promises = [];
         var t0 = Date.now();
-        if (!fs.existsSync(this.null_video_path)) {
+        if (!(await fs.exists(this.null_video_path))) {
             core.logger.info(`Generating null video stream...`);
-            promises.push(execa(core.conf["ffmpeg_executable"], ["-f", "lavfi", "-i", `color=c=black:s=${w}x${h}:r=30`, "-c:v", "libx264", "-b:v", "10m", `-force_key_frames`, `expr:gte(t,n_forced*1)`, "-r", "30", "-pix_fmt", "yuv420p", "-f", "matroska", "-t", String(this.null_stream_duration), this.null_video_path]));
+            await utils.execa(core.conf["core.ffmpeg_executable"], ["-f", "lavfi", "-i", `color=c=black:s=${w}x${h}:r=30`, "-c:v", "libx264", "-b:v", "10m", `-force_key_frames`, `expr:gte(t,n_forced*1)`, "-r", "30", "-pix_fmt", "yuv420p", "-f", "matroska", "-t", String(this.null_stream_duration), this.null_video_path]);
         }
-        if (!fs.existsSync(this.null_audio_path)) {
+        if (!(await fs.exists(this.null_audio_path))) {
             core.logger.info(`Generating null audio stream...`);
-            promises.push(execa(core.conf["ffmpeg_executable"], ["-f", "lavfi", "-i", "anullsrc,aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo", "-c:a", "flac", "-f", "flac", "-t", String(this.null_stream_duration), this.null_audio_path]));
+            await utils.execa(core.conf["core.ffmpeg_executable"], ["-f", "lavfi", "-i", "anullsrc,aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo", "-c:a", "flac", "-f", "flac", "-t", String(this.null_stream_duration), this.null_audio_path]);
         }
-        
-        await Promise.all(promises);
-        var t1 = Date.now();
-
-        if (!fs.existsSync(this.null_audio_video_path)) {
+        if (!(await fs.exists(this.null_audio_video_path))) {
             core.logger.info(`Generating null audio/video stream...`);
-            await execa(core.conf["ffmpeg_executable"], ["-i", this.null_audio_path, "-i", this.null_video_path, "-map", "0:a:0", "-map", "1:v:0", "-c", "copy", "-f", "matroska", this.null_audio_video_path]);
+            await utils.execa(core.conf["core.ffmpeg_executable"], ["-i", this.null_audio_path, "-i", this.null_video_path, "-map", "0:a:0", "-map", "1:v:0", "-c", "copy", "-f", "matroska", this.null_audio_video_path]);
         }
-        var t2 = Date.now();
-        core.logger.info(`Finished generating null streams took ${t2-t1}ms.`);
+        var t1 = Date.now();
+        core.logger.info(`Finished generating null [${t1-t0}ms]`);
     }
 
     async save_sessions() {
@@ -592,7 +563,6 @@ class MainApp extends App {
     async load_sessions() {
         var sessions = [];
         var session_ids = await fs.readdir(this.curr_save_dir);
-        
         // new format...
         for (let uid of session_ids) {
             var session_dir = path.resolve(this.curr_save_dir, uid);
@@ -614,8 +584,7 @@ class MainApp extends App {
                 }
             }
         }
-
-        if (!sessions.length) {
+        /* if (!sessions.length) {
             // old format...
             let filenames = (await fs.readdir(this.save_dir)).filter(filename=>filename.match(/^\d{4}-\d{2}-\d{2}-/));
             filenames = await utils.order_files_by_mtime_descending(filenames, this.save_dir);
@@ -629,8 +598,7 @@ class MainApp extends App {
                     core.logger.error(`Failed to load '${filename}'`);
                 }
             }
-        }
-
+        } */
         for (var session of sessions) {
             var id = session.id;
             delete session.id;
@@ -975,13 +943,13 @@ class MainApp extends App {
         if (!this.updating_system_info) {
             this.updating_system_info = (async()=>{
                 var [disk, cpu_avg] = await Promise.all([
-                    checkDiskSpace(IS_WINDOWS ? 'c:' : '/'),
+                    checkDiskSpace(utils.is_windows() ? 'c:' : '/'),
                     CPU.getCPULoadAVG()
                 ]);
                 var sysinfo = this.$.sysinfo;
                 sysinfo.disk_total = disk.size;
                 sysinfo.disk_free = disk.free;
-                var freemem = IS_WINDOWS ? os.freemem() : (1024 * Number(/MemAvailable:[ ]+(\d+)/.exec(fs.readFileSync('/proc/meminfo', 'utf8'))[1]));
+                var freemem = utils.is_windows() ? os.freemem() : (1024 * Number(/MemAvailable:[ ]+(\d+)/.exec(fs.readFileSync('/proc/meminfo', 'utf8'))[1]));
                 sysinfo.memory_total = os.totalmem();
                 sysinfo.memory_free = freemem;
                 sysinfo.uptime = os.uptime();
@@ -998,7 +966,8 @@ class MainApp extends App {
         return this.updating_system_info;
     }
     async update_process_infos() {
-        var pid = core.IS_MASTER ? core.pid : core.ppid;
+        // var pid = core.IS_MASTER ? core.pid : core.ppid; // ?? surely we are always not master
+        var pid = core.ppid; // ?? surely we are always not master
         var results = await pidtree(pid, {root:true, advanced:true});
         var all_pids = [...Object.values(results).map(r=>r.pid).flat()];
         var tree = utils.tree(results, (p)=>[p.pid, p.ppid])[0];
@@ -1026,8 +995,11 @@ class MainApp extends App {
             this.$.process_info[p.value.pid] = {sent,received,elapsed,cpu,memory};
         }
     }
-    async destroy(){
-        await this.web.destroy();
+
+    async destroy() {
+        core.logger.info("Saving all sessions before exit...");
+        await this.save_sessions();
+        core.logger.info("Sessions saved.");
     }
 }
 
@@ -1040,7 +1012,7 @@ async function read_file(filename, start, length) {
 }
 
 async function youtubedl_probe(uri) {
-    var proc = await execa(core.conf["main.youtube_dl"] || "yt-dlp", [
+    var proc = await utils.execa(core.conf["main.youtube_dl"] || "yt-dlp", [
         uri,
         "--dump-json",
         "--no-warnings",
@@ -1063,7 +1035,7 @@ async function youtubedl_probe(uri) {
 }
 
 async function ffprobe(uri) {
-    var proc = await execa("ffprobe", [
+    var proc = await utils.execa("ffprobe", [
         '-show_streams',
         '-show_chapters',
         '-show_format',
@@ -1074,21 +1046,14 @@ async function ffprobe(uri) {
 }
 
 async function edl_probe(uri) {
-    var output = await execa(core.conf["mpv_executable"], ['--frames=0', '--vo=null', '--ao=null', `--script=${path.resolve(app.mpv_lua_dir, 'get_media_info.lua')}`, uri]);
+    var output = await utils.execa(core.conf["core.mpv_executable"], ['--frames=0', '--vo=null', '--ao=null', `--script=${path.resolve(app.mpv_lua_dir, 'get_media_info.lua')}`, uri]);
     var m = output.stdout.match(/^\[get_media_info\] (.+)/);
     if (m) return JSON.parse(m[1].trim());
     return null;
 }
 
-const app = module.exports = new MainApp();
-core.register(app);
+const app = new MainApp();
+core.init("main", app);
 
-const Download = require("./Download");
-const Upload = require("./Upload");
-const SessionBase = require("./SessionBase");
-const Client = require("./Client");
-const InternalSession = require("./InternalSession");
-const ExternalSession = require("./ExternalSession");
-const Plugin = require("./Plugin");
-const Target = require("./Target");
-const Stream = require("./Stream");
+export default app;
+export * from "./internal.js";

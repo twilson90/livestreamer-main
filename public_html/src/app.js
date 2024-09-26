@@ -1,19 +1,4 @@
-import * as utils from "@hedgehog90/utils";
-import * as dom_utils from "@hedgehog90/utils/dom";
-import "@hedgehog90/utils/dom/style.css";
-import './jquery-global.js';
-import 'jquery-ui/dist/jquery-ui.js';
-import 'jquery-ui/dist/themes/base/jquery-ui.css';
-import '@fortawesome/fontawesome-free/js/all.js';
-
-import { Fancybox } from "@fancyapps/ui";
-import "@fancyapps/ui/dist/fancybox.css";
-import "nouislider/dist/nouislider.css";
-import noUiSlider from 'nouislider';
-import flvjs from 'flv.js';
-import Chart from 'chart.js/auto';
-import Hammer from 'hammerjs';
-import {Sortable, MultiDrag} from 'sortablejs';
+import { utils, dom_utils, jQuery, $, Fancybox as _Fancybox, noUiSlider, flvjs, Chart, Hammer, Sortable, MultiDrag } from "./core.js";
 import "./app.scss";
 
 export {utils, dom_utils};
@@ -40,10 +25,10 @@ export const MAX_CLIP_SEGMENTS = 128;
 export const ELFINDER_USE_FILE_PROTOCOL = false;
 export const EMPTY_OBJECT = Object.freeze({});
 export const EMPTY_ARRAY = Object.freeze([]);
-export const ALL_XHRs = new Set();
+export const ALL_XHRS = new Set();
 
 window.onbeforeunload = (e)=>{
-    if (ALL_XHRs.size) return `Uploads are in progress, leaving will abort the uploads.`;
+    if (ALL_XHRS.size) return `Uploads are in progress, leaving will abort the uploads.`;
     // return "";
 };
 export const YES_OR_NO = [[false,"No"], [true,"Yes"]];
@@ -86,7 +71,7 @@ export var moving_average = (points, windowSize)=>{
 
 // --------------------------------------------------------------------
 
-UI.VALIDATORS = (()=>{
+{
     let media_type = function(type) {
         var v = this.value;
         if (!v) return true;
@@ -95,14 +80,13 @@ UI.VALIDATORS = (()=>{
         if (type && mi && mi.streams && !mi.streams.find(s=>s.type === type)) return `No ${type} streams detected.`
         return true;
     };
-    return {
-        ...UI.VALIDATORS, 
+    Object.assign(UI.VALIDATORS, {
         media_exists: function() { return media_type.apply(this, []); },
         media_video: function() { return media_type.apply(this, ["video"]); },
         media_audio: function() { return media_type.apply(this, ["audio"]); },
         media_subtitle: function() { return media_type.apply(this, ["subtitle"]); },
-    };
-})();
+    });
+}
 
 export var windows = {};
 
@@ -199,7 +183,7 @@ export class UploadFileChunk {
 UploadFileChunk.create = function(blob, path=undefined) {
     var ufc = new UploadFileChunk();
     ufc._blob = blob;
-    ufc.id = blob.id || dom_utils.uuidv4();
+    ufc.id = blob.id || dom_utils.uuid4();
     ufc.path = path || blob.path || blob.name;
     ufc.last_modified = +blob.lastModified || 0;
     ufc.start = 0;
@@ -263,7 +247,7 @@ export class UploadQueue {
             xhr.id = c.id;
             xhr.progress = 0;
             this.xhrs.add(xhr);
-            ALL_XHRs.add(xhr);
+            ALL_XHRS.add(xhr);
             let response = await new Promise((resolve) => {
                 xhr.upload.addEventListener("progress", (e)=>{
                     if (e.lengthComputable) {
@@ -279,7 +263,7 @@ export class UploadQueue {
                 xhr.send(form_data);
             });
             this.xhrs.delete(xhr);
-            ALL_XHRs.delete(xhr);
+            ALL_XHRS.delete(xhr);
             let msg = `Chunk ${ci} [${Date.now()-ts}ms]`;
             done = true;
             if (xhr.canceled || utils.try(()=>response.uploads[c.id].status === UploadStatus.CANCELED)) {
@@ -700,9 +684,16 @@ TicksBar.tick_heights = ["2px", "4px", "6px", "8px"];
 TicksBar.max_tick_time = 8 * TicksBar.tick_times[TicksBar.tick_times.length-1];
 TicksBar.max_ticks = 100;
 
+
+
+function get_file_manager_url(id) {
+    var url = new URL("/file-manager/index.html", window.location.origin);
+    if (id !== undefined) url.searchParams.append("id", id);
+    return url.toString();
+}
+
 /**
- * @param {*} id 
- * @param {{folders:boolean, files:boolean, multiple:boolean, filter:string[], start:string}} options 
+ * @param {{id:any, hidden_id:any, folders:boolean, files:boolean, multiple:boolean, filter:string[], start:string}} options 
  */
 async function open_file_manager(options) {
     options = Object.assign({
@@ -741,9 +732,10 @@ async function open_file_manager(options) {
         var results = await electron.dialog.showOpenDialog(electron_options);
         if (results.canceled) return null;
         return results.filePaths;
-    } else {
+    } else if (app.$.processes["file-manager"]) {
         /** @type {Window} */
         var win;
+        var win_id = options.hidden_id || options.id;
         var use_window = options.new_window;
         var on_message;
         var messenger = new dom_utils.WindowCommunicator();
@@ -781,22 +773,21 @@ async function open_file_manager(options) {
                 resolve(paths);
             });
 
-            var url = new URL("/file-manager/index.html", window.location.origin);
-            if (options.id) url.searchParams.append("id", options.id);
+            var url = get_file_manager_url(options.id);
             if (use_window) {
-                win = windows[options.id];
-                if (!win) {
-                    win = window.open(url.toString(), `File Manager`);
-                    if (options.id) windows[options.id] = win;
+                win = windows[win_id];
+                if (!win || win.closed) {
+                    win = window.open(url, `_blank`);
+                    if (win_id) windows[win_id] = win;
                 }
                 win.focus();
                 win.addEventListener("beforeunload", (e)=>{
                     e.preventDefault();
-                    delete windows[options.id];
+                    delete windows[win_id];
                     resolve();
                 });
             } else {
-                app.file_manager_menu.show(url.toString());
+                app.file_manager_menu.show(url);
                 win = app.file_manager_menu.iframe.contentWindow;
                 app.file_manager_menu.once("hide", ()=>{
                     resolve();
@@ -808,6 +799,8 @@ async function open_file_manager(options) {
             if (use_window) win.close();
             else app.file_manager_menu.hide();
         })
+    } else {
+        console.error("File Manager not present")
     }
 }
 
@@ -817,7 +810,7 @@ export function create_context_menu(parent, elem, e) {
         appendTo: app.elem,
         content: elem,
         onHide: (instance) =>{
-            app.root.removeEventListener("click", on_click);
+            app.root_elem.removeEventListener("click", on_click);
         },
         getReferenceClientRect: () => ({
             width: 0,
@@ -837,7 +830,7 @@ export function create_context_menu(parent, elem, e) {
     });
     t.show();
     setTimeout(()=>{
-        app.root.addEventListener("click", on_click = (e)=>{
+        app.root_elem.addEventListener("click", on_click = (e)=>{
             if (!dom_utils.closest(e.target, el=>el==t.popper)) t.hide();
         })
     },0)
@@ -1450,6 +1443,7 @@ AccessControl.ACCESS_ORDER = {"owner":1,"allow":2,"deny":3};
 // --------------------------------------------
 
 export class Client {
+    session_id = undefined;
     is_admin = false;
     username = null;
     email = null;
@@ -1459,7 +1453,8 @@ export class Client {
 }
 
 export class Target {
-    get streams() { return Object.values(app.$.streams).filter(s=>s.targets.find(t=>t.id == this.id)); }
+    get _streams() { return app.$._streams.filter(s=>s.targets.find(t=>t.id == this.id)); }
+    get _active_streams() { return this._streams.filter(s=>s._is_running); }
     constructor(data) {
         this.name = ""
         this.description = ""
@@ -1514,93 +1509,93 @@ export class PlaylistItem {
         this.__private.userdata = null;
         this.__private.children = new Set();
         this.__private.children_ordered = null;
-        // this.__private.uid = dom_utils.uuidv4();
+        // this.__private.uid = dom_utils.uuid4();
         
         Object.assign(this, data);
     }
     /** @return {Session} */
-    get session() {
+    get _session() {
         return this.__private.session;
     }
     /** @return {PlaylistUserData} */
-    get userdata() {
+    get _userdata() {
         if (!this.__private.userdata) {
-            this.update_userdata();
+            this._update_userdata();
             this.__private.num_updates++;
         }
         return this.__private.userdata;
     }
-    get num_updates() {
+    get _num_updates() {
         return this.__private.num_updates;
     }
-    get hash() {
+    get _hash() {
         return this.__private.num_updates;
     }
-    get parent() {
-        return this.session.playlist[this.parent_id];
+    get _parent() {
+        return this._session.playlist[this.parent_id];
     }
-    get info() {
-        return this.session.playlist_info[this.id];
+    get _info() {
+        return this._session.playlist_info[this.id];
     }
-    get media_info() {
+    get _media_info() {
         return app.$.media_info[this.filename];
     }
-    get is_deleted() {
-        return this.id in this.session.playlist_deleted;
+    get _is_deleted() {
+        return this.id in this._session.playlist_deleted;
     }
-    get is_playlist() {
-        return this.is_root || this.filename === "livestreamer://playlist" || this.has_children;
+    get _is_playlist() {
+        return this._is_root || this.filename === "livestreamer://playlist" || this._has_children;
     }
-    get is_current_playing_item() {
-        return this === this.session.current_playing_item;
+    get _is_current_playing_item() {
+        return this === this._session._current_playing_item;
     }
-    get is_root() {
+    get _is_root() {
         return this.id == "0";
     }
-    get is_null() {
+    get _is_null() {
         return this === NULL_PLAYLIST_ITEM;
     }
-    get detected_crops() {
-        return this.session.detected_crops[this.id]
+    get _detected_crops() {
+        return this._session.detected_crops[this.id]
     }
-    get is_mergable() {
-        if (this.is_playlist) return true;
+    get _is_mergable() {
+        if (this._is_playlist) return true;
         if (this.filename == "livestreamer://empty" || this.filename == "livestreamer://exit") return true;
-        if (this.url.protocol === "file:") {
-            if ((this.media_info||EMPTY_OBJECT).exists) return true;
+        if (this._url.protocol === "file:") {
+            if ((this._media_info||EMPTY_OBJECT).exists) return true;
         }
         return false;
     }
-    get is_merged() {
-        return this.is_merged_playlist || !!this.root_merged_playlist;
+    get _is_merged() {
+        return this._is_merged_playlist || !!this._root_merged_playlist;
     }
-    get has_children() {
+    get _has_children() {
         return this.__private.children.size != 0;
     }
-    calculate_contents_hash() {
-        return hash(JSON.stringify([this.id,this.parent_id,this.filename,this.index,this.track_index,this.props,this.children.map(c=>c.calculate_contents_hash())]))
+    _calculate_contents_hash() {
+        return hash(JSON.stringify([this.id,this.parent_id,this.filename,this.index,this.track_index,this.props,this._children.map(c=>c._calculate_contents_hash())]))
         // return hash(JSON.stringify({self:this.props, children:this.children.map(c=>c.calculate_contents_hash())}));
     }
     /** @return {Iterable<PlaylistItem>} */
-    *get_children(track_index=null, recursive=false) {
-        var children = this.children;
+    *_get_children(track_index=null, recursive=false) {
+        var children = this._children;
         if (track_index != null) children = children.filter(i=>track_index == null || i.track_index == track_index);
         for (var item of children) {
             yield item;
             if (recursive) {
-                for (var c of item.get_children(null, true)) yield c;
+                for (var c of item._get_children(null, true)) yield c;
             }
         }
     }
-    update_userdata() {
+    _update_userdata() {
         /** @type {PlaylistUserData} */
         let ud = this.__private.userdata = {};
-        let media_info = this.media_info || EMPTY_OBJECT;
-        let download = this.download;
-        let upload = this.upload;
-        let children = this.children;
-        var is_playlist = this.is_playlist;
-        let is_processing = this.is_processing;
+        let media_info = this._media_info || EMPTY_OBJECT;
+        let download = this._download;
+        let upload = this._upload;
+        let children = this._children;
+        var is_playlist = this._is_playlist;
+        let is_processing = this._is_processing;
 
         let filenames = new Set();
         filenames.add(this.filename);
@@ -1609,7 +1604,7 @@ export class PlaylistItem {
         if (this.props.subtitle_file) filenames.add(this.props.subtitle_file);
         ud.filenames = [...filenames];
 
-        ud.name = this.get_pretty_name();
+        ud.name = this._get_pretty_name();
         
         let media_duration = round_ms(media_info.duration || 0);
         if (media_duration <= IMAGE_DURATION) media_duration = 0;
@@ -1622,12 +1617,12 @@ export class PlaylistItem {
                 var key = tl ? "timeline_duration" : "duration";
                 for (var i of t) {
                     if (i.filename === "livestreamer://exit") break;
-                    total += i.userdata[key];
+                    total += i._userdata[key];
                 }
                 return total;
             }
-            var track_durations = this.tracks.map((t)=>get_track_duration(t));
-            var track_timeline_durations = this.tracks.map((t)=>get_track_duration(t, true));
+            var track_durations = this._tracks.map((t)=>get_track_duration(t));
+            var track_timeline_durations = this._tracks.map((t)=>get_track_duration(t, true));
             if (this.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK && this.props.playlist_end_on_shortest_track && track_durations.every(t=>t>0)){
                 children_duration = Math.min(...track_durations);
                 timeline_duration = Math.min(...track_timeline_durations);
@@ -1669,12 +1664,12 @@ export class PlaylistItem {
             ud.clipping = { start, end, length, duration, offset, loops };
         }
 
-        ud.is_merged = this.is_merged;
+        ud.is_merged = this._is_merged;
         ud.duration = duration;
         ud.media_duration = media_duration;
         ud.children_duration = children_duration;
         ud.timeline_duration = timeline_duration;
-        ud.num_updates = this.num_updates;
+        ud.num_updates = this._num_updates;
         /* ud.pending_changes = (()=>{
             if (!this.session.is_running || !this.is_current_playing_item) return false;
             if (!this.session.current_item_on_load) return false;
@@ -1694,11 +1689,11 @@ export class PlaylistItem {
         var chapters;
         if (is_playlist) {
             chapters = [];
-            for (var items of this.tracks) {
+            for (var items of this._tracks) {
                 var t = 0;
                 var tt = 0;
                 for (var c of items) {
-                    var cud = c.userdata;
+                    var cud = c._userdata;
                     cud.start = t;
                     cud.timeline_start = tt;
                     t += cud.duration;
@@ -1743,126 +1738,129 @@ export class PlaylistItem {
         }
     }
     /** @return {PlaylistItem[]} */
-    get children() {
+    get _children() {
         if (!this.__private.children_ordered) this.__private.children_ordered = [...this.__private.children].sort((a,b)=>a.track_index-b.track_index || a.index-b.index);
         return [...this.__private.children_ordered];
     }
-    get descendents() {
-        return [...this.get_children(null, true)];
+    get _descendents() {
+        return [...this._get_children(null, true)];
     }
-    get is_rtmp() {
+    get _is_rtmp() {
         return this.filename === "livestreamer://rtmp";
     }
-    get is_rtmp_live() {
-        return !!(this.is_rtmp && this.session.get_connected_nms_session_with_appname("private"));
+    get _is_rtmp_live() {
+        return !!(this._is_rtmp && this._session._get_connected_nms_session_with_appname("private"));
     }
-    get media_infos() {
-        return this.info.filenames.map(f=>app.$.media_info[f]).filter(mi=>mi);
+    get _media_infos() {
+        return this._info.filenames.map(f=>app.$.media_info[f]).filter(mi=>mi);
     }
-    get is_processing() {
-        var info = this.info;
+    get _is_processing() {
+        var info = this._info;
         if (!info) return false;
-        return info.filenames.some(f=>app.$.media_info[f] && app.$.media_info[f].processing) || this.children.some(i=>i.is_processing);
+        return info.filenames.some(f=>app.$.media_info[f] && app.$.media_info[f].processing) || this._children.some(i=>i._is_processing);
     }
-    /* get depth() {
+    /* get _depth() {
         return this.parents.length;
     } */
-    get parents() {
-        return [...this.get_parents()].filter(p=>p);
+    get _parents() {
+        return [...this._get_parents()].filter(p=>p);
     }
-    get parent_track() {
-        return this.parent.get_track(this.track_index);
+    get _parent_track() {
+        return this._parent._get_track(this.track_index);
     }
-    get_track(t) {
-        return [...this.get_children(t)];
+    _get_track(t) {
+        return [...this._get_children(t)];
     }
     /** @return {PlaylistItem[][]} */
-    get tracks() {
+    get _tracks() {
         var tracks = [];
         if (this.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK) {
-            for (var i = 0; i<2; i++) tracks.push([...this.get_children(i)]);
+            for (var i = 0; i<2; i++) tracks.push([...this._get_children(i)]);
         } else {
-            tracks[0] = [...this.get_children()];
+            tracks[0] = [...this._get_children()];
         }
         return tracks;
     }
-    get num_tracks() {
+    get _num_tracks() {
         if (this.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK) return 2;
         return 1;
     }
-    get is_merged_playlist() {
-        return this.props.playlist_mode && this.props.playlist_mode != PLAYLIST_MODE.NORMAL;
+    get _is_merged_playlist() {
+        return !!this.props.playlist_mode;
     }
-    get root_merged_playlist() {
-        for (var p of this.parents.reverse()) {
-            if (p.is_merged_playlist) return p;
+    get _is_normal_playlist() {
+        return this._is_playlist && !this.props.playlist_mode;
+    }
+    get _root_merged_playlist() {
+        for (var p of this._parents.reverse()) {
+            if (p._is_merged_playlist) return p;
         }
     }
-    get is_navigatable() {
+    get _is_navigatable() {
         if (this.filename.match(/^https?:/)) return true;
-        if (this.elfinder_hash) return true;
+        if (this._elfinder_hash) return true;
         if ((!utils.is_uri(this.filename) || this.filename.startsWith("file://")) && IS_ELECTRON) return true;
         return false;
     }
-    get url() {
+    get _url() {
         return utils.is_uri(this.filename) ? new URL(this.filename) : new URL("file://"+this.filename);
     }
-    get download() {
+    get _download() {
         return app.$.downloads[this.id];
     }
-    get upload() {
+    get _upload() {
         return app.$.uploads[this.id];
     }
-    get active_upload() {
-        var upload = this.upload;
+    get _active_upload() {
+        var upload = this._upload;
         if (upload.status != UPLOAD_STATUS.CANCELED) return upload;
     }
-    get is_downloadable() {
-        return !this.download && (this.media_info||EMPTY_OBJECT).downloadable && !this.is_playlist;
+    get _is_downloadable() {
+        return !this._download && (this._media_info||EMPTY_OBJECT).downloadable && !this._is_playlist;
     }
-    get is_splittable() {
-        return this.userdata.media_duration > 0 && !this.is_playlist;
+    get _is_splittable() {
+        return this._userdata.media_duration > 0 && !this._is_playlist;
     }
-    get is_scannable() {
-        return !this.filename.startsWith("livestreamer://") || this.is_playlist;
+    get _is_scannable() {
+        return !this.filename.startsWith("livestreamer://") || this._is_playlist;
     }
-    get elfinder_hash() {
+    get _elfinder_hash() {
         return app.filename_to_elfinder_hash(this.filename);
     }
-    get_adjacent_sibling(a=1) {
+    _get_adjacent_sibling(a=1) {
         a = a>0?1:-1;
-        var parent = this.parent;
-        return parent && parent.children[this.index+a];
+        var parent = this._parent;
+        return parent && parent._children[this.index+a];
     }
-    get_adjacent(a=1, skip_playlists=true) {
+    _get_adjacent(a=1, skip_playlists=true) {
         var next;
         if (a>0) {
-            if (this.has_children && !this.is_merged_playlist) {
-                next = this.children[0];
+            if (this._has_children && !this._is_merged_playlist) {
+                next = this._children[0];
             } else {
-                next = this.get_adjacent_sibling(1);
-                if (!next) next = this.parents.map(p=>p.get_adjacent_sibling(1)).find(p=>p);
+                next = this._get_adjacent_sibling(1);
+                if (!next) next = this._parents.map(p=>p._get_adjacent_sibling(1)).find(p=>p);
             }
         } else {
-            next = this.get_adjacent_sibling(-1);
-            var parent = this.parent;
+            next = this._get_adjacent_sibling(-1);
+            var parent = this._parent;
             if (!next && parent) next = parent;
-            else if (next && next.has_children && !next.is_merged_playlist) {
-                next = next.descendents.pop();
+            else if (next && next._has_children && !next._is_merged_playlist) {
+                next = next._descendents.pop();
             }
         }
-        if (skip_playlists && next && next.is_playlist && !next.is_merged_playlist) {
-            next = next.get_adjacent(a, true);
+        if (skip_playlists && next && next._is_playlist && !next._is_merged_playlist) {
+            next = next._get_adjacent(a, true);
         }
         if (next && next.is_root) return;
         return next;
     }
-    get next() { return this.get_adjacent(1, false); }
-    get previous() { return this.get_adjacent(-1, false); }
-    get next_sibling() { return this.get_adjacent_sibling(1); }
-    get previous_sibling() { return this.get_adjacent_sibling(-1); }
+    get _next() { return this._get_adjacent(1, false); }
+    get _previous() { return this._get_adjacent(-1, false); }
+    get _next_sibling() { return this._get_adjacent_sibling(1); }
+    get _previous_sibling() { return this._get_adjacent_sibling(-1); }
 
-    get_pretty_name(opts) {
+    _get_pretty_name(opts) {
         opts = Object.assign({
             label:true,
             ext:true
@@ -1870,9 +1868,9 @@ export class PlaylistItem {
         if (opts.label && this.props.label) {
             return this.props.label;
         }
-        if (this.is_root) return "[Root]";
-        if (this.is_null) return "[Nothing]";
-        var mi = this.media_info || EMPTY_OBJECT;
+        if (this._is_root) return "[Root]";
+        if (this._is_null) return "[Nothing]";
+        var mi = this._media_info || EMPTY_OBJECT;
         if (mi.name) return mi.name;
         var filename = this.filename;
         if (filename.match(/^livestreamer:/)) {
@@ -1889,21 +1887,21 @@ export class PlaylistItem {
         }
         return filename;
     }
-    reveal() {
-        if (this.is_null) return;
-        var next = this.parent;
-        if (this.is_root) next = this;
+    _reveal() {
+        if (this._is_null) return;
+        var next = this._parent;
+        if (this._is_root) next = this;
         app.playlist.open(next, [this]);
     }
     /** @return {Iterable<PlaylistItem>} */
-    *get_parents(until=null) {
+    *_get_parents(until=null) {
         var item = this;
-        while (item && item.parent_id && until !== item.parent) {
-            yield item.parent;
-            item = item.parent;
+        while (item && item.parent_id && until !== item._parent) {
+            yield item._parent;
+            item = item._parent;
         }
     }
-    copy(include_non_enumerable=false) {
+    _copy(include_non_enumerable=false) {
         if (include_non_enumerable) return Object.fromEntries((utils.get_property_keys(this).map(k=>[k,utils.deep_copy(this[k])])));
         return utils.deep_copy(this);
     }
@@ -1930,23 +1928,17 @@ export class Stream {
         this.test = false;
         Object.assign(this, data);
     }
-    get session() {
+    get _session() {
         return app.$.sessions[this.session_id];
     }
-    get is_running() {
+    get _is_running() {
         return this.state !== "stopped";
     }
-    get is_encoding() {
-        return !!this.mpv.is_encoding && this.is_running;
+    get _is_encoding() {
+        return !!this.mpv.is_encoding && this._is_running;
     }
 }
 export class Session {
-    get connected_nms_sessions() {
-        return Object.values(app.$.nms_sessions).filter(s=>s.publishStreamPath.split("/").pop() === this.id);
-    }
-    get_connected_nms_session_with_appname(appname) {
-        return this.connected_nms_sessions.find(s=>s.appname === appname);
-    }
     constructor(data) {
         this.id = "";
         this.type;
@@ -1958,10 +1950,9 @@ export class Session {
         this.player = {};
         this.player_default_override = {};
         this.stream_settings = {};
+        this.stream = new Stream();
         this.current_item_on_load = null;
         this.current_descendents_on_load = null;
-        this.last_stream = null;
-        this.stream_id = null;
         this.target_configs = {};
         
         this.playlist_info = {};
@@ -1986,14 +1977,17 @@ export class Session {
         Object.assign(this, data);
         this.playlist["0"] = {id:"0"}; // weird
     }
-    get current_playing_item() {
+    get _connected_nms_sessions() {
+        return Object.values(app.$.nms_sessions).filter(s=>s.publishStreamPath.split("/").pop() === this.id);
+    }
+    _get_connected_nms_session_with_appname(appname) {
+        return this._connected_nms_sessions.find(s=>s.appname === appname);
+    }
+    get _current_playing_item() {
         return app.get_playlist_item(this.playlist_id) || NULL_PLAYLIST_ITEM;
     }
-    get stream() {
-        return app.$.streams[this.stream_id] || NULL_STREAM;
-    }
-    get is_running() {
-        return !!this.stream.is_running;
+    get _is_running() {
+        return !!this.stream._is_running;
     }
     /* get movable() {
         var ac = new AccessControl(this.access_control);
@@ -2006,12 +2000,9 @@ export const NULL_SESSION = Object.freeze(new Session());
 export const NULL_PLAYLIST_ITEM = Object.freeze(new PlaylistItem());
 export const NULL_STREAM = Object.freeze(new Stream());
 
-export class Remote {
-    static init() {
-        app.$ = new Remote();
-        app.$._media.update();
-    }
+export class Remote extends utils.EventEmitter {
     constructor() {
+        super();
         this._changes = [];
 
         this.client_id = null;
@@ -2039,13 +2030,6 @@ export class Remote {
                 return true;
             }
         });
-        /** @type {Record<string,Stream>} */
-        this.streams = new Proxy({}, {
-            set(target, prop, value) {
-                target[prop] = new Stream(value);
-                return true;
-            }
-        });
         this.volumes = {};
         this.change_log = {};
         this.plugins = {};
@@ -2060,68 +2044,34 @@ export class Remote {
         this.processes = {};
         this.sysinfo = {};
         this.process_info = {};
+        this.conf = {};
         this.server_time_diff = 0;
-
-        this.pending_requests = new Set();
-        var $ = this;
-
-        this._media = new class {
-            time = 0;
-            duration = 0;
-            chapters = [];
-            seekable = false;
-            loaded;
-            update() {
-                this.item = $._session.current_playing_item;
-                var started = $._session.is_running;
-                var loaded = !started || !!$._stream.mpv.loaded;
-                var seeking = started && !!$._stream.mpv.seeking;
-                var special_seeking = started && !!$._stream.mpv.is_special && !!$._stream.mpv.seeking;
-                var buffering = !!(seeking || !loaded || $._stream.mpv.props["paused-for-cache"]);
-
-                if (!special_seeking) {
-                    this.time = app.get_current_time_pos();
-                    this.duration = app.get_current_duration();
-                    this.chapters = app.get_current_chapters();
-                    this.seekable = this.duration != 0 && (!started || !!$._stream.mpv.seekable) && this.item.filename !== "livestreamer://empty";
-                    this.loaded = loaded;
-                    this.buffering = buffering;
-                    
-                    if (!loaded) {
-                        this.time = 0;
-                        this.duration = 0;
-                        this.chapters = [];
-                        this.seekable = false;
-                    }
-
-                    this.status = started ? (loaded ? "Playing" : "Loading") : "Pending";
-                    
-                    this.stats = {};
-                    this.stats["V-FPS"] = (+$._stream.mpv.props["estimated-vf-fps"] || 0).toFixed(2);
-                    if (!$._stream.is_encoding) this.stats["D-FPS"] = (+$._stream.mpv.props["estimated-display-fps"] || 0).toFixed(2);
-                    this.stats["INTRP"] = $._stream.mpv.interpolation ? "On" : "Off";
-                    this.stats["DEINT"] = $._stream.mpv.deinterlace ? "On" : "Off";
-
-                    this.curr_chapters = app.get_current_chapters_at_time(this.time);
-                }
-            }
-            get time_left() { return Math.max(0, this.duration - this.time); }
-            get do_live_seek(){ return $._stream.is_running && !$._stream.is_encoding && !$._stream.mpv.is_special; }
-        }
+        this._pending_requests = new Set();
     }
-    _update(changes) {
+
+    _debounced_update = utils.debounce(()=>this._update());
+    _update() {
+        var changes = utils.tree_from_entries(this._changes);
+        utils.clear(this._changes);
+        // !! IMPORTANT FOR DATES AND THINGS LIKE THAT.
+        utils.deep_walk(changes, function(k,v) {
+            if (v && typeof v === "object" && v.toJSON && typeof v.toJSON === "function") {
+                this[k] = v.toJSON();
+            }
+        });
         utils.Observer.apply_changes(this, changes);
-        this._media.update();
+        this.emit("update", changes);
     }
     _push(...items) {
         this._changes.push(...items.map(i=>utils.deep_copy(i)));
-        app.debounced_update_$();
+        this._debounced_update();
     }
     /** @type {Session} */
     get _session() { return this.sessions[this._client.session_id] || NULL_SESSION; }
     /** @type {Client} */
     get _client() { return this.clients[this.client_id] || NULL_CLIENT; }
     get _stream() { return this._session.stream; }
+    get _streams() { return Object.values(this.sessions).map(s=>s.stream).filter(s=>s); }
 }
 export class CropPreview extends utils.EventEmitter {
     add_legend(name, clazz) {
@@ -2377,109 +2327,44 @@ export function get_rect_pt_percent(rect, pt) {
 
 // fancy box fixes (ffs so fucking many)...
 
-(()=>{
-    /* var instances = [];
-
-    var old_getComputedStyle = window.getComputedStyle;
-    window.getComputedStyle = function(el, p_el) {
-        if (!(el instanceof Element)) return {};
-        return old_getComputedStyle.apply(null, [el, p_el])
-    }
-    
-    Fancybox.getInstance = function(id) {
-        var _instances = instances;
-        if (id) _instances = _instances.filter(i=>i.id==id);
-        for (var instance of _instances) {
-            if (instance && instance.state !== "closing" && instance.state !== "customClosing") {
-                return instance;
-            }
-        }
-        return null;
-    }; */
-    
-    window.Fancybox = class extends Fancybox {
-        attachEvents() {
-            this.original_active_element = document.activeElement;
-            this.$container.focus();
-            super.attachEvents();
-            this.$container.addEventListener("mousedown", this._onMousedown2 = (e)=>{
-                var slide = this.getSlide();
-                this._content_mousedown = !!(slide && slide.$content.contains(e.target));
-            }, true);
-        }
-        detachEvents() {
-            super.detachEvents();
-            if (this.original_active_element) this.original_active_element.focus({preventScroll: true});
-            this.$container.removeEventListener("mousedown", this._onMousedown2);
-        }
-        onClick(e) {
-            if (this._content_mousedown) return;
-            super.onClick(e);
-        }
-    }
-    
-    Object.assign(window.Fancybox.defaults, {
-        closeButton:"inside",
-        Hash: false,
-        ScrollLock: false,
-        dragToClose: false,
-        autoFocus: false,
-        trapFocus: false,
-        keyboard: false,
-        click: "close",
-        Carousel: {
-            Panzoom: {
-                touch: false
-            }
-        }
-    });
-    /* window.Fancybox = class extends Fancybox {
-        setContent(slide, html, opts) {
-            var shadow = slide.$content.attachShadow({mode:'open'});
-            slide.$content.remove();
-            dom_utils.clone_document_head(app.root, shadow, {style:true, script:false, other:false}).then(()=>{
-                shadow.append(slide.$content);
-            })
-            super.setContent(slide, html, opts);
-            // slide.$el.prepend()
-        }
-    } */
-    /* window.Fancybox = class extends Fancybox {
-        constructor(...args) {
-            super(...args);
-            instances.push(this);
-        }
-        attachEvents() {
-        app.root.addEventListener("mousedown", this.onMousedown);
-        app.root.addEventListener("keydown", this.onKeydown);
-        this.$container.addEventListener("click", this.onClick);
-        }
-        detachEvents() {
-            app.root.removeEventListener("mousedown", this.onMousedown);
-            app.root.removeEventListener("keydown", this.onKeydown);
-            this.$container.removeEventListener("click", this.onClick);
-        }
-        onMousedown(e) {
+class Fancybox extends _Fancybox {
+    attachEvents() {
+        this.original_active_element = document.activeElement;
+        this.$container.focus();
+        super.attachEvents();
+        this.$container.addEventListener("mousedown", this._onMousedown2 = (e)=>{
             var slide = this.getSlide();
             this._content_mousedown = !!(slide && slide.$content.contains(e.target));
-            super.onMousedown(e);
+        }, true);
+    }
+    detachEvents() {
+        super.detachEvents();
+        if (this.original_active_element) this.original_active_element.focus({preventScroll: true});
+        this.$container.removeEventListener("mousedown", this._onMousedown2);
+    }
+    onClick(e) {
+        if (this._content_mousedown) return;
+        super.onClick(e);
+    }
+}
+
+Object.assign(Fancybox.defaults, {
+    closeButton:"inside",
+    Hash: false,
+    ScrollLock: false,
+    dragToClose: false,
+    autoFocus: false,
+    trapFocus: false,
+    keyboard: false,
+    click: "close",
+    Carousel: {
+        Panzoom: {
+            touch: false
         }
-        onClick(e) {
-            if (this._content_mousedown) return;
-            super.onClick(e);
-        }
-        close(...args) {
-            super.close(...args)
-        }
-        // focus() { debugger; }
-        destroy() {
-            var i = instances.indexOf(this);
-            if (i>-1) instances.splice(i,1);
-            super.destroy();
-        };
-    } */
-})();
-export class JsonElement {
+    }
+});
+
+class JsonElement {
     constructor(data, key, parent) {
         this.data = data;
         this.type = typeof this.data;
@@ -2552,7 +2437,7 @@ export class JsonElement {
         this.elem.classList.toggle("collapsed")
     }
 }
-export class JsonRoot extends JsonElement {
+class JsonRoot extends JsonElement {
     constructor(data, collapsed_children=false) {
         super(data);
         if (collapsed_children) {
@@ -2560,6 +2445,12 @@ export class JsonRoot extends JsonElement {
                 c.toggle();
             }
         }
+    }
+}
+export class JSONContainer extends UI {
+    constructor(data, collapsed_children=false) {
+        var json_root = new JsonRoot(data, collapsed_children);
+        super(json_root.elem);
     }
 }
 
@@ -2575,6 +2466,7 @@ export class ModalPropertyContainer extends UI.PropertyContainer {
             // modal_click: "close",
             "modal.close": true,
             "modal.title": "",
+            "modal.title-overflow": false,
             "modal.footer": false,
             "modal.header": true,
             "modal.width": undefined,
@@ -2583,9 +2475,9 @@ export class ModalPropertyContainer extends UI.PropertyContainer {
 
         super(settings);
         
-        this.header = new UI($(`<div class="fancybox-header"></div>`)[0]);
-        this.content = new UI($(`<div class="fancybox-content"></div>`)[0]);
-        this.footer = new UI($(`<div class="fancybox-footer"></div>`)[0]);
+        this.header = new UI($(`<div class="modal-header"></div>`)[0]);
+        this.content = new UI($(`<div class="modal-content"></div>`)[0]);
+        this.footer = new UI($(`<div class="modal-footer"></div>`)[0]);
 
         this.elem.append(this.header);
         this.elem.append(this.content);
@@ -2595,12 +2487,16 @@ export class ModalPropertyContainer extends UI.PropertyContainer {
         this.content.elem.style.display = "flex";
         this.content.elem.style["flex-direction"] = "column";
         this.content.elem.style.gap = "var(--gap)";
-        if ("modal.width" in this.settings) this.elem.style.width = this.get_setting("modal.width");
 
         this.on("update", ()=>{
-            var w = this.get_setting("modal.width");
-            if (w !== undefined) this.elem.style.width = `${w}px`;
+            var width = this.get_setting("modal.width");
+            var min_width = this.get_setting("modal.min-width");
+            var max_width = this.get_setting("modal.max-width");
+            this.elem.style.width = typeof width === "number" ? `${width}px` : width;
+            this.elem.style.setProperty("--min-width", typeof min_width === "number" ? `${min_width}px` : min_width);
+            this.elem.style.setProperty("--max-width", typeof max_width === "number" ? `${max_width}px` : max_width);
             dom_utils.set_inner_html(this.header.elem, this.get_setting("modal.title"));
+            dom_utils.toggle_class(this.header.elem, "overflow", this.get_setting("modal.title-overflow"));
             dom_utils.toggle_class(this.footer.elem, "d-none", !this.get_setting("modal.footer"));
             dom_utils.toggle_class(this.header.elem, "d-none", !this.get_setting("modal.header"));
         });
@@ -2655,10 +2551,11 @@ export class ModalPropertyContainer extends UI.PropertyContainer {
     }
 }
 
-export class NodeMediaServerTargetConfigMenu extends ModalPropertyContainer {
+export class LocalServerTargetConfigMenu extends ModalPropertyContainer {
     constructor() {
         super({
-            "modal.title": `Configure ${app.conf["nms.name"]} Target`,
+            "modal.title": `Configure Local Media Server`,
+            "modal.title-overflow": true,
             data: ()=>utils.try(()=>app.$._session.target_configs["local"]) || {},
         });
 
@@ -2775,7 +2672,7 @@ export class UserConfigurationSettings extends ModalPropertyContainer {
         
         var reset_layout_button = new UI.Button(`Reset Layout`, {
             click: ()=>{
-                app.settings.set("layout", null)
+                app.settings.set("layout", null);
                 app.update_layout();
             }
         });
@@ -3103,7 +3000,7 @@ export class SystemManagerMenu extends ModalPropertyContainer {
                 var restart_button = new UI.Button("RESTART", {
                     click: ()=>{
                         app.request_no_timeout({
-                            call: ["core", `pm2_restart`],
+                            call: ["core", `module_restart`],
                             arguments: [name]
                         });
                     },
@@ -3112,7 +3009,7 @@ export class SystemManagerMenu extends ModalPropertyContainer {
                 var stop_button = new UI.Button("STOP", {
                     click: ()=>{
                         app.request_no_timeout({
-                            call: ["core", `pm2_stop`],
+                            call: ["core", `module_stop`],
                             arguments: [name]
                         });
                     },
@@ -3121,7 +3018,7 @@ export class SystemManagerMenu extends ModalPropertyContainer {
                 var start_button = new UI.Button("START", {
                     click: ()=>{
                         app.request_no_timeout({
-                            call: ["core", `pm2_start`],
+                            call: ["core", `module_start`],
                             arguments: [name]
                         });
                     },
@@ -3132,17 +3029,18 @@ export class SystemManagerMenu extends ModalPropertyContainer {
                 buttons_ui.append(...buttons);
 
                 this.on("update", ()=>{
-                    var c = app.conf[name];
+                    var conf_name = app.$.processes[name]["title"];
+                    var conf_desc = app.$.processes[name]["description"];
                     var p = app.$.processes[name];
                     var color = null;
                     if (p.status.match(/(online|launch)/)) color="#0a0";
                     else if (p.status.match(/stop/)) color="#666";
                     else if (p.status.match(/error/)) color="f00";
-                    dom_utils.set_inner_html(name_ui.elem, `${c.name} [<span class="status">${p.status.toUpperCase()}</span>]`);
+                    dom_utils.set_inner_html(name_ui.elem, `${conf_name} [<span class="status">${p.status.toUpperCase()}</span>]`);
                     var status_el = name_ui.elem.querySelector(".status");
                     status_el.style.color = color;
                     name_ui.style["font-weight"] = "bold";
-                    dom_utils.set_inner_html(description_ui.elem, c.description);
+                    dom_utils.set_inner_html(description_ui.elem, conf_desc);
                     
                     var pinfo = app.$.process_info[p.pid] || {};
                     var cpu = Number((pinfo.cpu||0)*100).toLocaleString(undefined, {minimumFractionDigits:2,maximumFractionDigits:2})+"%";
@@ -3264,11 +3162,16 @@ export class ScheduleGenerator extends ModalPropertyContainer {
             this.min_duration_filter = new UI.Property("min_duration_filter", "Minimum Duration Filter", `<select>`, {
                 default: 0,
                 options: [[0,"None"],...[10,30,1*60,2*60,5*60,10*60].map(f=>[f, utils.seconds_to_human_readable_str(f)])],
+                info: "Filters out small or interstitial items that might clutter up your schedule."
             })
         )
 
         var row = this.content.append(new UI.FlexRow());
         row.append(
+            // this.time_format = new UI.Property("time_format", "Time Format", `<select>`, {
+            //     default: "24",
+            //     options: [["12","12 Hour"], ["24","24 Hour"]],
+            // }),
             this.remove_ext = new UI.Property("remove_ext", "Remove File Extensions", `<select>`, {
                 default: true,
                 options: YES_OR_NO,
@@ -3295,15 +3198,9 @@ export class ScheduleGenerator extends ModalPropertyContainer {
         this.on("property-change", (e)=>{
             if (!e.name || !e.trigger) return;
             app.settings.set("schedule_generator", this.named_property_lookup_not_null);
-            debounced_render()
         });
 
-        this.on("show",()=>{
-            debounced_render()
-            // this.clip_start.set_values(null, true);
-        })
-
-        var debounced_render = utils.debounce(()=>{
+        this.on("update", (e)=>{
             var day = 60 * 60 * 24;
             var t = this.start_time.value;
             var time = utils.timespan_str_to_seconds(t, "hh:mm");
@@ -3318,20 +3215,22 @@ export class ScheduleGenerator extends ModalPropertyContainer {
             };
             /** @param {PlaylistItem} item */
             var walk = (item)=>{
-                var t = item.userdata.duration;
-                if (t && t>=min) {
-                    var name = item.get_pretty_name({ext:!this.remove_ext.value, label:this.use_labels.value});
-                    add_line(name);
+                if (!item._is_normal_playlist) {
+                    var t = item._userdata.duration;
+                    if (t && t>=min) {
+                        var name = item._get_pretty_name({ext:!this.remove_ext.value, label:this.use_labels.value});
+                        add_line(name);
+                    }
+                    time += t;
                 }
-                time += t;
-                if (!item.is_merged_playlist) {
-                    for (var c of item.children) walk(c);
+                if (!item._is_merged_playlist) {
+                    for (var c of item._children) walk(c);
                 }
             }
-            app.get_playlist_item("0").children.forEach(c=>walk(c));
+            app.get_playlist_item("0")._children.forEach(c=>walk(c));
             add_line(`Fin`);
             this.output.set_value(rows.join("\n"));
-        }, 0);
+        });
     }
 }
 
@@ -3418,7 +3317,8 @@ export class FontSettings extends ModalPropertyContainer {
 export class SplitSettings extends ModalPropertyContainer {
     constructor() {
         super({
-            "modal.title": ()=>`Split ${app.get_playlist_items_title(this.datas)}`,
+            "modal.title": ()=>`Split '<span>${app.get_playlist_items_title(this.datas)}</span>'`,
+            "modal.title-overflow": true,
             "modal.footer":true,
         });
 
@@ -3615,7 +3515,7 @@ export class SessionConfigurationSettings extends ModalPropertyContainer {
         this.creation_time.output_modifiers.push(v=>new Date(v).toLocaleString());
 
         this.stream_host = new UI.Property(null, "Stream Host", `<input type="text" readonly>`, {
-            "default": app.rtmp_host,
+            "default": app.get_rtmp_url(),
             "reset": false,
             "copy": true,
             "info": "Connect and stream to dynamic RTMP playlist items. Use this RTMP host and key in OBS or your streaming software of preference",
@@ -3719,8 +3619,8 @@ export class ChangeLog extends ModalPropertyContainer {
     constructor() {
         super({
             "modal.title":"Change Log",
+            "modal.min-width": "750px"
         });
-        this.elem.style.setProperty("--min-width", "750px");
         this.on("show",()=>{
             Object.assign(this.content.elem.style, {
                 // "font-family": "monospace",
@@ -3788,11 +3688,11 @@ export class UploadsDownloadsMenu extends ModalPropertyContainer {
 export class JSONViewer extends ModalPropertyContainer {
     async show(title, json) {
         super.show();
-        this.settings.title = title;
-        var json = new JsonRoot(json);
+        this.update_settings({"modal.title": title });
+        var json = new JSONContainer(json);
         this.content.elem.innerHTML = "";
         this.content.elem.style["margin-bottom"] = 0;
-        this.content.elem.append(json.elem);
+        this.content.elem.append(json);
     }
 }
 
@@ -3802,16 +3702,16 @@ export class InfoSettings extends JSONViewer {
         var name;
         var data = items.map(d=>{
             var a = {...d};
-            a.media_info = d.media_info;
+            a.media_info = d._media_info;
             // if (app.debug) {
-            a.info = d.info;
-            a.userdata = d.userdata;
+            a.info = d._info;
+            a.userdata = d._userdata;
             // }
             return a;
         })
         if (items.length == 1) {
-            name = items[0].get_pretty_name();
-            data = data[0];
+            name = `'<span>${items[0]._get_pretty_name()}</span>'`;
+            data = data[0]
         } else {
             name = `[${items.length} Items]`
         }
@@ -3946,7 +3846,8 @@ export const TimeLeftMode = {
 export class TargetEditMenu extends ModalPropertyContainer {
     constructor() {
         super({
-            "modal.title": ()=>this.data ? `Edit '${this.data.name}'` : "New Target",
+            "modal.title": ()=>this.data ? `Edit '<span>${this.data.name}</span>'` : "New Target",
+            "modal.title-overflow": true,
             "modal.footer":true,
         });
 
@@ -4205,7 +4106,7 @@ export class TargetConfigurationMenu extends ModalPropertyContainer {
                 "title": "Configure",
             });
 
-            /* var view_url_button = new UI.Link(null, `<i class="fa-solid fa-arrow-up-right-from-square"></i>`, {
+            /* var view_url_button = new UI.Link(`<i class="fas fa-arrow-up-right-from-square"></i>`, {
                 "hidden": ()=>!target.url,
                 "href": ()=>target.url,
             }); */
@@ -4233,7 +4134,7 @@ export class TargetConfigurationMenu extends ModalPropertyContainer {
 
             elem.append(label_el, edit_button, config_button, delete_button, /*view_url_button, */ up_button, down_button);
 
-            var in_use = !!target.streams.length;
+            var in_use = !!target._active_streams.length;
             var name_elem = $(`<span class="name"></span>`)[0];
             var description_elem = $(`<div class="description"></div>`)[0];
             text_wrapper_elem.innerHTML = "";
@@ -4467,7 +4368,7 @@ export class SeekBar extends UI {
             var markers = this.get_setting("seek.markers");
             var chapters = this.get_setting("seek.chapters");
             var buffering = this.get_setting("seek.buffering");
-            // var seekable = this.get_setting("seek.seekable");
+            var seekable = this.get_setting("seek.seekable");
             var seeking = this.get_setting("seek.seeking");
             var seek_pause = this.get_setting("seek.seek_pause");
             var seek_time = this.get_setting("seek.seek_time");
@@ -4484,6 +4385,7 @@ export class SeekBar extends UI {
             this.time_left_elem.style.display = show_times ? "" : "none";
 
             var add_markers = show_markers;
+            this.seek_elem.toggleAttribute("disabled", !seekable)
             this.elem.style.cursor = add_markers ? "copy" : "";
             dom_utils.toggle_class(this.bar_elem, "d-none", add_markers);
             this.markers_elem.style.display = add_markers ? "" : "none";
@@ -4582,304 +4484,43 @@ export class MediaSeekBar extends SeekBar {
     
         var last_time;
         this.on("seek-end", (e)=>{
-            if (!app.$._media.do_live_seek || last_time != e.time) app.seek(e.time);
+            if (!app.media.do_live_seek || last_time != e.time) app.seek(e.time);
         });
         this.on("seeking", (e)=>{
-            if (app.$._media.do_live_seek) app.seek(e.time);
+            if (app.media.do_live_seek) app.seek(e.time);
             last_time = e.time;
         });
         this.on("time_left_mode", (v)=>{
             app.settings.set("time_left_mode", v);
         });
+        var update_time_left_mode = ()=>{
+            this.update_settings({
+                "seek.time_left_mode": app.settings.get("time_left_mode")
+            });
+        }
         app.settings.on("change", (e)=>{
-            if (e.name === "time_left_mode") {
-                this.update_settings({
-                    "seek.time_left_mode": app.settings.get("time_left_mode")
-                });
-            }
+            if (e.name === "time_left_mode") update_time_left_mode();
         });
+        update_time_left_mode();
         this.on("pre_update", ()=>{
-            var running = app.$._stream.is_running;
+            var running = app.$._stream._is_running;
             var seek_pause = this.get_setting("seek.seek_pause");
             if (app.$._stream.mpv.seeks != this._last_seeks || !running) {
                 seek_pause = false;
             }
             this._last_seeks = app.$._stream.mpv.seeks;
-            var buffering = running && (app.$._media.buffering || seek_pause || !app.$._stream.mpv.preloaded);
+            var buffering = running && (app.media.buffering || seek_pause || !app.$._stream.mpv.preloaded);
 
             Object.assign(this.settings, {
-                "seek.time": app.$._media.time,
-                "seek.seekable": app.$._media.seekable,
-                "seek.duration": app.$._media.duration,
-                "seek.chapters": app.$._media.chapters,
+                "seek.time": app.media.time,
+                "seek.seekable": app.media.seekable,
+                "seek.duration": app.media.duration,
+                "seek.chapters": app.media.chapters,
                 "seek.ranges": app.get_current_seekable_ranges(),
                 "seek.seek_pause": seek_pause,
                 "seek.buffering": buffering,
             });
         });
-    }
-}
-
-export class StreamSettings extends UI.PropertyContainer {
-    constructor() {
-        super({
-            data: ()=>app.$._session.stream_settings,
-            // disabled: ()=>app.$.session.is_running,
-        });
-        var left = new UI.Row({flex:1});
-        var right = new UI.Row({flex:0, gap:0});
-        this.append(left, right);
-        
-        this.properties_ui = new UI.Row({
-            "class":"stream-properties",
-            gap: 5,
-            "align":"end",
-            "hidden": ()=>app.$._session.is_running || app.$._session.type !== "InternalSession"
-        })
-        this.info_ui = new UI({
-            "class":"stream-info",
-            "hidden": ()=>!app.$._session.is_running
-        });
-        left.append(this.properties_ui, this.info_ui);
-        
-        this.status_ui = right.append(new UI({"class":"stream-status"}));
-        var button_group_ui = right.append(new UI.FlexRow({gap:0}));
-
-        this.toggle_streaming_button = new UI.Button(null, {
-            id: "toggle-streaming",
-            content: ()=>{
-                var state = app.$._session.stream.state;
-                if (state === "stopped") state = `START`;
-                else if (state === "started") state = `STOP`;
-                else if (state === "stopping") state = `Stopping...`;
-                else if (state === "starting") state = `Starting...`;
-                return state;
-            },
-            disabled: ()=>!app.$._session.is_running && !this.valid_visible,
-            click: (e)=>{
-                if (app.$._session.is_running) {
-                    app.request({
-                        call: ["session", "stop_stream"],
-                        arguments: [true]
-                    });
-                } else {
-                    var msg = "Another stream is already running, playback of all streams may by slower than realtime.\nAre you sure you want to start streaming?";
-                    if (Object.values(app.$.streams).filter(s=>s.is_running).length == 0 || confirm(msg)) {
-                        app.request({
-                            call: ["session", "start_stream"],
-                        });
-                        // app.$.push([`sessions/${app.$.session.id}/core/state`, "starting"]);
-                    }
-                    // app.$.push([`sessions/${app.$.session.id}/core/state`, "stopping"]);
-                }
-            }
-        });
-        this.schedule_stream_button = new UI.Button("Schedule", {
-            id: "schedule-stream",
-            click: (e)=>{
-                app.schedule_stream_menu.show();
-            },
-            disabled:()=>app.$._session.is_running,
-            hidden:()=>app.$._session.is_running
-        });
-        this.handover_button = new UI.Button("Handover", {
-            id: "handover-button",
-            click: async (e)=>{
-                var modal = new HandoverSessionMenu();
-                modal.show();
-            },
-            hidden:()=>!app.$._session.is_running || app.$._session.type != "InternalSession" || app.$._stream.test
-        });
-        this.config_button = new UI.Button(`<i class="fas fa-cog"></i>`, {
-            "id": "config-button",
-            "title": "Stream Configuration",
-            "click": async (e)=>{
-                var modal = new StreamConfigurationMenu();
-                modal.show();
-            },
-            hidden:()=>!app.$._session.is_running || app.$._stream.test
-        });
-        var row = new UI.FlexRow({gap:0});
-        row.elem.style["flex-wrap"] = "nowrap";
-        row.append(this.schedule_stream_button, this.handover_button, this.config_button);
-        button_group_ui.append(this.toggle_streaming_button, row);
-
-        function get_default() { return utils.try(()=>app.$.properties.stream_settings.props[this.name].default); }
-        function get_options() { return utils.try(()=>app.$.properties.stream_settings.props[this.name].options, []); }
-
-        this.stream_method = new UI.Property("method", "Stream Method", `<select></select>`, {
-            "options":function() {
-                var options = get_options.apply(this);
-                if (!app.dev_mode) options = options.filter(o=>!o[1].match(/\[dev\]/i));
-                return options;
-            },
-            // "hidden": !app.dev_mode,
-            "default": get_default,
-            "reset": false,
-        });
-        this.properties_ui.append(this.stream_method)
-
-        this.stream_targets = new TargetsProperty("targets", "Stream Target(s)", {
-            "hidden": ()=>this.stream_method.value != "rtmp",
-        });
-        this.stream_targets.add_validator(v=>(!v || v.length == 0) ? "No targets selected" : true);
-        this.properties_ui.append(this.stream_targets)
-
-        this.stream_title = new UI.Property("title", "Stream Title", `<input type="text">`, {
-            "default": "",
-            "placeholder": ()=>/* app.$.session.default_stream_title || */ app.$._session.name,
-            "hidden": ()=>this.stream_method.value != "rtmp",
-        });
-        this.properties_ui.append(this.stream_title)
-
-        this.stream_file = new UI.Property("filename", "Filename", `<input type="text">`, {
-            "default": get_default,
-            "hidden": ()=>this.stream_method.value != "file",
-            "info": "Special keywords: %date% | %unix%",
-        });
-        this.stream_file.add_validator(UI.VALIDATORS.not_empty)
-        this.properties_ui.append(this.stream_file)
-        
-        this.stream_re = new UI.Property("re", "Encoding Speed", `<select></select>`, {
-            "options": [[1,"Realtime"],[0,"Fastest"]],
-            "default": get_default,
-            "hidden": ()=>this.stream_method.value != "file"
-        });
-        this.properties_ui.append(this.stream_re)
-
-        this.h264_preset = new UI.Property("h264_preset", "h264 Preset", `<select></select>`, {
-            "options": get_options,
-            "default": get_default,
-            "hidden": ()=>this.stream_method.value == "gui"
-        });
-        this.properties_ui.append(this.h264_preset)
-
-        this.video_bitrate = new UI.Property("video_bitrate", "Video Bitrate", `<div class="input-wrapper suffix number Kbips"><input type="number" min="500" max="8000" step="100"></div>`, {
-            "default": get_default,
-            "hidden": ()=>this.stream_method.value == "gui"
-        });
-        this.properties_ui.append(this.video_bitrate)
-
-        this.audio_bitrate = new UI.Property("audio_bitrate", "Audio Bitrate", `<div class="input-wrapper suffix number Kbips"><input type="number" min="64" max="320" step="10"></div>`, {
-            "default": get_default,
-            "hidden": ()=>this.stream_method.value == "gui"
-        });
-        this.properties_ui.append(this.audio_bitrate)
-
-        this.stream_resolution = new UI.Property("resolution", "Resolution", `<select></select>`, {
-            "options": get_options,
-            "default": get_default,
-            "hidden": ()=>this.stream_method.value == "gui"
-        });
-        this.properties_ui.append(this.stream_resolution)
-
-        this.frame_rate = new UI.Property("frame_rate", "Frame Rate", `<select></select>`, {
-            "options": get_options,
-            "default": get_default,
-            "hidden": ()=>this.stream_method.value == "gui" // || this.legacy_mode.value
-        });
-        this.properties_ui.append(this.frame_rate)
-
-        this.legacy_mode = new UI.Property("legacy_mode", "Legacy Mode", `<select></select>`, {
-            "options": get_options,
-            "default": get_default,
-        });
-        this.properties_ui.append(this.legacy_mode)
-
-        this.use_hardware = new UI.Property("use_hardware", "Hardware Transcoding", `<select></select>`, {
-            "options": get_options,
-            "default": get_default,
-            "hidden": ()=>this.stream_method.value == "gui" || this.legacy_mode.value
-        });
-        this.properties_ui.append(this.use_hardware)
-
-        this.test_button = new UI.Button("Test", {
-            "hidden": ()=>this.stream_method.value != "rtmp",
-            "disabled": ()=>!app.$.processes["nms"],
-            "click": ()=> {
-                app.request({
-                    call: ["session", "start_stream"],
-                    arguments: [{ "test": true }],
-                })
-            },
-        })
-        this.properties_ui.append(this.test_button)
-
-        this.on("property-change", (e)=>{
-            if (!e.name || !e.trigger) return;
-            app.request({
-                call: ["session", "update_values"],
-                arguments: [[`stream_settings/${e.name}`, e._value]]
-            });
-            app.$._push([`sessions/${app.$._session.id}/stream_settings/${e.name}`, e._value]);
-        });
-
-        this.on("post_update", ()=>{
-            var session = app.$._session || EMPTY_OBJECT;
-            var stream = session.stream;
-            var status;
-            if (session.reconnect && session.reconnect.active) {
-                var time_left = Math.max(0, session.reconnect.delay - Math.ceil((app.server_now - session.reconnect.ts)/1000));
-                status = `Restarting in ${time_left}s... (${session.reconnect.attempt}/${session.auto_reconnect_max_attempts})`;
-            } else if (session.is_running) {
-                status = utils.ms_to_timespan_str(app.server_now - session.stream.start_time);
-            }
-            // dom_utils.toggle_class(this.stream_status_elem, "d-none", !status);
-            dom_utils.set_inner_html(this.status_ui, status || "-");
-
-
-            dom_utils.toggle_class(this.properties_ui.elem, "d-none", session.is_running);
-            dom_utils.toggle_class(this.info_ui.elem, "d-none", !session.is_running);
-    
-    
-            dom_utils.toggle_class(this.properties_ui.elem, "d-none", session.is_running);
-            dom_utils.toggle_class(this.info_ui.elem, "d-none", !session.is_running);
-    
-            var state;
-            if (stream.state === "stopped") state = `Start`;
-            else if (stream.state === "started") state = `Stop`;
-            else if (stream.state === "stopping") state = `Stopping...`;
-            else if (stream.state === "starting") state = `Starting...`;
-            dom_utils.set_text(this.toggle_streaming_button, state);
-
-            var stream_info = {};
-            stream_info["Stream Method"] = stream["method"];
-            if (app.$._session.type === "InternalSession") {
-                if (stream["method"] !== "gui") {
-                    let parts = {
-                        "h264 Preset": `${stream["h264_preset"]}`,
-                        "Video Bitrate": `${stream["video_bitrate"]}Kbps`,
-                        "Audio Bitrate": `${stream["audio_bitrate"]}Kbps`,
-                        "Resolution": `${stream["resolution"]}`,
-                    };
-                    if (stream["legacy_mode"]) {
-                        parts["Legacy Mode"] = `${stream["legacy_mode"]?"Yes":"No"}`;
-                    } else {
-                        parts["Use Hardware"] = `${stream["use_hardware"]?"Yes":"No"}`;
-                    }
-                    stream_info["Encoder Settings"] = Object.entries(parts).map(([k,v])=>`${k}: ${v}`).join(", ");
-                }
-                if (stream["method"] === "file") {
-                    stream_info["Realtime"] =`${stream["re"]?"Yes":"No"}`;
-                    stream_info["Output Path"] = stream["filename_evaluated"] || "-";
-                }
-                stream_info["Frame Rate"] = `${stream["frame_rate"]}`;
-            } else {
-                var nms_session = app.$._session.get_connected_nms_session_with_appname("livestream");
-                if (nms_session) {
-                    stream_info["Resolution"] = `${nms_session.videoWidth}x${nms_session.videoHeight}`;
-                    stream_info["Frame Rate"] = `${nms_session["videoFps"]}`;
-                }
-            }
-            if (stream["method"] === "rtmp") {
-                if (!stream["test"]) {
-                    stream_info["Stream Target(s)"] = stream["targets"].map((t,i)=>`${t} <span style="color:${app.$.targets[t]?"#00f":"f00"}">[${app.$.targets[t]?"OK":"NOT EXIST"}]</span>`).join(", ");
-                    stream_info["Stream Title"] = stream.title;
-                }
-            }
-
-            dom_utils.set_inner_html(this.info_ui.elem, Object.entries(stream_info).map(([k,v])=>`${k}: ${v}`).join(" | "));
-        })
     }
 }
 
@@ -4891,22 +4532,22 @@ export class StreamKeyGeneratorSettings extends UI.PropertyContainer {
         
         // function get_default() { return utils.try(()=>app.$.properties[this.name].default); }
 
-        var stream_name = new UI.Property(null, "Name", `<input type="text">`, {
+        this.stream_name = new UI.Property(null, "Name", `<input type="text">`, {
             "default": ()=>`${app.$._client.username}'s Stream`,
             "info": "This must be a unique name to identify your stream."
         });
         // stream_name.input_modifiers.push((s)=>s.replace(/\W+/g, " ").trim().split(/\s+/).join("-"));
-        stream_name.on("change", e=>localStorage.setItem("obs_id", String(e._value)));
+        this.stream_name.on("change", e=>localStorage.setItem("obs_id", String(e._value)));
         var saved_id = localStorage.getItem("obs_id");
-        if (saved_id) stream_name.set_value(saved_id)
+        if (saved_id) this.stream_name.set_value(saved_id)
 
         /* var regenerate_button = new UI.Button(`<i class="fas fa-sync-alt"></i>`, {
             "click":()=>stream_name.set_value(dom_utils.uuidb64()),
             "title": "Generate ID",
         }); */
         // stream_name.inner.append(regenerate_button);
-        stream_name.add_validator(UI.VALIDATORS.not_empty);
-        this.append(stream_name);
+        this.stream_name.add_validator(UI.VALIDATORS.not_empty);
+        this.append(this.stream_name);
 
         this.stream_targets = new TargetsProperty(null, "Stream Target(s)", {
             "show_in_use":false,
@@ -4942,20 +4583,20 @@ export class StreamKeyGeneratorSettings extends UI.PropertyContainer {
         this.output_key.add_validator(v=>this.stream_targets.value == 0 ? "Invalid targets" : true);
 
         var update_output = ()=>{
-            var name = stream_name.value.trim();
+            var name = this.stream_name.value.trim();
             var params = new URLSearchParams();
             params.set("targets", this.stream_targets.value.join(","));
             params.set("name", name)
             if (this.volume_normalization.value) params.set("volume-normalization", 1);
             var query_str = params.toString();
-            var host = app.rtmp_host+"livestream";
+            var host = app.get_rtmp_url();
             this.output_host.set_values(host);
-            var key = `${utils.kebabcase(utils.sanitize_filename(name))}`;
+            var key = `livestream/${utils.md5(app.$._client.username)}`;
             if (query_str) key += "?"+query_str;
             this.output_key.set_values(key);
         };
 
-        var debounced_update_output = utils.debounce(update_output);
+        var debounced_update_output = dom_utils.debounce_next_frame(update_output);
         this.on("property-change",(e)=>{
             if (!e.trigger) return;
             debounced_update_output();
@@ -5018,7 +4659,8 @@ export class HandoverSessionMenu extends ModalPropertyContainer {
 export class SavePlaylistSettings extends ModalPropertyContainer {
     constructor() {
         super({
-            "modal.title": ()=>`Save Playlist '${playlist_name}'`,
+            "modal.title": ()=>`Save Playlist '<span>${playlist_name}</span>'`,
+            "modal.title-overflow": true,
             "modal.footer": true,
             data: ()=>app.settings.get("save_playlist_settings"),
         });
@@ -5099,13 +4741,13 @@ export class SavePlaylistSettings extends ModalPropertyContainer {
             var process = (item)=>{
                 var o = {filename: item.filename};
                 if (!utils.is_empty(item.props)) o.props = item.props;
-                var children = item.children;
+                var children = item._children;
                 if (this.playlist_save_children.value && children.length) {
                     o.children = children.map(c=>process(c));
                 }
                 return o;
             }
-            var items = app.playlist.current.children.map(i=>process(i));
+            var items = app.playlist.current._children.map(i=>process(i));
             var json = JSON.stringify(items, null, this.playlist_json_spaces.value ? " ".repeat(this.playlist_json_spaces.value) : undefined);
             return "// livestreamer playlist\n" + json;
         }
@@ -5121,7 +4763,7 @@ export class SavePlaylistSettings extends ModalPropertyContainer {
         this.footer.append(save_local_button, this.cancel)
 
         this.on("show", ()=>{
-            playlist_name = app.playlist.current.get_pretty_name() || app.$._session.name;
+            playlist_name = app.playlist.current._get_pretty_name() || app.$._session.name;
             filename = `${utils.sanitize_filename(playlist_name)}-${utils.date_to_string()}.json`;
             render_preview();
         });
@@ -5139,9 +4781,9 @@ export class SavePlaylistSettings extends ModalPropertyContainer {
 export class HistorySettings extends ModalPropertyContainer {
     history = [];
     constructor() {
-        super();
-
-        this.elem.style.setProperty("--min-width", "900px");
+        super({
+            "modal.min-width": "900px"
+        });
         this.content.elem.classList.add("autosave-history");
         var table_data = {
             "Time":(data)=>{
@@ -5228,7 +4870,7 @@ export class HistorySettings extends ModalPropertyContainer {
             this.selectable_list.select(null);
             dom_utils.empty(tbody);
 
-            this.settings.title = `History [Fetching...]`;
+            this.update_settings({"modal.title": `History [Fetching...]`});
 
             this.history = await app.request({
                 call: ["session","get_autosave_history"],
@@ -5245,7 +4887,7 @@ export class HistorySettings extends ModalPropertyContainer {
                 }
                 tbody.append(tr);
             });
-            this.settings.title = `History [${this.history.length}]`;
+            this.update_settings({"modal.title": `History [${this.history.length}]`});
         });
     }
 
@@ -5332,15 +4974,16 @@ export class PlaylistModifySettings extends ModalPropertyContainer {
             nullify_defaults: true,
             "modal.close": ()=>{
                 if (!this._saved && this.is_new && !IS_ELECTRON) return window.confirm("The new item will not be saved. Continue?");
-                if (app.$._session.is_running && this.datas.some(d=>d === app.$._session.current_playing_item) && this.changes.length) {
+                if (app.$._session._is_running && this.datas.some(d=>d === app.$._session._current_playing_item) && this.changes.length) {
                     app.prompt_for_reload_of_current_item();
                 }
                 return true
             },
             "modal.title": function() {
                 if (this.is_new) return `Add [${this._new_type}]`;
-                return `Modify ${app.get_playlist_items_title(this.datas)}`;
+                return `Modify '<span>${app.get_playlist_items_title(this.datas)}</span>'`;
             },
+            "modal.title-overflow": true,
             "modal.footer":true,
         });
         
@@ -5433,7 +5076,7 @@ export class MediaSettingsInterface {
         let get_streams = (item, type)=>{
             var streams;
             if (this.is_parent_modify) streams = utils.try(()=>item.media_info.streams);
-            else streams = utils.try(()=>app.$._session.current_playing_item.media_info.streams);
+            else streams = utils.try(()=>app.$._session._current_playing_item._media_info.streams);
             // else streams = app.$.stream.mpv.streams;
             if (!streams) streams = [];
             if (type) streams = streams.filter(s=>s.type == type);
@@ -5642,7 +5285,7 @@ export class MediaSettingsInterface {
 
             /** @param {PlaylistItem} item */
             let default_duration = (item)=>{
-                return (item || parent.data).userdata.media_duration;
+                return (item || parent.data)._userdata.media_duration;
             };
             
             this.filename = new UI.Property("filename", "File URI", `<input type="text">`, {
@@ -5758,12 +5401,12 @@ export class MediaSettingsInterface {
             if (clip_mode == 0) {
                 this.clip_loops.on("change", update_durations);
                 this.clip_duration.on("change", (e)=>{
-                    this.clip_loops.set_value((e.value / (this.clip_end.value - this.clip_start.value)), {trigger:e.trigger});
+                    if (e.trigger) this.clip_loops.set_value((e.value / (this.clip_end.value - this.clip_start.value)), {trigger:true});
                 })
             } else {
                 this.clip_duration.on("change", update_durations);
                 this.clip_loops.on("change", (e)=>{
-                    this.clip_duration.set_value((e.value * (this.clip_end.value - this.clip_start.value)), {trigger:true});
+                    if (e.trigger) this.clip_duration.set_value((e.value * (this.clip_end.value - this.clip_start.value)), {trigger:true});
                 })
             }
 
@@ -6168,7 +5811,7 @@ export class MediaSettingsInterface {
                     var fade_duration = this.title_fade_in_out.value;
                     if (!title_preview_style) {
                         title_preview_style = $(`<style></style>`)[0];
-                        app.body.append(title_preview_style);
+                        app.body_elem.append(title_preview_style);
                     }
                     title_preview_style.textContent = `
                     @keyframes title-preview-timeline {
@@ -6291,7 +5934,7 @@ export class MediaSettingsInterface {
             this.label = new UI.Property(prop_name("label"), "Label", `<input type="text">`, {
                 /** @param {PlaylistItem} item */
                 "default": (item)=>{
-                    return item.get_pretty_name({label:false}) || "";return item.get_pretty_name({label:false}) || "";
+                    return item._get_pretty_name({label:false}) || "";return item._get_pretty_name({label:false}) || "";
                 },
             });
 
@@ -6729,7 +6372,7 @@ export class Panel extends UI.PropertyContainer {
 
         this.elem.classList.add("drawer");
         this.elem.dataset.id = this.panel_id;
-        var header_container_elem = $(`<div class="header"><div class="inner"></div><div class="collapse-arrow"><i class="fa-solid fa-chevron-down"></i></div></div>`)[0];
+        var header_container_elem = $(`<div class="header"><div class="inner"></div><div class="collapse-arrow"><i class="fas fa-chevron-down"></i></div></div>`)[0];
         this.body_elem = $(`<div class="body"></div>`)[0];
         this.body = new UI(this.body_elem);
         this.header = new UI(header_container_elem);
@@ -6758,6 +6401,265 @@ export class Panel extends UI.PropertyContainer {
         this.elem.classList.toggle("hide", value)
     }
 }
+
+export class StreamSettings extends Panel {
+    constructor() {
+        super(
+            "Stream Settings",
+            {
+                data: ()=>app.$._session.stream_settings,
+                // disabled: ()=>app.$.session.is_running,
+            }
+        );
+        var left = new UI.Row({flex:1});
+        var right = new UI.Row({flex:0, gap:0});
+        var inner = new UI();
+        inner.append(left, right);
+        inner.elem.classList.add("stream-settings");
+        this.body_elem.append(inner);
+        
+        this.properties_ui = new UI.Row({
+            "class":"stream-properties",
+            gap: 5,
+            "align":"end",
+            "hidden": ()=>app.$._session._is_running || app.$._session.type !== "InternalSession"
+        })
+        this.info_ui = new UI({
+            "class":"stream-info",
+            "hidden": ()=>!app.$._session._is_running
+        });
+        left.append(this.properties_ui, this.info_ui);
+        
+        this.button_group_ui = new UI.FlexRow({gap:0});
+        right.append(this.button_group_ui);
+
+        this.toggle_streaming_button = new UI.Button(null, {
+            id: "toggle-streaming",
+            content: ()=>{
+                var state = app.$._session.stream.state;
+                if (state === "stopped") state = `START`;
+                else if (state === "started") state = `STOP`;
+                else if (state === "stopping") state = `Stopping...`;
+                else if (state === "starting") state = `Starting...`;
+                return state;
+            },
+            disabled: ()=>!app.$._session._is_running && !this.valid_visible,
+            click: (e)=>{
+                if (app.$._session._is_running) {
+                    app.request({
+                        call: ["session", "stop_stream"],
+                        arguments: [true]
+                    });
+                } else {
+                    var msg = "Another stream is already running, playback of all streams may by slower than realtime.\nAre you sure you want to start streaming?";
+                    if (Object.values(app.$._streams).filter(s=>s._is_running).length == 0 || confirm(msg)) {
+                        app.request({
+                            call: ["session", "start_stream"],
+                        });
+                        // app.$.push([`sessions/${app.$.session.id}/core/state`, "starting"]);
+                    }
+                    // app.$.push([`sessions/${app.$.session.id}/core/state`, "stopping"]);
+                }
+            }
+        });
+        this.schedule_stream_button = new UI.Button("Schedule", {
+            id: "schedule-stream",
+            click: (e)=>{
+                app.schedule_stream_menu.show();
+            },
+            disabled:()=>app.$._session._is_running,
+            hidden:()=>app.$._session._is_running
+        });
+        this.handover_button = new UI.Button("Handover", {
+            id: "handover-button",
+            click: async (e)=>{
+                var modal = new HandoverSessionMenu();
+                modal.show();
+            },
+            hidden:()=>!app.$._session._is_running || app.$._session.type != "InternalSession" || app.$._stream.test
+        });
+        this.config_button = new UI.Button(`<i class="fas fa-cog"></i>`, {
+            "id": "config-button",
+            "title": "Stream Configuration",
+            "click": async (e)=>{
+                var modal = new StreamConfigurationMenu();
+                modal.show();
+            },
+            hidden:()=>!app.$._session._is_running || app.$._stream.test
+        });
+        var row = new UI.FlexRow({gap:0});
+        row.elem.style["flex-wrap"] = "nowrap";
+        row.append(this.schedule_stream_button, this.handover_button, this.config_button);
+        this.button_group_ui.append(this.toggle_streaming_button, row);
+
+        function get_default() { return utils.try(()=>app.$.properties.stream_settings.props[this.name].default); }
+        function get_options() { return utils.try(()=>app.$.properties.stream_settings.props[this.name].options, []); }
+
+        this.stream_method = new UI.Property("method", "Stream Method", `<select></select>`, {
+            "options":function() {
+                var options = get_options.apply(this);
+                if (!app.dev_mode) options = options.filter(o=>!o[1].match(/\[dev\]/i));
+                return options;
+            },
+            // "hidden": !app.dev_mode,
+            "default": get_default,
+            "reset": false,
+        });
+        this.properties_ui.append(this.stream_method)
+
+        this.stream_targets = new TargetsProperty("targets", "Stream Target(s)", {
+            "hidden": ()=>this.stream_method.value != "rtmp",
+        });
+        this.stream_targets.add_validator(v=>(!v || v.length == 0) ? "No targets selected" : true);
+        this.properties_ui.append(this.stream_targets)
+
+        this.stream_title = new UI.Property("title", "Stream Title", `<input type="text">`, {
+            "default": "",
+            "placeholder": ()=>/* app.$.session.default_stream_title || */ app.$._session.name,
+            "hidden": ()=>this.stream_method.value != "rtmp",
+        });
+        this.properties_ui.append(this.stream_title)
+
+        this.stream_file = new UI.Property("filename", "Filename", `<input type="text">`, {
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value != "file",
+            "info": "Special keywords: %date% | %unix%",
+        });
+        this.stream_file.add_validator(UI.VALIDATORS.not_empty)
+        this.properties_ui.append(this.stream_file)
+        
+        this.stream_re = new UI.Property("re", "Encoding Speed", `<select></select>`, {
+            "options": [[1,"Realtime"],[0,"Fastest"]],
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value != "file"
+        });
+        this.properties_ui.append(this.stream_re)
+
+        this.h264_preset = new UI.Property("h264_preset", "h264 Preset", `<select></select>`, {
+            "options": get_options,
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui"
+        });
+        this.properties_ui.append(this.h264_preset)
+
+        this.video_bitrate = new UI.Property("video_bitrate", "Video Bitrate", `<div class="input-wrapper suffix number Kbips"><input type="number" min="500" max="8000" step="100"></div>`, {
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui"
+        });
+        this.properties_ui.append(this.video_bitrate)
+
+        this.audio_bitrate = new UI.Property("audio_bitrate", "Audio Bitrate", `<div class="input-wrapper suffix number Kbips"><input type="number" min="64" max="320" step="10"></div>`, {
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui"
+        });
+        this.properties_ui.append(this.audio_bitrate)
+
+        this.stream_resolution = new UI.Property("resolution", "Resolution", `<select></select>`, {
+            "options": get_options,
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui"
+        });
+        this.properties_ui.append(this.stream_resolution)
+
+        this.frame_rate = new UI.Property("frame_rate", "Frame Rate", `<select></select>`, {
+            "options": get_options,
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui" // || this.legacy_mode.value
+        });
+        this.properties_ui.append(this.frame_rate)
+
+        this.legacy_mode = new UI.Property("legacy_mode", "Legacy Mode", `<select></select>`, {
+            "options": get_options,
+            "default": get_default,
+        });
+        this.properties_ui.append(this.legacy_mode)
+
+        this.use_hardware = new UI.Property("use_hardware", "Hardware Transcoding", `<select></select>`, {
+            "options": get_options,
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui" || this.legacy_mode.value
+        });
+        this.properties_ui.append(this.use_hardware)
+
+        this.test_button = new UI.Button("Test", {
+            "hidden": ()=>this.stream_method.value != "rtmp",
+            "disabled": ()=>!app.$.processes["media-server"],
+            "click": ()=> {
+                app.request({
+                    call: ["session", "start_stream"],
+                    arguments: [{ "test": true }],
+                })
+            },
+        })
+        this.properties_ui.append(this.test_button)
+
+        this.on("property-change", (e)=>{
+            if (!e.name || !e.trigger) return;
+            app.request({
+                call: ["session", "update_values"],
+                arguments: [[`stream_settings/${e.name}`, e._value]]
+            });
+            app.$._push([`sessions/${app.$._session.id}/stream_settings/${e.name}`, e._value]);
+        });
+
+        this.on("post_update", ()=>{
+            var session = app.$._session || EMPTY_OBJECT;
+            var stream = session.stream;
+
+            dom_utils.toggle_class(this.properties_ui.elem, "d-none", session._is_running);
+            dom_utils.toggle_class(this.info_ui.elem, "d-none", !session._is_running);
+            dom_utils.toggle_class(this.properties_ui.elem, "d-none", session._is_running);
+            dom_utils.toggle_class(this.info_ui.elem, "d-none", !session._is_running);
+    
+            var state;
+            if (stream.state === "stopped") state = `Start`;
+            else if (stream.state === "started") state = `Stop`;
+            else if (stream.state === "stopping") state = `Stopping...`;
+            else if (stream.state === "starting") state = `Starting...`;
+            dom_utils.set_text(this.toggle_streaming_button, state);
+
+            var stream_info = {};
+            stream_info["Stream Method"] = stream["method"];
+            if (app.$._session.type === "InternalSession") {
+                if (stream["method"] !== "gui") {
+                    let parts = {
+                        "h264 Preset": `${stream["h264_preset"]}`,
+                        "Video Bitrate": `${stream["video_bitrate"]}Kbps`,
+                        "Audio Bitrate": `${stream["audio_bitrate"]}Kbps`,
+                        "Resolution": `${stream["resolution"]}`,
+                    };
+                    if (stream["legacy_mode"]) {
+                        parts["Legacy Mode"] = `${stream["legacy_mode"]?"Yes":"No"}`;
+                    } else {
+                        parts["Use Hardware"] = `${stream["use_hardware"]?"Yes":"No"}`;
+                    }
+                    stream_info["Encoder Settings"] = Object.entries(parts).map(([k,v])=>`${k}: ${v}`).join(", ");
+                }
+                if (stream["method"] === "file") {
+                    stream_info["Realtime"] =`${stream["re"]?"Yes":"No"}`;
+                    stream_info["Output Path"] = stream["filename_evaluated"] || "-";
+                }
+                stream_info["Frame Rate"] = `${stream["frame_rate"]}`;
+            } else {
+                var nms_session = app.$._session._get_connected_nms_session_with_appname("livestream");
+                if (nms_session) {
+                    stream_info["Resolution"] = `${nms_session.videoWidth}x${nms_session.videoHeight}`;
+                    stream_info["Frame Rate"] = `${nms_session["videoFps"]}`;
+                }
+            }
+            if (stream["method"] === "rtmp") {
+                if (!stream["test"]) {
+                    stream_info["Stream Target(s)"] = stream["targets"].map((t,i)=>`${t} <span style="color:${app.$.targets[t]?"#00f":"f00"}">[${app.$.targets[t]?"OK":"NOT EXIST"}]</span>`).join(", ");
+                    stream_info["Stream Title"] = stream.title;
+                }
+            }
+            stream_info["Run Time"] = utils.ms_to_timespan_str(app.server_now - session.stream.start_time);
+
+            dom_utils.set_inner_html(this.info_ui.elem, Object.entries(stream_info).map(([k,v])=>`${k}: ${v}`).join(" | "));
+        })
+    }
+}
+
 export class MediaPlayerPanel extends Panel {
 
     get video_buffer_length() {
@@ -6818,7 +6720,7 @@ export class MediaPlayerPanel extends Panel {
                 w = windows["test-"+id] = window.open(window.location.origin+"/main/blank.html", id, `width=${width},height=${height},scrollbars=1,resizable=1`);
                 w.onload=()=>{
                     w.document.head.append($(`<title>Test Stream ${id}</title>`)[0]);
-                    /* await */ dom_utils.clone_document_head(app.root, w.document.head);
+                    /* await */ dom_utils.clone_document_head(app.root_elem, w.document.head);
                     var style = w.document.createElement("style");
                     style.textContent =
 `body {
@@ -6872,16 +6774,16 @@ video {
             this.prev_button = new UI.Button(`<i class="fas fa-step-backward"></i>`, {
                 title:"Previous Playlist Item",
                 click: (e)=>{
-                    app.playlist_play(app.$._session.current_playing_item.previous);
+                    app.playlist_play(app.$._session._current_playing_item._previous);
                 },
-                disabled:()=>!app.$._session.current_playing_item.previous
+                disabled:()=>!app.$._session._current_playing_item._previous
             }),
             this.backward_button = new UI.Button(`<i class="fas fa-backward"></i>`, {
                 title:"-30 Seconds",
                 click: (e)=>{
                     app.seek(-30,true);
                 },
-                disabled:()=>!app.$._media.seekable || app.$._media.time <= 0,
+                disabled:()=>!app.media.seekable || app.media.time <= 0,
             }),
             this.toggle_play_pause_button = new UI.Button(null, {
                 title:"Play/Pause",
@@ -6894,7 +6796,7 @@ video {
                     });
                     app.$._push([`streams/${app.$._stream.id}/mpv/props/pause`, new_pause]);
                 },
-                disabled:()=>!app.$._session.is_running,
+                disabled:()=>!app.$._session._is_running,
             }),
             this.stop_button = new UI.Button(`<i class="fas fa-stop"></i>`, {
                 title:"Stop",
@@ -6904,28 +6806,28 @@ video {
                         call: ["session", "stop"],
                     });
                 },
-                disabled: ()=>!app.$._session.is_running,
+                disabled: ()=>!app.$._session._is_running,
             }),
             this.forward_button = new UI.Button(`<i class="fas fa-forward"></i>`, {
                 title:"+30 Seconds",
                 click: (e)=>{
                     app.seek(30,true);
                 },
-                disabled:()=>!app.$._media.seekable || app.$._media.time_left <= 0,
+                disabled:()=>!app.media.seekable || app.media.time_left <= 0,
             }),
             this.next_button = new UI.Button(`<i class="fas fa-step-forward"></i>`, {
                 title:"Next Playlist Item",
                 click: (e)=>{
-                    app.playlist_play(app.$._session.current_playing_item.next);
+                    app.playlist_play(app.$._session._current_playing_item._next);
                 },
-                disabled:()=>!app.$._session.current_playing_item.next
+                disabled:()=>!app.$._session._current_playing_item._next
             }),
             this.prev_chapter_button = new UI.Button(`<i class="fas fa-fast-backward"></i>`, {
                 title:"Previous Chapter",
                 click: (e)=>{
                     app.seek_chapter(-1,true)
                 },
-                disabled: ()=>!app.settings.get("show_chapters") || app.$._media.chapters.length == 0 || app.$._media.time <= app.$._media.chapters[0].start,
+                disabled: ()=>!app.settings.get("show_chapters") || app.media.chapters.length == 0 || app.media.time <= app.media.chapters[0].start,
                 // hidden: ()=>!app.settings.get("show_chapters") || this.chapters.length == 0
             }),
             this.next_chapter_button = new UI.Button(`<i class="fas fa-fast-forward"></i>`, {
@@ -6933,7 +6835,7 @@ video {
                 click: (e)=>{
                     app.seek_chapter(1,true)
                 },
-                disabled: ()=>!app.settings.get("show_chapters") || app.$._media.chapters.length == 0 || app.$._media.time >= app.$._media.chapters[app.$._media.chapters.length-1].start,
+                disabled: ()=>!app.settings.get("show_chapters") || app.media.chapters.length == 0 || app.media.time >= app.media.chapters[app.media.chapters.length-1].start,
                 // hidden: ()=>!app.settings.get("show_chapters") || this.chapters.length == 0
             }),
             this.reload_button = new UI.Button(`<i class="fas fa-sync"></i>`, {
@@ -6944,7 +6846,7 @@ video {
                         call: ["session", "reload"]
                     });
                 },
-                disabled:()=>!app.$._session.is_running,
+                disabled:()=>!app.$._session._is_running,
                 update: function(){
                     // this.elem.classList.toggle("pending", app.$.session.current_playing_item.userdata.pending_changes);
                 }
@@ -6954,7 +6856,7 @@ video {
                 click: (e)=>{
                     app.set_time_pos_menu.show();
                 },
-                disabled:()=>!app.$._media.seekable,
+                disabled:()=>!app.media.seekable,
             })
         );
         
@@ -7057,17 +6959,17 @@ video {
         this.on("destroy", ()=>{
         });
         this.on("update", ()=>{
-            var started = app.$._session.is_running;
-            dom_utils.set_inner_html(this.status_prefix_elem, `${app.$._media.status}: `);
-            app.build_playlist_breadcrumbs(this.status_path_elem, app.$._media.item, true, true);
+            var started = app.$._session._is_running;
+            dom_utils.set_inner_html(this.status_prefix_elem, `${app.media.status}: `);
+            app.build_playlist_breadcrumbs(this.status_path_elem, app.media.item, true, true);
             
-            var stats_html = Object.entries(app.$._media.stats).map(([k,v])=>`<span>${k}: ${v}</span>`).join(" | ");
+            var stats_html = Object.entries(app.media.stats).map(([k,v])=>`<span>${k}: ${v}</span>`).join(" | ");
             dom_utils.set_inner_html(this.stats_elem, stats_html);
             dom_utils.toggle_class(this.stats_elem, "d-none", !started);
             
-            if (app.$._media.curr_chapters.length) {
+            if (app.media.curr_chapters.length) {
                 this.additional_file_info_elem.style.display = "";
-                this.additional_file_info_elem.innerHTML = `Chapter(s): `+app.$._media.curr_chapters.map(c=>app.chapter_to_string(c)).join(" | ")
+                this.additional_file_info_elem.innerHTML = `Chapter(s): `+app.media.curr_chapters.map(c=>app.chapter_to_string(c)).join(" | ")
             } else {
                 this.additional_file_info_elem.style.display = "none";
             }
@@ -7079,10 +6981,10 @@ video {
     }
 
     async refresh_player(force) {
-        var test_video_url = `${window.location.protocol==="https:"?"wss:":"ws:"}//${window.location.host}/nms/test/${app.$._session.id}.flv`;
-        var show = !!(app.$._session.is_running && app.$._stream.test && test_video_url);
+        var test_video_url = `${window.location.protocol==="https:"?"wss:":"ws:"}//${window.location.host}/media-server/test/${app.$._session.id}.flv`;
+        var show = !!(app.$._session._is_running && app.$._stream.test && test_video_url);
         var is_popped_out = !!windows["test-"+app.$._session.id];
-        var is_playable = !!(show && app.$._session.get_connected_nms_session_with_appname("test"));
+        var is_playable = !!(show && app.$._session._get_connected_nms_session_with_appname("test"));
 
         dom_utils.toggle_class(this.test_stream_container_elem, "d-none", !show);
         dom_utils.toggle_class(this.test_stream_overlay_elem, "d-none", !is_playable);
@@ -7156,7 +7058,7 @@ export class MediaSettingsPanel extends Panel {
         super("Media Settings", {
             // nullify_defaults: true,
             data: ()=>(this._mode === MediaSettingsMode.current) ? app.$._session.stream.mpv.props : app.$._session.player_default_override,
-            disabled: ()=>this._mode === MediaSettingsMode.current && !app.$._session.is_running,
+            disabled: ()=>this._mode === MediaSettingsMode.current && !app.$._session._is_running,
         });
 
         this.header_elem.append($(`<div class="buttons border-group">
@@ -7292,13 +7194,10 @@ export class LogViewerPanel extends Panel {
                 var message_html = "";
                 if (log.level === "error") {
                     message.style["font-weight"] = "bold";
-                    message.style.color = "red";
                     level_html = `<i title="Error" class="fas fa-exclamation-circle"></i>`;
                 } else if (log.level === "warn") {
-                    message.style.color = "orange";
                     level_html = `<i title="Warning" class="fas fa-exclamation-triangle"></i>`;
                 } else if (log.level === "debug") {
-                    message.style.color = "green";
                     level_html = `<i title="Warning" class="fas fa-bug"></i>`;
                 } else {
                     level_html = `<i title="Info" class="fas fa-info-circle"></i>`;
@@ -7365,7 +7264,6 @@ export class EncoderPanel extends Panel {
 
         var button_group = $(`<div class="buttons border-group">`)[0];
         button_group.append($(`<button class="show_encoder_info" title="Toggle Encoder Info"><i class="fas fa-info-circle"></i></button>`)[0]);
-        // button_group.append($(`<button class="smooth_encoder_points" title="Toggle Smooth Graph"><i class="fas fa-bezier-curve"></i></button>`)[0]);
         button_group.append($(`<button class="pause_encoder" title="Toggle Pause"><i class="fas fa-pause"></i></button>`)[0]);
         
         this.header_elem.append(button_group);
@@ -7458,6 +7356,9 @@ export class EncoderPanel extends Panel {
             }] */
         });
 
+        this.on("update", ()=>{
+            this.update_chart();
+        });
     }
 
     update_chart() {
@@ -7465,7 +7366,7 @@ export class EncoderPanel extends Panel {
         var max_window = 60*1000;
         var datasets = this.chart.data.datasets;
         var info_rows = [];
-        var speed_history = app.$._session.is_running ? app.$._session.stream.speed_history : (app.$._session.last_stream||EMPTY_OBJECT).speed_history;
+        var speed_history = app.$._session.stream.speed_history;
         if (!speed_history) speed_history = EMPTY_OBJECT;
         const annotations = {};
 
@@ -7519,13 +7420,6 @@ export class EncoderPanel extends Panel {
         // if (speed_history)
         // this.chart.options.plugins.annotation = { annotations: { annotation } };
         
-        /* if (app.settings.get("smooth_encoder_points")) {
-            for (var dataset of datasets) {
-                dataset.data = moving_average(dataset.data, 5);
-            }
-        } */
-        // this.chart.options.elements.line.tension = app.settings.get("smooth_encoder_points") ? 0 : 0.5;
-        
         var table = dom_utils.build_table(info_rows);
         dom_utils.set_children(this.chart_info_elem, table ? [table] : []);
         var min_x = Math.max(...datasets.map(ds=>Math.min(...ds.data.map(d=>d.x))));
@@ -7539,10 +7433,10 @@ export class EncoderPanel extends Panel {
         this.chart.update();
     }
 
-    reset_chart(){
-        utils.clear(this.chart.data.datasets);
-        this.debounced_update_chart();
-    }
+    // reset_chart(){
+    //     utils.clear(this.chart.data.datasets);
+    //     this.debounced_update_chart();
+    // }
 }
 
 export const PLAYLIST_ZOOM_MIN = 0.01;
@@ -7558,7 +7452,7 @@ export class PlaylistPanel extends Panel {
     set timeline_mode(value) {
         this.timeline_mode_select.value = value;
         this.sortables.forEach(s=>s.orientation = this.orientation);
-        this.update_view();
+        this.update();
     }
     get selection() { return this.active_sortable.get_selection(); }
 
@@ -7577,7 +7471,7 @@ export class PlaylistPanel extends Panel {
         var tracks_hash = JSON.stringify(tracks);
         if (tracks_hash == this._tracks_hash) return;
 
-        console.log("Refreshing sortables...")
+        console.debug("refreshing sortables")
         this._tracks_hash = tracks_hash;
         this._tracks = tracks;
         dom_utils.empty(this.tracks_elem);
@@ -7679,7 +7573,7 @@ export class PlaylistPanel extends Panel {
         this._current;
         this._queued_selection_ids = [];
         this.clipping = null;
-        this.rebuild_next_frame = dom_utils.debounce_next_frame(()=>this.rebuild());
+        this.rebuild = dom_utils.debounce_next_frame(()=>this.__rebuild());
         // this.debounced_update_info = dom_utils.debounce_next_frame(()=>this.update_info());
         // this.debounced_update_view = dom_utils.debounce_next_frame(()=>this.update_view());
 
@@ -7713,49 +7607,43 @@ export class PlaylistPanel extends Panel {
             </div>
         </div>`;
 
-        this.body_elem.innerHTML =
-        `<div class="playlist-info-wrapper">
-            <div class="playlist-path">
+        this.body_elem.innerHTML = 
+            `<div class="playlist-info-wrapper">
                 <button class="back"><i class="fas fa-arrow-left"></i></button>
-                <div class="info-path-wrapper">
-                    <div class="info-path"></div>
+                <div class="playlist-path">
+                    <div class="info-path-wrapper">
+                        <div class="info-path"></div>
+                    </div>
+                </div>
+                <div class="playlist-info">
+                    <div class="info-text"></div>
+                    <button class="toggle-selection"></button>
                 </div>
             </div>
-            <div class="playlist-info">
-                <div class="info-text"></div>
-                <button class="toggle-selection"></button>
-            </div>
-        </div>
-        <div class="playlist-content">
-            <div class="timeline-container" tabindex="-1">
-                <div class="timeline-headers"></div>
-                <div class="timeline-and-ticks-wrapper">
-                    <div class="timeline-ticks"></div>
-                    <div class="timeline-wrapper">
-                        <div class="timeline-tracks thin-scrollbar"></div>
-                        <div class="timeline-overlay">
-                            <div class="timeline-playhead" style="--color:rgb(185,0,0);--triangle-size:3px"><div class="tri top-right"></div><div class="tri top-left"></div></div>
-                            <div class="timeline-cursor" style="--color:black;--triangle-size:3px"><div class="tri top-right"></div><div class="tri top-left"></div><div class="tri bottom-right"></div><div class="tri bottom-left"></div></div>
-                            <div class="timeline-limits"></div>
-                            <div class="timeline-highlights"></div>
+            <div class="playlist-content">
+                <div class="timeline-container" tabindex="-1">
+                    <div class="timeline-headers"></div>
+                    <div class="timeline-and-ticks-wrapper">
+                        <div class="timeline-ticks"></div>
+                        <div class="timeline-wrapper">
+                            <div class="timeline-tracks thin-scrollbar"></div>
+                            <div class="timeline-overlay">
+                                <div class="timeline-playhead" style="--color:rgb(185,0,0);--triangle-size:3px"><div class="tri top-right"></div><div class="tri top-left"></div></div>
+                                <div class="timeline-cursor" style="--color:black;--triangle-size:3px"><div class="tri top-right"></div><div class="tri top-left"></div><div class="tri bottom-right"></div><div class="tri bottom-left"></div></div>
+                                <div class="timeline-limits"></div>
+                                <div class="timeline-highlights"></div>
+                            </div>
                         </div>
                     </div>
                 </div>
-            </div>
-            <div class="playlist-buttons">
-                <button id="pl-add-file-remote" title="Add Files...">Add Files...</button>
-                <button id="pl-add-file-local" title="Upload Files...">Upload Files...</button>
-                <button id="pl-add-url" title="Add URLs...">Add URLs...</button>
-                <button id="pl-add-other" title="Other..."><i class="fas fa-ellipsis-h"></i></button>
-            </div>
-        </div>`;
-
-        this.body_elem.classList.add("no-padding");
-        this.body_elem.style.display = "flex";
-        this.body_elem.style.flex = "1";
-        this.body_elem.style["flex-direction"] = "column";
-        this.body_elem.style.gap = "0";
-
+                <div class="playlist-buttons">
+                    <button id="pl-add-file-remote" title="Add Files...">Add Files...</button>
+                    <button id="pl-add-file-local" title="Upload Files...">Upload Files...</button>
+                    <button id="pl-add-url" title="Add URLs...">Add URLs...</button>
+                    <button id="pl-add-other" title="Other..."><i class="fas fa-ellipsis-h"></i></button>
+                </div>
+            </div>`
+        this.body_elem.classList.add("playlist-body");
         this.elem.classList.add("playlist-wrapper");
         
         this.zoom = 1.0;
@@ -7793,7 +7681,7 @@ export class PlaylistPanel extends Panel {
         this.playlist_info_text = this.playlist_info.querySelector(".info-text");
         this.playlist_path = this.elem.querySelector(".playlist-path");
         this.playlist_path_text = this.playlist_path.querySelector(".info-path");
-        this.playlist_back_button = this.playlist_path.querySelector("button.back");
+        this.playlist_back_button = this.elem.querySelector("button.back");
         this.toggle_selection_button = this.playlist_info.querySelector(".toggle-selection");
         this.playlist_zoom_input = this.elem.querySelector(".playlist-zoom-input");
         this.pl_show_extra_icons_button = this.elem.querySelector("button.show_extra_playlist_icons");
@@ -7946,7 +7834,7 @@ export class PlaylistPanel extends Panel {
                 name:  "Rescan",
                 description: "Rescan Selection",
                 icon: `<i class="fas fa-sync-alt"></i>`,
-                visible: (items)=>items.some(i=>i.is_scannable),
+                visible: (items)=>items.some(i=>i._is_scannable),
                 // disabled: (items)=>!items.every(i=>i.is_scannable),
                 click: (items)=>{
                     app.playlist_rescan(items);
@@ -7957,8 +7845,8 @@ export class PlaylistPanel extends Panel {
                 name: "Navigate To",
                 description: "Navigate To Selection",
                 icon: `<i class="fas fa-arrow-up-right-from-square"></i>`,
-                visible: (items)=>items.some(i=>i.url.protocol.match(/^(file|https?):$/)),
-                disabled: (items)=>!items.every(i=>i.is_navigatable),
+                visible: (items)=>items.some(i=>i._url.protocol.match(/^(file|https?):$/)),
+                disabled: (items)=>!items.every(i=>i._is_navigatable),
                 click: (items)=>{
                     app.navigate_to(items.map(i=>i.filename));
                 },
@@ -7968,7 +7856,7 @@ export class PlaylistPanel extends Panel {
                 name: "Download",
                 description: "Download Selection",
                 icon: `<i class="fas fa-download"></i>`,
-                visible: (items)=>items.some(i=>i.is_downloadable),
+                visible: (items)=>items.some(i=>i._is_downloadable),
                 // disabled: (items)=>!items.every(i=>i.is_downloadable),
                 click: (items)=>{
                     app.playlist_download(items);
@@ -7977,7 +7865,7 @@ export class PlaylistPanel extends Panel {
             cancel_download: new PlaylistCommand({
                 name: "Cancel Download",
                 icon: `<i class="fas fa-ban"></i>`,
-                visible: (items)=>items.some(i=>i.download),
+                visible: (items)=>items.some(i=>i._download),
                 click: (items)=>{
                     app.playlist_cancel_download(items);
                 }
@@ -7985,7 +7873,7 @@ export class PlaylistPanel extends Panel {
             cancel_upload: new PlaylistCommand({
                 name: "Cancel Upload",
                 icon: `<i class="fas fa-ban"></i>`,
-                visible: (items)=>items.some(i=>i.upload),
+                visible: (items)=>items.some(i=>i._upload),
                 click: (items)=>{
                     app.playlist_cancel_upload(items);
                 }
@@ -8004,7 +7892,7 @@ export class PlaylistPanel extends Panel {
                 name: "Enter Playlist",
                 description: "Enter Selected Playlist",
                 icon: `<i class="fas fa-right-to-bracket"></i>`,
-                visible: (items)=>items.some(i=>i.is_playlist),
+                visible: (items)=>items.some(i=>i._is_playlist),
                 // disabled: (items)=>!items.every(i=>i.is_playlist),
                 click: (items)=>{
                     if (items[0]) this.open(items[0]);
@@ -8025,7 +7913,7 @@ export class PlaylistPanel extends Panel {
                 name: "Breakdown Playlist",
                 description: "Breakdown Selected Playlist",
                 icon: `<i class="far fa-object-ungroup"></i>`,
-                visible: (items)=>items.some(i=>i.is_playlist),
+                visible: (items)=>items.some(i=>i._is_playlist),
                 // disabled: (items)=>!items.every(i=>i.is_playlist),
                 click: (items)=>{
                     app.playlist_breakdown(items);
@@ -8036,8 +7924,8 @@ export class PlaylistPanel extends Panel {
                 name: "Split...",
                 description: "Split Selection...",
                 icon: `<i class="fas fa-sitemap" style="transform:rotate(-90deg);"></i>`,
-                visible: (items)=>items.some(i=>i.is_splittable),
-                disabled: (items)=>!items.every(i=>i.is_splittable),
+                visible: (items)=>items.some(i=>i._is_splittable),
+                disabled: (items)=>!items.every(i=>i._is_splittable),
                 click: (items)=>{
                     app.split_menu.show(items);
                 }
@@ -8047,7 +7935,7 @@ export class PlaylistPanel extends Panel {
                 description: "Slice Selection at Timeline Cursor",
                 icon: `<i class="fas fa-slash"></i>`,
                 visible: (items)=>this.timeline_mode && this.cursor_position != null,
-                disabled: (items)=>!items.every(i=>i.is_splittable),
+                disabled: (items)=>!items.every(i=>i._is_splittable),
                 click: (items)=>{
                     app.playlist_split(items, [this.cursor_position], false, true);
                 },
@@ -8068,7 +7956,7 @@ export class PlaylistPanel extends Panel {
                 icon: `<i class="fas fa-arrow-right-to-bracket" style="transform:scaleX(-1);"></i>`,
                 visible: (items)=>items.length>0 && this.timeline_mode,
                 click: (items)=>{
-                    this.cursor_position = Math.min(...items.map(i=>i.userdata.timeline_start));
+                    this.cursor_position = Math.min(...items.map(i=>i._userdata.timeline_start));
                     this.update_view();
                 },
                 mode: PLAYLIST_VIEW.TIMELINE,
@@ -8079,7 +7967,7 @@ export class PlaylistPanel extends Panel {
                 icon: `<i class="fas fa-arrow-right-to-bracket"></i>`,
                 visible: (items)=>items.length>0 && this.timeline_mode,
                 click: (items)=>{
-                    this.cursor_position = Math.max(...items.map(i=>i.userdata.timeline_end));
+                    this.cursor_position = Math.max(...items.map(i=>i._userdata.timeline_end));
                     this.update_view();
                 },
                 mode: PLAYLIST_VIEW.TIMELINE,
@@ -8200,7 +8088,7 @@ export class PlaylistPanel extends Panel {
                         filename:"livestreamer://rtmp",
                     });
                 },
-                disabled: ()=>!!this.current.is_merged
+                disabled: ()=>!!this.current._is_merged
             }),
             add_intertitle: new PlaylistCommand({
                 name: ()=>"Add Intertitle",
@@ -8211,7 +8099,7 @@ export class PlaylistPanel extends Panel {
                     });
                     // this.playlist_modify_settings.show(ids);
                 },
-                disabled: ()=>!!this.current.is_merged
+                disabled: ()=>!!this.current._is_merged
             }),
             add_stop_streaming_macro: new PlaylistCommand({
                 name: ()=>"Add Macro: Stop",
@@ -8224,7 +8112,7 @@ export class PlaylistPanel extends Panel {
                         }
                     });
                 },
-                disabled: ()=>!!this.current.is_merged
+                disabled: ()=>!!this.current._is_merged
             }),
             add_handover_macro: new PlaylistCommand({
                 name: ()=>"Add Macro: Handover",
@@ -8237,7 +8125,7 @@ export class PlaylistPanel extends Panel {
                         }
                     });
                 },
-                disabled: ()=>!!this.current.is_merged
+                disabled: ()=>!!this.current._is_merged
             }),
             add_playlist_exit: new PlaylistCommand({
                 name: ()=>"Add Playlist Exit",
@@ -8247,19 +8135,19 @@ export class PlaylistPanel extends Panel {
                         filename:"livestreamer://exit",
                     });
                 },
-                visible: ()=>!!this.current.parent
+                visible: ()=>!!this.current._parent
             }),
             unload_current: new PlaylistCommand({
                 name: ()=>"Unload Current File",
                 icon: `<i class="fas fa-minus-circle"></i>`,
-                disabled: ()=>!app.$._session.current_playing_item !== NULL_PLAYLIST_ITEM,
+                disabled: ()=>!app.$._session._current_playing_item !== NULL_PLAYLIST_ITEM,
                 click: ()=>app.playlist_play(NULL_PLAYLIST_ITEM),
             }),
             rescan_all: new PlaylistCommand({
                 name: ()=> "Rescan All",
                 icon: `<i class="fas fa-sync-alt"></i>`,
                 // click: ()=>app.playlist_rescan_all(),
-                click: ()=>app.playlist_rescan(this.current.children),
+                click: ()=>app.playlist_rescan(this.current._children),
             }),
             save_playlist: new PlaylistCommand({
                 name: ()=>"Save Playlist...",
@@ -8328,15 +8216,15 @@ export class PlaylistPanel extends Panel {
             }
         });
 
-        (()=>{
+        {
             this.timeline_container_elem.addEventListener('touchmove', (e)=>{
                 if (e.touches.length > 1) e.preventDefault();
             });
             let mc = new Hammer.Manager(this.timeline_container_elem, {touchAction: 'none', cssProps: {userSelect:"auto"}});
             let pinch = new Hammer.Pinch({enable:true});
             mc.add([pinch]);
-            var x_percent;
-            var init_zoom;
+            let x_percent;
+            let init_zoom;
             mc.on("pinchstart", (e)=>{
                 var r = this.timeline_container_elem.getBoundingClientRect();
                 init_zoom = this.zoom;
@@ -8345,12 +8233,7 @@ export class PlaylistPanel extends Panel {
             mc.on("pinchmove", (e)=>{
                 this.set_timeline_view(init_zoom * e.scale, null, x_percent);
             });
-        })();
-
-        var get_x = (e)=> {
-            var r = this.ticks_elem.getBoundingClientRect();
-            return e.clientX - r.x;
-        };
+        }
 
         // this.ticks_elem.style.cursor = "none" // "text";
         $(this.ticks_elem).on("click", (e)=>{
@@ -8370,6 +8253,37 @@ export class PlaylistPanel extends Panel {
             }
         }, true);
 
+        this.on("update", ()=>{
+            var current = this.current;
+            var current_ud = current._userdata;
+            var duration = current_ud.duration;
+            var timeline_duration = current_ud.timeline_duration;
+            var self_and_parents = [app.$._session._current_playing_item, ...app.$._session._current_playing_item._parents];
+            var a_index = self_and_parents.indexOf(current);
+            var timeline_time = utils.sum(self_and_parents.slice(0, a_index).map(item=>utils.try(()=>item._userdata.timeline_start)||0)) + Math.min(app.get_current_time_pos(), app.$._session._current_playing_item._userdata.timeline_duration);
+            var time = utils.sum(self_and_parents.slice(0, a_index).map(item=>utils.try(()=>item._userdata.start)||0)) + Math.min(app.get_current_time_pos(), app.$._session._current_playing_item._userdata.duration);
+    
+            this.time = timeline_time;
+            this.duration = timeline_duration;
+            this.clipping = current_ud.clipping;
+            if (this.clipping) {
+                this.clip_time = utils.loop(this.time + this.clipping.offset + this.clipping.start, this.clipping.start, this.clipping.end);
+            } else {
+                this.clip_time = this.time;
+            }
+    
+            this.playlist_back_button.disabled = !current._parent;
+            
+            dom_utils.set_inner_html(this.playlist_time_total_elem, `(${utils.seconds_to_timespan_str(duration)})`);
+            dom_utils.set_inner_html(this.playlist_time_left_elem, `[-${utils.seconds_to_timespan_str(duration-time)}]`);
+    
+            this.playlist_time_left_elem.style.display = current === app.$._session.playlist["0"] ? "" : "none"
+            
+            app.build_playlist_breadcrumbs(this.playlist_path_text, current, true);
+    
+            this.update_view();
+        })
+
         this.on("destroy", ()=>{
             window.removeEventListener("resize", on_resize);
             this.sortables.forEach(s=>s.destroy());
@@ -8379,9 +8293,358 @@ export class PlaylistPanel extends Panel {
         this.update_position_next_frame = dom_utils.debounce_next_frame(()=>this.update_position());
 
         this.set_tracks(1);
-        this.update_info();
-        this.update_view();
     }
+
+    async __rebuild() {
+        this.update();
+
+        var d0 = Date.now();
+        
+        await Promise.all(this.sortables.map(s=>s.last_drag));
+
+        let is_running = app.$._session._is_running;
+        
+        var current_playlist = this.current;
+        /** @type {PlaylistItem} */
+        // var last_playlist = this.last_playlist_on_rebuild || NULL_PLAYLIST_ITEM;
+        var current_item = app.$._session._current_playing_item;
+        var current_parents = new Set(current_item._parents);
+        var current_playlist_tracks = current_playlist._tracks;
+        
+        var day_seconds = 60 * 60 * 24;
+        var start_time = null;
+        var now = (Date.now()/1000); // - (new Date().getTimezoneOffset()*60);
+        if (app.settings.get("playlist_show_scheduled_times")) {
+            if (is_running) {
+                start_time = (now - current_item._userdata.start - app.get_current_time_pos()) * 1000;
+            } else {
+                if (app.$._session.schedule_start_time) {
+                    start_time = +new Date(app.$._session.schedule_start_time);
+                } else {
+                    var d = app.settings.get("schedule_generator") || EMPTY_OBJECT;
+                    start_time = ((Math.floor(now/day_seconds)*day_seconds) + utils.timespan_str_to_seconds(d.start_time || "00:00", "hh:mm")) * 1000;
+                }
+                start_time += utils.sum([current_playlist, ...current_playlist._parents].map(item=>item._userdata && item._userdata.start || 0)) * 1000;
+            }
+            // console.log(new Date(start_time));
+        }
+
+        this.set_tracks(current_playlist_tracks.length, current_playlist && current_playlist.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK);
+
+        var new_items = [];
+
+        this.sortables.forEach((sortable,i)=>{
+            /** @type {PlaylistItem[]} */
+            var items = current_playlist_tracks[i] || EMPTY_ARRAY;
+            dom_utils.rebuild(sortable.el, items, {
+                add: (item, elem, index)=>{
+                    if (!elem) {
+                        // console.log(`added ${item.id}`)
+                        new_items.push(item);
+                        elem = $(`<li class="item"><div><div class="clips"></div><div class="front"><span class="play-icons"></span><span class="icons"></span><span class="filename"></span><span class="extra"></span><span class="badges"></span><div class="duration"></div></div></div></li>`)[0];
+                    }
+                    
+                    // if (item._hash == elem._hash) return;
+                    // elem._hash = item._hash;
+
+                    var ud = item._userdata;
+                    var is_current_item = item.id == current_item.id;
+                    var is_current_ancestor = current_parents.has(item);
+                    var is_cutting = !!(this.clipboard && this.clipboard.cutting && this.clipboard.items_set.has(item));
+                    
+                    var _hash = JSON.stringify([index, item, ud, is_current_item, is_current_ancestor, is_cutting, start_time, is_running]);
+                    if (_hash === elem._hash) return;
+                    elem._hash = _hash;
+                    elem._item = item;
+                    
+                    let media_info = item._media_info || EMPTY_OBJECT;
+                    let children = item._children;
+                    let root_merged_playlist = item._root_merged_playlist;
+                    var is_playlist = item._is_playlist;
+                    var problems = [];
+                    let name = item._get_pretty_name();
+                    let filename_parts = [`<span>${name}</span>`];
+                    let title_parts = [name];
+                    let main_icon;
+                    var icons = [];
+                    var play_icons = [];
+                    let background_color, outline_color;
+                    let badges = {};
+    
+                    dom_utils.toggle_class(elem, "cutting", is_cutting);
+                    var is_upload_dummy = item.filename.startsWith("upload://");
+                    
+                    var play_icons_elem = elem.querySelector(".play-icons");
+                    var icons_elem = elem.querySelector(".icons");
+                    var filename_elem = elem.querySelector(".filename");
+                    var duration_elem = elem.querySelector(".duration");
+                    var extra_elem = elem.querySelector(".extra");
+                    var badges_elem = elem.querySelector(".badges");
+                    var clips_elem = elem.querySelector(".clips");
+                    
+                    let blocks = [];
+
+                    if (ud.clipping) {
+                        if (ud.clipping.loops < 128) {
+                            let segments = get_clip_segments(ud.clipping);
+                            if (ud.clipping.loops > 1) {
+                                let t = 0, d = ud.duration;
+                                if (d) {
+                                    for (let s of segments) {
+                                        blocks.push({x:t/d, width:s.duration/d})
+                                        t += s.duration
+                                    }
+                                }
+                            } else {
+                                let d = ud.media_duration;
+                                if (d) {
+                                    for (let s of segments) {
+                                        blocks.push({x:s.start/d, width:s.duration/d});
+                                    }
+                                }
+                            }
+                        }
+                        blocks = blocks.filter(b=>b.width>0.0001);
+                        if (blocks.length == 1 && blocks[0].width == 1) blocks = [];
+                    }
+                    clips_elem.innerHTML = blocks.map(b=>`<div style="left:${b.x.toFixed(5)*100}%;width:${b.width.toFixed(5)*100}%;"></div>`).join("");
+                    clips_elem.classList.toggle("repeats", !!(ud.clipping && ud.clipping.loops > 1))
+                    
+                    
+                    if (ud.is_processing) {
+                        play_icons.push(`<i class="fas fa-sync fa-spin"></i>`);
+                    } else if (is_current_ancestor) {
+                        play_icons.push(`<i class="fas fa-arrow-right"></i>`);
+                    } else if (is_current_item) {
+                        if (is_running) {
+                            play_icons.push(`<i class="fas fa-play"></i>`);
+                        } else {
+                            play_icons.push(`<i class="fas fa-forward-step"></i>`);
+                        }
+                    } else {
+                        play_icons.push(`<span class="numbering">${String(index+1).padStart(2,"0")}</span>`);
+                    }
+                    
+                    if (is_upload_dummy) {
+                        icons.push(`<i class="fas fa-upload"></i>`);
+                    } else {
+                        if (media_info.exists === false) {
+                            problems.push({level:3, text:"Media does not exist."});
+                        } else if (!utils.is_empty(media_info) && !media_info.streams && media_info.protocol !== "livestreamer:" && !item._is_playlist && !ud.is_processing) {
+                            problems.push({level:1, text:"Possibly invalid media."});
+                        } else if (root_merged_playlist && !item._is_mergable) {
+                            problems.push({level:2, text:"Merged items must be local files or empties."});
+                        }
+                    }
+                    
+                    if (item.props.color) {
+                        background_color = item_colors[item.props.color];
+                        outline_color = new utils.Color(item_colors[item.props.color]).rgb_mix("#000",0.3).to_rgb_hex();
+                    }
+                    if (is_playlist) {
+                        main_icon = `<i class="fas fa-folder-open" title="Playlist"></i>`;
+                        let b = "playlist";
+                        if (item.props.playlist_mode == PLAYLIST_MODE.MERGED) b = "merged-playlist";
+                        if (item.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK) b = "2-track-playlist";
+                        badges["playlist"] = b;
+                        filename_parts.push(`<span class="playlist-count">${children.length}</span>`)
+                        title_parts.push(`(${children.length})`);
+                    }
+                    // userdata.number = String(i+1).padStart(2,"0")
+                    
+                    var is_special = item.filename.startsWith("livestreamer://");
+                    if (is_special) {
+                        var type = item.filename.replace("livestreamer://", "");
+                        if (!(type in badges)) badges[type] = type;
+                        if (type == "macro") {
+                            main_icon = `<i class="fas fa-scroll"></i>`
+                        } else if (type == "intertitle") {
+                            main_icon = `<i class="fas fa-paragraph"></i>`
+                        } else if (type == "macro") {
+                            main_icon = `<i class="fas fa-scroll"></i>`
+                        } else if (type == "empty") {
+                            main_icon = `<i class="fas fa-ghost"></i>`
+                        } else if (type == "exit") {
+                            main_icon = `<i class="fas fa-arrow-left-long"></i>`
+                        } else if (type == "rtmp") {
+                            title_parts.push(item._is_rtmp_live ? "[Connected]" : "[Disconnected]");
+                            if (item._is_rtmp_live) {
+                                main_icon = `<i class="fas fa-link" style="color:#00cc00;" title="Connected"></i>`;
+                            } else {
+                                main_icon = `<i class="fas fa-unlink" title="Disconnected"></i>`;
+                            }
+                            // main_icon = `<i class="fas fa-tower-broadcast"></i>`
+                        } 
+                    }
+                    
+                    if (media_info.downloadable && item.filename.match(/^https?:/)) {
+                        let icon = $(`<i class="fas fa-globe"></i>`)[0]; //  style="color:cornflowerblue"
+                        icon.title = item.filename;
+                        main_icon = icon.outerHTML;
+                        badges["web"] = new URL(item.filename).hostname.replace(/^www\./, "");
+                    }
+                    
+                    if (!ud.download) {
+                        if (media_info.streams) {
+                            var default_video = utils.sort(media_info.streams.filter(s=>s.type === "video"),
+                                (s)=>s.albumart,
+                                (s)=>[s.default | s.forced * 2, "DESCENDING"]
+                            )[0];
+                            var default_audio = utils.sort(media_info.streams.filter(s=>s.type === "audio"),
+                                (s)=>[s.default | s.forced * 2, "DESCENDING"]
+                            )[0];
+                            let has_video = default_video && default_video.codec && !default_video.albumart;
+                            let has_audio = default_audio && default_audio.codec;
+
+                            if (has_video) {
+                                var codec = default_video.codec.replace(/video$/, "").split(".")[0];
+                                var size = get_video_size(default_video.width, default_video.height, media_info.interlaced);
+                        
+                                if (!media_info.duration || media_info.duration <= IMAGE_DURATION) {
+                                    icons.push(`<i class="fas fa-image"></i>`);
+                                    badges["image"] = `${codec} ${default_video.width}x${default_video.height}`;
+                                } else {
+                                    icons.push(`<i class="fas fa-film"></i>`);
+                                    badges["video"] = `${codec} ${size.text}`;
+                                }
+                            }
+                            if (has_audio) {
+                                if (!has_video) icons.push(`<i class="fas fa-music"></i>`);
+                                badges["audio"] = default_audio.codec.replace(/^pcm_.+$/, "pcm").split(".")[0];
+                            }
+                            if (root_merged_playlist && default_video && default_video.codec == "vc1") {
+                                problems.push({level:2, text: "VC-1 video codec can lead to playback issues within a merged playlist."});
+                            }
+                        }
+                    }
+                    {
+                        let d, t, extra_elem_children = [];
+                        if (ud.upload || item.filename.startsWith("upload://")) {
+                            d = ud.upload || { bytes:0, total:0, speed:0 };
+                            t = "upload";
+                        }
+                        if (ud.download) {
+                            d = ud.download
+                            t = "download";
+                        }
+                        if (d) {
+                            let bar = extra_elem.querySelector(`.progress`) || $(`<div class="progress"><span class="percent"></span><span class="speed"></span></div>`)[0];
+                            let icon = extra_elem.querySelector(`.fas`) || $(`<i class="fas"></i>`)[0];
+                            
+                            let p = d.total ? ( d.bytes / d.total) : 0;
+                            bar.title = `${utils.capitalize(t)}ing [${utils.format_bytes(d.bytes || 0)} / ${utils.format_bytes(d.total || 0)}]`;
+
+                            let percent_text = [];
+                            if (d.num_stages) percent_text.push(`${d.stage+1}/${d.num_stages}`);
+                            percent_text.push(`${(p * 100).toFixed(2)}%`);
+
+                            bar.style.setProperty("--progress",`${p*100}%`);
+                            bar.querySelector(".percent").innerHTML = percent_text.join(" | ");
+                            bar.querySelector(".speed").innerHTML = `${utils.format_bytes(d.speed || 0)}ps`;
+                            icon.className = `fas fa-${t}`;
+                            extra_elem_children = [icon, bar];
+                        }
+                        dom_utils.set_children(extra_elem, extra_elem_children);
+                    }
+
+                    dom_utils.set_inner_html(badges_elem, Object.entries(badges).map(([k,v])=>{
+                        var parts = v.split(" ");
+                        parts[0] = parts[0].toUpperCase();
+                        return `<i class="badge" data-badge-type="${k}">${parts.join(" ")}</i>`
+                    }).join(""));
+
+                    if (!is_special && ud.modified) {
+                        icons.push(`<i class="fas fa-wrench"></i>`);
+                    }
+    
+                    var duration_str;
+                    let _start_time = start_time ? (start_time + ud.start * 1000) : 0;
+                    if (_start_time >= Date.now() || (start_time && is_current_item)) {
+                        let s = new Date(_start_time);
+                        let t_str = `${String(s.getHours()).padStart(2,"0")}:${String(s.getMinutes()).padStart(2,"0")}`;
+                        duration_str = `<i class="far fa-clock" style="padding-right:3px"></i><span>${t_str}</span>`;
+                    } else {
+                        if (ud.duration || ud.media_duration) duration_str = utils.seconds_to_timespan_str(ud.duration || ud.children_duration, "h?:mm:ss");
+                    }
+
+                    duration_elem.innerHTML = duration_str || "  -  ";
+                    
+                    if (problems.length) {
+                        var problem_groups = utils.group_by(problems, p=>p.level);
+                        var err_icon_html;
+                        if (problem_groups["3"]) err_icon_html = `<i class="fas fa-times" style="color:red;"></i>`;
+                        else if (problem_groups["2"]) err_icon_html = `<i class="fas fa-exclamation-triangle" style="color:orange;"></i>`;
+                        else if (problem_groups["1"]) err_icon_html = `<i class="fas fa-question-circle" style="color:#6495ED;"></i>`;
+                        if (err_icon_html) {
+                            let icon = $(err_icon_html)[0];
+                            icon.title = problems.map(p=>" - "+p.text).join("\n");
+                            icons.push(icon.outerHTML);
+                        }
+                    }
+    
+                    dom_utils.set_inner_html(play_icons_elem, play_icons.join(""));
+
+                    // if (!main_icon) main_icon = `<i class="fas fa-file"></i>`;
+                    dom_utils.set_inner_html(icons_elem, [main_icon, ...icons].join(""));
+    
+                    filename_elem.innerHTML = filename_parts.join(" ");
+    
+                    elem.style.setProperty("--duration", ud.timeline_duration);
+                    elem.style.setProperty("--start", ud.timeline_start);
+                    elem.style.setProperty("--end", ud.timeline_end);
+    
+                    elem.title = title_parts.join(" ");
+                    elem.classList.toggle("current", is_current_item);
+                    elem.style.setProperty("--background-color", background_color || "");
+                    elem.style.setProperty("--outline-color", outline_color || "");
+    
+                    elem.ondblclick = ()=>app.playlist_play(item);
+    
+                    return elem;
+                },
+                remove:(elem)=>{
+                    // console.log(`deleted ${elem.dataset.id}`)
+                    // if (elem.classList.contains("insert-marker")) return;
+                    var sortable = Sortable.utils.get(elem);
+                    if (sortable) sortable.deselect(elem);
+                    elem.remove();
+                }
+            });
+        });
+
+        console.debug(`rebuild_playlist ${(Date.now()-d0)}ms`);
+
+        // var last_session = last_playlist.session;
+        // var current_session = current_playlist.session;
+
+        // var selection = [];
+        // if (last_session === current_session) {
+        //     if (last_playlist === current_playlist) {
+        //         selection = [...new_items]
+        //     } else {
+        //         if (last_playlist.parent === current_playlist) {
+        //             selection = [last_playlist];
+        //         } else {
+        //             var first = this.get_datas()[0];
+        //             if (first) selection = [first];
+        //         }
+        //         this.reset_scroll();
+        //     }
+        //     if (selection.length) {
+        //         this.set_selection(selection);
+        //     }
+        // } else {
+        //     this.set_selection([]);
+        // }
+
+        // this.last_playlist_on_rebuild = current_playlist;
+        
+        this.update_info();
+        
+        this.emit("rebuild");
+    }
+
+
     /** @return {PlaylistCommand[]} */
     get all_commands() {
         return Object.values(this.commands);
@@ -8389,9 +8652,9 @@ export class PlaylistPanel extends Panel {
 
     back(){
         var current = this.current;
-        var parent = current.parent;
+        var parent = current._parent;
         if (!parent) return;
-        if (app.$._session.is_running && current == app.$._session.current_playing_item && current.calculate_contents_hash() != current.__private.hash_on_open) {
+        if (app.$._session._is_running && current == app.$._session._current_playing_item && current._calculate_contents_hash() != current.__private.hash_on_open) {
             app.prompt_for_reload_of_current_item();
         }
         this.open(parent, [current]);
@@ -8502,11 +8765,10 @@ export class PlaylistPanel extends Panel {
     selection_to_clipboard(cutting=false) {
         var items = this.get_selection_datas();
         if (!items.length) return;
-        var all_items = items.map(i=>[i, ...i.descendents]).flat().map(i=>i.copy());
+        var all_items = items.map(i=>[i, ...i._descendents]).flat().map(i=>i._copy());
         var items_set = new Set(items);
         this.clipboard = { items, items_set, all_items, cutting };
-        this.rebuild_next_frame();
-        this.update_playlist();
+        this.rebuild();
     }
 
     async paste_clipboard() {
@@ -8561,365 +8823,15 @@ export class PlaylistPanel extends Panel {
         });
     }
 
-    async rebuild() {
-        var d0 = Date.now();
-        
-        await Promise.all(this.sortables.map(s=>s.last_drag));
-
-        let is_running = app.$._session.is_running;
-        
-        var current_playlist = this.current;
-        /** @type {PlaylistItem} */
-        // var last_playlist = this.last_playlist_on_rebuild || NULL_PLAYLIST_ITEM;
-        var current_item = app.$._session.current_playing_item;
-        var current_parents = new Set(current_item.parents);
-        var current_playlist_tracks = current_playlist.tracks;
-        
-        var day_seconds = 60 * 60 * 24;
-        var start_time = null;
-        var now = (Date.now()/1000) - (new Date().getTimezoneOffset()*60);
-        if (app.settings.get("playlist_show_scheduled_times")) {
-            if (is_running) {
-                start_time = (now - current_item.userdata.start - app.get_current_time_pos()) * 1000;
-            } else {
-                if (app.$._session.schedule_start_time) {
-                    start_time = +new Date(app.$._session.schedule_start_time);
-                } else {
-                    var d = app.settings.get("schedule_generator") || EMPTY_OBJECT;
-                    start_time = ((Math.floor(now/day_seconds)*day_seconds) + utils.timespan_str_to_seconds(d.start_time || "00:00", "hh:mm")) * 1000;
-                }
-                start_time += utils.sum([current_playlist, ...current_playlist.parents].map(item=>item.userdata && item.userdata.start || 0)) * 1000;
-            }
-            // console.log(new Date(start_time));
-        }
-
-        this.set_tracks(current_playlist_tracks.length, current_playlist && current_playlist.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK);
-
-        var new_items = [];
-
-        this.sortables.forEach((sortable,i)=>{
-            /** @type {PlaylistItem[]} */
-            var items = current_playlist_tracks[i] || EMPTY_ARRAY;
-            dom_utils.rebuild(sortable.el, items, {
-                add: (item, elem, index)=>{
-                    if (!elem) {
-                        // console.log(`added ${item.id}`)
-                        new_items.push(item);
-                        elem = $(`<li class="item"><div><div class="clips"></div><div class="front"><span class="play-icons"></span><span class="icons"></span><span class="filename"></span><span class="extra"></span><span class="badges"></span><div class="duration"></div></div></div></li>`)[0];
-                    }
-                    
-                    // if (item._hash == elem._hash) return;
-                    // elem._hash = item._hash;
-
-                    var ud = item.userdata;
-                    var is_current_item = item.id == current_item.id;
-                    var is_current_ancestor = current_parents.has(item);
-                    var is_cutting = !!(this.clipboard && this.clipboard.cutting && this.clipboard.items_set.has(item));
-                    
-                    var _hash = JSON.stringify([index, item, ud, is_current_item, is_current_ancestor, is_cutting, start_time, is_running]);
-                    if (_hash === elem._hash) return;
-                    elem._hash = _hash;
-                    elem._item = item;
-                    
-                    let media_info = item.media_info || EMPTY_OBJECT;
-                    let children = item.children;
-                    let root_merged_playlist = item.root_merged_playlist;
-                    var is_playlist = item.is_playlist;
-                    var problems = [];
-                    let name = item.get_pretty_name();
-                    let filename_parts = [`<span>${name}</span>`];
-                    let title_parts = [name];
-                    let main_icon;
-                    var icons = [];
-                    var play_icons = [];
-                    let background_color, outline_color;
-                    let badges = {};
-    
-                    dom_utils.toggle_class(elem, "cutting", is_cutting);
-                    var is_upload_dummy = item.filename.startsWith("upload://");
-                    
-                    var play_icons_elem = elem.querySelector(".play-icons");
-                    var icons_elem = elem.querySelector(".icons");
-                    var filename_elem = elem.querySelector(".filename");
-                    var duration_elem = elem.querySelector(".duration");
-                    var extra_elem = elem.querySelector(".extra");
-                    var badges_elem = elem.querySelector(".badges");
-                    var clips_elem = elem.querySelector(".clips");
-                    
-                    let blocks = [];
-
-                    if (ud.clipping) {
-                        if (ud.clipping.loops < 128) {
-                            let segments = get_clip_segments(ud.clipping);
-                            if (ud.clipping.loops > 1) {
-                                let t = 0, d = ud.duration;
-                                if (d) {
-                                    for (let s of segments) {
-                                        blocks.push({x:t/d, width:s.duration/d})
-                                        t += s.duration
-                                    }
-                                }
-                            } else {
-                                let d = ud.media_duration;
-                                if (d) {
-                                    for (let s of segments) {
-                                        blocks.push({x:s.start/d, width:s.duration/d});
-                                    }
-                                }
-                            }
-                        }
-                        blocks = blocks.filter(b=>b.width>0.0001);
-                        if (blocks.length == 1 && blocks[0].width == 1) blocks = [];
-                    }
-                    clips_elem.innerHTML = blocks.map(b=>`<div style="left:${b.x.toFixed(5)*100}%;width:${b.width.toFixed(5)*100}%;"></div>`).join("");
-                    clips_elem.classList.toggle("repeats", !!(ud.clipping && ud.clipping.loops > 1))
-                    
-                    
-                    if (ud.is_processing) {
-                        play_icons.push(`<i class="fas fa-sync fa-spin"></i>`);
-                    } else if (is_current_ancestor) {
-                        play_icons.push(`<i class="fas fa-arrow-right"></i>`);
-                    } else if (is_current_item) {
-                        if (is_running) {
-                            play_icons.push(`<i class="fas fa-play"></i>`);
-                        } else {
-                            play_icons.push(`<i class="fas fa-forward-step"></i>`);
-                        }
-                    } else {
-                        play_icons.push(`<span class="numbering">${String(index+1).padStart(2,"0")}</span>`);
-                    }
-                    
-                    if (is_upload_dummy) {
-                        icons.push(`<i class="fas fa-upload"></i>`);
-                    } else {
-                        if (media_info.exists === false) {
-                            problems.push({level:3, text:"Media does not exist."});
-                        } else if (!utils.is_empty(media_info) && !media_info.streams && media_info.protocol !== "livestreamer:" && !item.is_playlist && !ud.is_processing) {
-                            problems.push({level:1, text:"Possibly invalid media."});
-                        } else if (root_merged_playlist && !item.is_mergable) {
-                            problems.push({level:2, text:"Merged items must be local files or empties."});
-                        }
-                    }
-                    
-                    if (item.props.color) {
-                        background_color = item_colors[item.props.color];
-                        outline_color = new utils.Color(item_colors[item.props.color]).rgb_mix("#000",0.3).to_rgb_hex();
-                    }
-                    if (is_playlist) {
-                        main_icon = `<i class="fas fa-folder-open" title="Playlist"></i>`;
-                        let b = "playlist";
-                        if (item.props.playlist_mode == PLAYLIST_MODE.MERGED) b = "merged-playlist";
-                        if (item.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK) b = "2-track-playlist";
-                        badges["playlist"] = b;
-                        filename_parts.push(`<span class="playlist-count">${children.length}</span>`)
-                        title_parts.push(`(${children.length})`);
-                    }
-                    // userdata.number = String(i+1).padStart(2,"0")
-                    
-                    var is_special = item.filename.startsWith("livestreamer://");
-                    if (is_special) {
-                        var type = item.filename.replace("livestreamer://", "");
-                        if (!(type in badges)) badges[type] = type;
-                        if (type == "macro") {
-                            main_icon = `<i class="fa-solid fa-scroll"></i>`
-                        } else if (type == "intertitle") {
-                            main_icon = `<i class="fa-solid fa-paragraph"></i>`
-                        } else if (type == "macro") {
-                            main_icon = `<i class="fa-solid fa-scroll"></i>`
-                        } else if (type == "empty") {
-                            main_icon = `<i class="fa-solid fa-ghost"></i>`
-                        } else if (type == "exit") {
-                            main_icon = `<i class="fa-solid fa-arrow-left-long"></i>`
-                        } else if (type == "rtmp") {
-                            title_parts.push(item.is_rtmp_live ? "[Connected]" : "[Disconnected]");
-                            if (item.is_rtmp_live) {
-                                main_icon = `<i class="fas fa-link" style="color:#00cc00;" title="Connected"></i>`;
-                            } else {
-                                main_icon = `<i class="fas fa-unlink" title="Disconnected"></i>`;
-                            }
-                            // main_icon = `<i class="fa-solid fa-tower-broadcast"></i>`
-                        } 
-                    }
-                    
-                    if (media_info.downloadable && item.filename.match(/^https?:/)) {
-                        let icon = $(`<i class="fas fa-globe"></i>`)[0]; //  style="color:cornflowerblue"
-                        icon.title = item.filename;
-                        main_icon = icon.outerHTML;
-                        badges["web"] = new URL(item.filename).hostname.replace(/^www\./, "");
-                    }
-                    
-                    if (!ud.download) {
-                        if (media_info.streams) {
-                            var default_video = utils.sort(media_info.streams.filter(s=>s.type === "video"),
-                                (s)=>s.albumart,
-                                (s)=>[s.default | s.forced * 2, "DESCENDING"]
-                            )[0];
-                            var default_audio = utils.sort(media_info.streams.filter(s=>s.type === "audio"),
-                                (s)=>[s.default | s.forced * 2, "DESCENDING"]
-                            )[0];
-                            let has_video = default_video && default_video.codec && !default_video.albumart;
-                            let has_audio = default_audio && default_audio.codec;
-
-                            if (has_video) {
-                                var codec = default_video.codec.replace(/video$/, "").split(".")[0];
-                                var size = get_video_size(default_video.width, default_video.height, media_info.interlaced);
-                        
-                                if (!media_info.duration || media_info.duration <= IMAGE_DURATION) {
-                                    icons.push(`<i class="fa-solid fa-image"></i>`);
-                                    badges["image"] = `${codec} ${default_video.width}x${default_video.height}`;
-                                } else {
-                                    icons.push(`<i class="fa-solid fa-film"></i>`);
-                                    badges["video"] = `${codec} ${size.text}`;
-                                }
-                                if ((default_video.codec == "hevc" || default_video.codec == "av1") && size.height > 720) {
-                                    problems.push({level:2, text:"Highly compressed video codec may struggle to decode in realtime."});
-                                } else if (size.height > 1080) {
-                                    problems.push({level:2, text: "Ultra HD video may struggle to decode in realtime."});
-                                }
-                            }
-                            if (has_audio) {
-                                if (!has_video) icons.push(`<i class="fa-solid fa-music"></i>`);
-                                badges["audio"] = default_audio.codec.replace(/^pcm_.+$/, "pcm").split(".")[0];
-                            }
-                            if (root_merged_playlist && default_video && default_video.codec == "vc1") {
-                                problems.push({level:2, text: "VC-1 video codec can lead to playback issues within a merged playlist."});
-                            }
-                        }
-                    }
-                    {
-                        let d, t, extra_elem_children = [];
-                        if (ud.upload || item.filename.startsWith("upload://")) {
-                            d = ud.upload || { bytes:0, total:0, speed:0 };
-                            t = "upload";
-                        }
-                        if (ud.download) {
-                            d = ud.download
-                            t = "download";
-                        }
-                        if (d) {
-                            let bar = extra_elem.querySelector(`.progress`) || $(`<div class="progress"><span class="percent"></span><span class="speed"></span></div>`)[0];
-                            let icon = extra_elem.querySelector(`.fas`) || $(`<i class="fas"></i>`)[0];
-                            
-                            let p = d.total ? ( d.bytes / d.total) : 0;
-                            bar.title = `${utils.capitalize(t)}ing [${utils.format_bytes(d.bytes || 0)} / ${utils.format_bytes(d.total || 0)}]`;
-
-                            let percent_text = [];
-                            if (d.num_stages) percent_text.push(`${d.stage+1}/${d.num_stages}`);
-                            percent_text.push(`${(p * 100).toFixed(2)}%`);
-
-                            bar.style.setProperty("--progress",`${p*100}%`);
-                            bar.querySelector(".percent").innerHTML = percent_text.join(" | ");
-                            bar.querySelector(".speed").innerHTML = `${utils.format_bytes(d.speed || 0)}ps`;
-                            icon.className = `fas fa-${t}`;
-                            extra_elem_children = [icon, bar];
-                        }
-                        dom_utils.set_children(extra_elem, extra_elem_children);
-                    }
-
-                    dom_utils.set_inner_html(badges_elem, Object.entries(badges).map(([k,v])=>{
-                        var parts = v.split(" ");
-                        parts[0] = parts[0].toUpperCase();
-                        return `<i class="badge" data-badge-type="${k}">${parts.join(" ")}</i>`
-                    }).join(""));
-
-                    if (!is_special && ud.modified) {
-                        icons.push(`<i class="fas fa-wrench"></i>`);
-                    }
-    
-                    var duration_str;
-                    if (start_time != null) {
-                        let s = new Date(start_time + ud.start*1000);
-                        duration_str = `<i class="far fa-clock" style="padding-right:3px"></i>${String(s.getHours()).padStart(2,"0")}:${String(s.getMinutes()).padStart(2,"0")}`;
-                    } else {
-                        if (ud.duration || ud.media_duration) duration_str = utils.seconds_to_timespan_str(ud.duration || ud.children_duration, "h?:mm:ss");
-                    }
-
-                    duration_elem.innerHTML = duration_str || "  -  ";
-                    
-                    if (problems.length) {
-                        var problem_groups = utils.group_by(problems, p=>p.level);
-                        var err_icon_html;
-                        if (problem_groups["3"]) err_icon_html = `<i class="fas fa-times" style="color:red;"></i>`;
-                        else if (problem_groups["2"]) err_icon_html = `<i class="fas fa-exclamation-triangle" style="color:orange;"></i>`;
-                        else if (problem_groups["1"]) err_icon_html = `<i class="fas fa-question-circle" style="color:#6495ED;"></i>`;
-                        if (err_icon_html) {
-                            let icon = $(err_icon_html)[0];
-                            icon.title = problems.map(p=>" - "+p.text).join("\n");
-                            icons.push(icon.outerHTML);
-                        }
-                    }
-    
-                    dom_utils.set_inner_html(play_icons_elem, play_icons.join(""));
-
-                    // if (!main_icon) main_icon = `<i class="fa-solid fa-file"></i>`;
-                    dom_utils.set_inner_html(icons_elem, [main_icon, ...icons].join(""));
-    
-                    filename_elem.innerHTML = filename_parts.join(" ");
-    
-                    elem.style.setProperty("--duration", ud.timeline_duration);
-                    elem.style.setProperty("--start", ud.timeline_start);
-                    elem.style.setProperty("--end", ud.timeline_end);
-    
-                    elem.title = title_parts.join(" ");
-                    elem.classList.toggle("current", is_current_item);
-                    elem.style.setProperty("--background-color", background_color || "");
-                    elem.style.setProperty("--outline-color", outline_color || "");
-    
-                    elem.ondblclick = ()=>app.playlist_play(item);
-    
-                    return elem;
-                },
-                remove:(elem)=>{
-                    // console.log(`deleted ${elem.dataset.id}`)
-                    // if (elem.classList.contains("insert-marker")) return;
-                    var sortable = Sortable.utils.get(elem);
-                    if (sortable) sortable.deselect(elem);
-                    elem.remove();
-                }
-            });
-        });
-
-        console.debug("rebuild_playlist:", `${(Date.now()-d0)}ms`);
-
-        // var last_session = last_playlist.session;
-        // var current_session = current_playlist.session;
-
-        // var selection = [];
-        // if (last_session === current_session) {
-        //     if (last_playlist === current_playlist) {
-        //         selection = [...new_items]
-        //     } else {
-        //         if (last_playlist.parent === current_playlist) {
-        //             selection = [last_playlist];
-        //         } else {
-        //             var first = this.get_datas()[0];
-        //             if (first) selection = [first];
-        //         }
-        //         this.reset_scroll();
-        //     }
-        //     if (selection.length) {
-        //         this.set_selection(selection);
-        //     }
-        // } else {
-        //     this.set_selection([]);
-        // }
-
-        // this.last_playlist_on_rebuild = current_playlist;
-        
-        this.update_info();
-        
-        this.emit("rebuild");
-    }
-
     zoom_into_selected_playlist_items() {
-        var ud = this.current.userdata;
+        var ud = this.current._userdata;
         var start, end;
         if (ud.clipping) [start,end] = [ud.clipping.start, ud.clipping.end];
         else {
             var items = this.get_selection_datas();
             if (!items || !items.length) items = this.get_datas();
-            start = Math.min(...items.map(item=>item.userdata.timeline_start));
-            end = Math.max(...items.map(item=>item.userdata.timeline_end));
+            start = Math.min(...items.map(item=>item._userdata.timeline_start));
+            end = Math.max(...items.map(item=>item._userdata.timeline_end));
         }
         this.set_timeline_view([start, end]);
     }
@@ -8973,13 +8885,12 @@ export class PlaylistPanel extends Panel {
     /** @param {PlaylistItem} item */
     open(item, selection) {
         if (!item) item = app.$._session.playlist["0"];
-        if (!item.is_playlist) return;
+        if (!item._is_playlist) return;
         this.sortables.forEach(s=>s.forget_last_active());
         this.current = item;
         this.cursor_position = null;
-        this.update_playlist();
-        this.rebuild_next_frame();
-        item.__private.hash_on_open = item.calculate_contents_hash()
+        this.rebuild();
+        item.__private.hash_on_open = item._calculate_contents_hash()
         this.once("rebuild", ()=>{
             if (this.timeline_mode && this.clipping) this.set_timeline_view([this.clipping.start, this.clipping.end], this.time);
             else this.scroll_into_view(this.get_elements()[0]);
@@ -8993,7 +8904,7 @@ export class PlaylistPanel extends Panel {
         var info = {};
         info["Selection"] = `<i class="far fa-square-check"></i> [${selected_items.length}/${len}]`;
         if (selected_items.length) {
-            var duration = utils.sum(selected_items.map(i=>i.userdata.duration));
+            var duration = utils.sum(selected_items.map(i=>i._userdata.duration));
             info["Duration"] = `<i class="far fa-clock"></i> (${utils.seconds_to_timespan_str(duration, "h?:mm:ss")})`;
         }
         if (this.clipboard) {
@@ -9011,35 +8922,25 @@ export class PlaylistPanel extends Panel {
 
     setup_resize() {
         var on_scroll;
-        var resize_observer = new ResizeObserver(()=>this.update_position_next_frame());
-        // var intersection_observer = new IntersectionObserver(()=>this.update_position_next_frame());
-        app.main_elem.addEventListener("scroll", on_scroll=()=>this.update_position_next_frame());
+        var resize_observer = new ResizeObserver(()=>this.update_position());
+        app.main_elem.addEventListener("scroll", on_scroll=()=>this.update_position());
         var parent = this.elem.parentElement;
         resize_observer.observe(parent);
 
-        /* var top, left;
-        var tick = ()=>{
-            if (parent.offsetTop != top || parent.offsetLeft != left) {
-                top = parent.offsetTop;
-                left = parent.offsetLeft;
-                this.update_position();
-            }
-            requestAnimationFrame(tick);
-        }
-        requestAnimationFrame(tick); */
-
-        // intersection_observer.observe(parent);
-
-        // this.on("update", ()=>this.update_position());
         this.on("destroy", ()=>{
             resize_observer.disconnect();
-            // intersection_observer.disconnect();
             app.main_elem.removeEventListener("scroll", on_scroll);
         });
     }
 
     update_position() {
-        if (app.settings.get("playlist_sticky")) {
+        if (!this.base_min_height) {
+            var c = window.getComputedStyle(this.elem);
+            this.base_min_height = parseFloat(c.getPropertyValue("--min-height"));
+        }
+        var get_style = ()=>{
+            if (!app.settings.get("playlist_sticky")) return;
+            if (this.elem.parentElement.childElementCount > 1) return;
             var r = this.elem.parentElement.getBoundingClientRect();
             var min_height = 400;
             var max_height = r.bottom - r.top;
@@ -9052,28 +8953,23 @@ export class PlaylistPanel extends Panel {
             var fixed_top = Math.max(r.top, padding);
             if (top > 0) fixed_top += offset;
             height -= offset;
-
-            // weird way of doing it...
-            if (width < window.innerWidth * 0.7) {
-                height = utils.clamp(height, min_height, max_height);
-                if (height > 400) { // .playlist-wrapper min-height
-                    Object.assign(this.elem.style, {
-                        // position: "fixed",
-                        // top: `${fixed_top}px`,
-                        position: "absolute",
-                        top: `${fixed_top-r.top}px`,
-                        width: `${width}px`,
-                        height: `${height}px`,
-                    });
-                    return;
-                }
+            if (width > window.innerWidth * 0.7) return;
+            height = utils.clamp(height, min_height, max_height);
+            if (height < this.base_min_height) return;
+            return {
+                position: "relative",
+                top: `${fixed_top-r.top}px`,
+                width: `${width}px`,
+                height: `${height}px`,
+                flex: "none",
             }
         }
-        Object.assign(this.elem.style, {
+        Object.assign(this.elem.style, get_style() || {
             position: "",
             top: ``,
             width: ``,
             height: ``,
+            flex: "",
         });
     };
 
@@ -9113,37 +9009,6 @@ export class PlaylistPanel extends Panel {
 
         this.scrollbar_width = Math.max(...get_scrollbar_width(this.tracks_elem));
         this.timeline_container_elem.style.setProperty("--scrollbar-width", `${this.scrollbar_width}px`);
-    }
-
-    update_playlist() {
-        var current = this.current;
-        var current_ud = current.userdata;
-        var duration = current_ud.duration;
-        var timeline_duration = current_ud.timeline_duration;
-        var self_and_parents = [app.$._session.current_playing_item, ...app.$._session.current_playing_item.parents];
-        var a_index = self_and_parents.indexOf(current);
-        var timeline_time = utils.sum(self_and_parents.slice(0, a_index).map(item=>utils.try(()=>item.userdata.timeline_start)||0)) + Math.min(app.get_current_time_pos(), app.$._session.current_playing_item.userdata.timeline_duration);
-        var time = utils.sum(self_and_parents.slice(0, a_index).map(item=>utils.try(()=>item.userdata.start)||0)) + Math.min(app.get_current_time_pos(), app.$._session.current_playing_item.userdata.duration);
-
-        this.time = timeline_time;
-        this.duration = timeline_duration;
-        this.clipping = current_ud.clipping;
-        if (this.clipping) {
-            this.clip_time = utils.loop(this.time + this.clipping.offset + this.clipping.start, this.clipping.start, this.clipping.end);
-        } else {
-            this.clip_time = this.time;
-        }
-
-        this.playlist_back_button.disabled = !current.parent;
-        
-        dom_utils.set_inner_html(this.playlist_time_total_elem, `(${utils.seconds_to_timespan_str(duration)})`);
-        dom_utils.set_inner_html(this.playlist_time_left_elem, `[-${utils.seconds_to_timespan_str(duration-time)}]`);
-
-        this.playlist_time_left_elem.style.display = current === app.$._session.playlist["0"] ? "" : "none"
-        
-        app.build_playlist_breadcrumbs(this.playlist_path_text, current, true);
-
-        this.update_view();
     }
     
     get timeline_window_duration() {
@@ -9187,7 +9052,7 @@ export class PlaylistPanel extends Panel {
             this.set_timeline_scroll_percent(scroll_x, ox);
         }
         
-        this.update_view();
+        this.update();
     }
 }
 
@@ -9200,7 +9065,7 @@ export class Loader {
             <div class="msg">Loading...</div>
         </div>`
         this.el = $(html)[0];
-        this.el.style.zIndex = 999999999
+        this.el.style.zIndex = 999999999;
     }
     update(opts) {
         var msg = this.el.querySelector(".msg");
@@ -9208,8 +9073,8 @@ export class Loader {
             msg.innerHTML = opts.text;
         }
         if ("visible" in opts) {
-            if (opts.visible) document.body.append(this.el);
-            else this.el.remove();
+            if (opts.visible && this.el.parentElement != document.body) document.body.append(this.el);
+            else if (!opts.visible && this.el.parentElement) this.el.remove();
         }
     }
     destroy() {
@@ -9217,17 +9082,40 @@ export class Loader {
     }
 }
 
+export class Area extends UI.Column {
+    constructor(elem, settings) {
+        super(elem, settings);
+        this.elem.classList.add("area");
+        this.elem.classList.add(`area-${app.areas.length+1}`);
+        app.areas.push(this);
+    }
+}
+
 export class App extends utils.EventEmitter {
     get server_now() { return Date.now() + this.$.server_time_diff; }
     get playlist_item_props_class() { return utils.try(()=>this.$.properties.playlist.enumerable_props.props.props); }
-    get focused_element() { return this.root.activeElement; }
-    get dev_mode() { return this.conf["debug"] || new URLSearchParams(window.location.search.slice(1)).has("dev"); }
+    get focused_element() { return this.root_elem.activeElement; }
+    get dev_mode() { return this.$.conf["debug"] || new URLSearchParams(window.location.search.slice(1)).has("dev"); }
+    last_session = NULL_SESSION;
     
     /** @type {Remote} */
     $;
 
-    async init() {
+    constructor() {
+        super();
+        app = this;
+        jQuery(()=>{
+            this._pre_initialize();
+        })
+    }
+
+    async _pre_initialize() {
+        if (this._pre_initialized) return;
+        this._pre_initialized = true;
+
         this.loader = new Loader();
+        this.loader.update({visible:true, text:"Initializing..."});
+
         var messenger = new dom_utils.WindowCommunicator();
         var key;
         if (window.self == window.top) {
@@ -9236,78 +9124,53 @@ export class App extends utils.EventEmitter {
             key = await messenger.request(window.parent, "key");
         }
         if (key) dom_utils.Cookie.set("ls_key", key, { expires: 365 });
-
         messenger.destroy();
         
-        var elem = this.elem = document.querySelector("#livestreamer");
-        this.body = elem.parentElement;
-        this.root = elem.getRootNode();
+        this.loader.update({text:"Connecting..."});
+
+        this.elem = document.querySelector("#livestreamer");
+        this.body_elem = this.elem.parentElement;
+        this.root_elem = this.elem.getRootNode();
+
+        // this.conf = await fetch("conf").then(r=>r.json()); // crazy...;
+        /** @type {Area[]} */
+        this.areas = [];
         
-        new UI.Root();
-
-        this.conf = await fetch("conf").then(r=>r.json()); // crazy...;
-
-        this.rtmp_host = utils.build_url({
-            "protocol": "rtmp:",
-            "port": (this.conf["nms.rtmp_port"] == 1935) ? "" : this.conf["nms.rtmp_port"],
-            "pathname": "/"
-        });
-
-        App.instance = this;
-        app = this;
-
-        // var q = new URLSearchParams(window.location.search.slice(1));
-
-        Remote.init();
         this.font_cache = {};
         this.num_requests = 0;
         this.upload_queue = new UploadQueue();
-        // this.expected_changes = {};
         this.clipboard = null;
         this.plugins = {};
         this.target_config_menus = {};
-
-        this.debounced_update_$ = dom_utils.debounce_next_frame(this.update_$);
         this.advanced_functions = [];
 
-        this.main_elem = elem.querySelector(".main");
-        
-        /* Object.assign(Chart.defaults.line, {
-            hover: {
-                mode: "nearest"
-            }
-        }); */
-
-        this.show_help_button = this.root.querySelector("#show-help");
-        this.show_config_button = this.root.querySelector("#show-config");
-        this.show_admin_button = this.root.querySelector("#show-admin");
+        this.main_elem = this.elem.querySelector(".main");
+        this.show_help_button = this.root_elem.querySelector("#show-help");
+        this.show_config_button = this.root_elem.querySelector("#show-config");
+        this.show_admin_button = this.root_elem.querySelector("#show-admin");
         this.show_admin_button.classList.toggle("d-none", true); // !app.user.is_admin
-
-        this.session_elem = this.root.querySelector("#session");
-        this.session_controls_wrapper_elem = this.root.querySelector(".session-controls-wrapper");
-        this.session_load_save_elem = this.root.querySelector("#session-load-save");
-        this.session_inner_elem = this.root.querySelector("#session-inner");
-        this.session_ui_elem = this.root.querySelector("#session-ui");
-
-        this.stream_settings_elem = this.root.querySelector(".stream-settings");
-
-        this.no_sessions_elem = this.root.querySelector("#no-sessions");
-        this.session_password_elem = this.root.querySelector("#session-password");
-        this.new_session_button = this.root.querySelectorAll(".new-session");
-        this.destroy_session_button = this.root.querySelector("#destroy-session");
-        this.minimize_session_button = this.root.querySelector("#minimize-session");
+        this.session_elem = this.root_elem.querySelector("#session");
+        this.session_controls_wrapper_elem = this.root_elem.querySelector(".session-controls-wrapper");
+        this.session_load_save_elem = this.root_elem.querySelector("#session-load-save");
+        this.session_inner_elem = this.root_elem.querySelector("#session-inner");
+        this.session_ui_elem = this.root_elem.querySelector("#session-ui");
+        this.no_sessions_elem = this.root_elem.querySelector("#no-sessions");
+        this.session_password_elem = this.root_elem.querySelector("#session-password");
+        this.new_session_button = this.root_elem.querySelectorAll(".new-session");
+        this.destroy_session_button = this.root_elem.querySelector("#destroy-session");
+        this.minimize_session_button = this.root_elem.querySelector("#minimize-session");
         // if (!this.dev_mode) this.minimize_session_button.classList.add("d-none");
-        this.sign_out_session_button = this.root.querySelector("#sign-out-session");
-        this.config_session_button = this.root.querySelector("#config-session");
-        this.load_session_button = this.root.querySelector("#load-session");
-        this.save_session_button = this.root.querySelector("#save-session");
-        this.history_session_button = this.root.querySelector("#history-session");
-        this.sessions_tabs_elem = this.root.querySelector("#sessions-tabs");
-        this.sessions_select = this.root.querySelector("#sessions-select");
-        this.users_elem = this.root.querySelector("#users");
-        this.request_loading_elem = this.root.querySelector("#request-loading");
+        this.sign_out_session_button = this.root_elem.querySelector("#sign-out-session");
+        this.config_session_button = this.root_elem.querySelector("#config-session");
+        this.load_session_button = this.root_elem.querySelector("#load-session");
+        this.save_session_button = this.root_elem.querySelector("#save-session");
+        this.history_session_button = this.root_elem.querySelector("#history-session");
+        this.sessions_tabs_elem = this.root_elem.querySelector("#sessions-tabs");
+        this.sessions_select = this.root_elem.querySelector("#sessions-select");
+        this.users_elem = this.root_elem.querySelector("#users");
+        this.request_loading_elem = this.root_elem.querySelector("#request-loading");
         
-        this.settings = new dom_utils.LocalStorageBucket("livestreamer", {
+        this.settings = new dom_utils.LocalStorageBucket("livestreamer-1.0", {
             "playlist_mode": 0,
             "playlist_show_scheduled_times": false,
             "playlist_sticky": true,
@@ -9317,38 +9180,76 @@ export class App extends utils.EventEmitter {
             "test_stream_info": true,
             "show_chapters": true,
             "show_encoder_info": true,
-            "smooth_encoder_points": false,
             "pause_encoder": false,
             "sessions_display": "tabs",
             "open_file_manager_in_new_window": false,
             "time_left_mode": TimeLeftMode.TIME_LEFT,
             "layout":null,
-            "session-order": null,
+            "session_order": null,
+            "last_session_id": null
         });
+        this.passwords = new dom_utils.LocalStorageBucket("livestreamer-passwords");
+
+        var ws_url = window.location.origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")+"/main/";
+        var ws_params = new URLSearchParams();
+        if (key) ws_params.set("key", key);
+        var session_id = this.settings.get("last_session_id");
+        if (session_id) ws_params.set("session_id", session_id);
+        this.ws = new dom_utils.WebSocket(ws_url+"?"+ws_params.toString());
+        this.ws.on("open", ()=>{
+            this.$ = new Remote();
+            this.$.on("update", (changes)=>this.update(changes));
+        });
+        this.ws.on("data", (data)=>{
+            // if (this.dev_mode) console.debug("ws:", data);
+            if (data.init) {
+                this.$._push(data.init);
+                this.$._push({
+                    settings: this.settings.$,
+                    passwords: this.passwords.$
+                });
+            }
+            if (data.$) {
+                this.$._push(data.$);
+            }
+        });
+        this.ws.on("close", ()=>{
+            this.loader.update({visible:true, text:"Lost connection..."});
+            this.remove_plugins();
+            Fancybox.close(true);
+        });
+    }
+
+    async init() {
+        if (this._initialized) return;
+        this._initialized = true;
         
-        var session_ui = new UI(this.session_ui_elem);
-        var row = session_ui.append(new UI.Row());
-        row.append(new UI.Column());
-        row.append(new UI.Column());
-        this.areas = [...row.elem.children];
-        this.areas.forEach(a=>a.classList.add("area"));
+        this.root = new UI.Root();
+        
+        var session_ui = new UI.Column();
+        var row1 = new UI.Row();
+        row1.append(new Area());
+        var row2 = new UI.Row();
+        row2.append(new Area(), new Area());
+        session_ui.append(row1, row2);
+        this.session_ui_elem.append(session_ui);
 
         /** @type {Record<string,Panel>} */
         this.panels = {};
         
         this.stream_settings = new StreamSettings();
-        this.stream_settings_elem.append(this.stream_settings);
+        this.areas[0].append(this.stream_settings);
 
         this.playlist = new PlaylistPanel();
-        this.areas[0].append(this.playlist);
-        this.playlist.setup_resize()
+        this.areas[1].append(this.playlist);
+        this.playlist.setup_resize();
         
         this.media_player = new MediaPlayerPanel();
         this.media_settings = new MediaSettingsPanel();
         this.encoder = new EncoderPanel();
         this.session_logger = new LogViewerPanel("Session Log", {ffmpeg: false});
 
-        this.areas[1].append(this.media_player,this.media_settings,this.encoder,this.session_logger);
+        this.areas[2].append(this.media_player,this.media_settings,this.encoder,this.session_logger);
         this.default_layout = this.get_layout();
         
         this.app_log_section = this.elem.querySelector(".app-logs-section");
@@ -9379,46 +9280,20 @@ export class App extends utils.EventEmitter {
         });
 
         this.settings.on("change", (e)=>{
-            if (e.name.startsWith("drawer:")) {
-                var panel = this.panels[e.name.slice(7)];
-                if (panel) panel.toggle(!e.value)
-            } else {
-                if (typeof e.value === "boolean") {
-                    this.body.toggleAttribute(`data-${e.name}`, e.value);
-                    [...this.elem.querySelectorAll(`button.${e.name}`)].forEach(c=>{
-                        if (e.value) delete c.dataset.toggled; else c.dataset.toggled = 1;
-                    });
-                } else {
-                    var t = typeof e.value;
-                    if (t != "object" && t != "function") {
-                        this.body.setAttribute(`data-${e.name}`, e.value);
-                    }
-                }
-            }
-            if (e.name === "playlist_mode") {
-                this.playlist.timeline_mode = e.value;
-            }
-            if (e.name === "playlist_sticky") {
-                this.playlist.update_position_next_frame();
-            }
-            if (e.name === "smooth_encoder_points" || e.name === "pause_encoder") {
-                this.encoder.debounced_update_chart();
-            }
-            this.$._push([`settings/${e.name}`, e.value]);
+            this.$._push([`settings/${e.name}`, e.new_value]);
         });
 
-        this.passwords = new dom_utils.LocalStorageBucket("livestreamer-passwords");
         this.passwords.on("change", (e)=>{
-            this.$._push([`passwords/${e.name}`, e.value]);
+            this.$._push([`passwords/${e.name}`, e.new_value]);
         });
 
         // -------------------------------
 
         this.sessions_select.addEventListener("change", ()=>{
-            window.location.hash = `#${this.sessions_select.value}`;
+            window.location.hash = `#${this.sessions_select.new_value}`;
         })
         
-        Object.assign(Fancybox.defaults, {parentEl: this.body});
+        Object.assign(Fancybox.defaults, {parentEl: this.body_elem});
 
         dom_utils.tippy.setDefaultProps({
             distance: 0,
@@ -9459,50 +9334,6 @@ export class App extends utils.EventEmitter {
             }
             e.preventDefault();
             e.stopPropagation();
-        });
-
-        this.set_loading(true, "Connecting...");
-
-        var ws_url = window.location.origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")+"/main/"+"?key="+key;
-        this.ws = new dom_utils.WebSocket(ws_url);
-
-        this.ws.on("open", ()=>{
-            Remote.init();
-            var on_change;
-            var last_session_id = this.settings.get("last_session_id");
-            this.on("change", on_change=()=>{
-                if (this.try_attach_to(last_session_id)) this.off("change", on_change);
-            })
-            this.ws.on("data", ()=>{
-
-            })
-            var check;
-            this.on("change", check = (e)=>{
-                if (!this.$.init) return;
-                this.set_loading(false);
-                this.off("change", check);
-            });
-        });
-        this.ws.on("data", (data)=>{
-            if (this.dev_mode) {
-                // console.debug("ws:", data);
-            }
-            if (data.init) {
-                this.$.init = true;
-                this.$.server_time_diff = Date.now() - data.init.ts;
-                this.$.client_id = data.init.client_id;
-                // -----
-                // var session_hash = window.location.hash.slice(1);
-                // if (!session_hash) session_hash = this.settings.get("last_session_id");
-            }
-            if (data.$) {
-                this.$._push(data.$);
-            }
-        });
-        this.ws.on("close", ()=>{
-            this.set_loading(true, "Lost connection...");
-            this.remove_plugins();
-            Fancybox.close(true);
         });
 
         $(this.new_session_button).on("click", (e)=>{
@@ -9555,10 +9386,10 @@ export class App extends utils.EventEmitter {
         
         // this.fonts_menu = new FontSettings();
 
-        this.target_config_menus["local"] = new NodeMediaServerTargetConfigMenu();
+        this.target_config_menus["local"] = new LocalServerTargetConfigMenu();
 
-        (()=>{
-            var row = new UI(this.session_password_elem).append(new UI.FlexRow());
+        {
+            let row = new UI(this.session_password_elem).append(new UI.FlexRow());
             this.session_password = new UI.Property(null, "Password", `<input type="text">`,{
                 "default":"",
                 "reset":false,
@@ -9567,21 +9398,20 @@ export class App extends utils.EventEmitter {
             this.session_password.input.addEventListener("keydown", (e)=>{
                 if (e.key === "Enter") button.click();
             });
-            var button = $(`<button class="button" title="Sign in"><i class="fas fa-key"></i></button>`)[0];
+            let button = $(`<button class="button" title="Sign in"><i class="fas fa-key"></i></button>`)[0];
             button.addEventListener("click", ()=>{
                 this.passwords.set(this.$._session.id, this.session_password.value);
             });
             this.session_password.inner.append(button);
-
             row.append(this.session_password);
-        })()
+        }
 
         this.sign_out_session_button.addEventListener("click", (e)=>{
-            this.passwords.delete(this.$._session.id);
+            this.passwords.unset(this.$._session.id);
         });
         
-        this.areas.forEach(el=>{
-            new Sortable(el, {
+        for (let area of this.areas) {
+            new Sortable(area.elem, {
                 group: "layout",
                 fallbackTolerance: 3, // So that we can select items on mobile
                 animation: 150,
@@ -9594,11 +9424,7 @@ export class App extends utils.EventEmitter {
                 onEnd: ()=>this.save_layout(),
                 preventOnFilter: false,
             });
-        });
-
-        this.settings.on("load", ()=>{
-            this.update_layout();
-        });
+        }
         
         this.session_sortable = new ResponsiveSortable(this.sessions_tabs_elem, {
             fallbackTolerance: 3, // So that we can select items on mobile
@@ -9606,8 +9432,8 @@ export class App extends utils.EventEmitter {
             // filter: ".unmovable",
             handle: ".handle",
             onEnd: (evt)=>{
-                if (this.conf["main.session_order_client"]) {
-                    this.settings.set("session-order", [...this.sessions_tabs_elem.children].map(e=>e.dataset.id));
+                if (this.$.conf["main.session-order-client"]) {
+                    this.settings.set("session_order", [...this.sessions_tabs_elem.children].map(e=>e.dataset.id));
                 } else {
                     this.request({
                         call: ["rearrange_sessions"],
@@ -9676,24 +9502,33 @@ export class App extends utils.EventEmitter {
         this.footer_buttons = new UI.Row().elem;
         this.main_elem.append(this.footer_buttons);
         this.footer_buttons.style["justify-content"] = "end";
-    
+
+        var row = new UI.Row({
+            gap: 0,
+            visible: ()=>app.$.processes["file-manager"] || IS_ELECTRON
+        });
+        
         if (!IS_ELECTRON) {
-            var row = new UI.FlexRow({
-                gap:0
-            })
             row.append(
-                new UI.Button(`<i class="fa-solid fa-folder-tree"></i>`, {
+                new UI.Button(`<i class="fas fa-folder-tree"></i>`, {
                     click: ()=>{
                         app.file_system_info_menu.show();
                     },
                     title: ()=>app.file_system_info_menu.modal_title
-                }),
-                new UI.Button(`File Manager`, {
-                    click: ()=>open_file_manager({new_window:true, standalone:true})
                 })
-            );
-            this.footer_buttons.append(row);
+            )
         }
+        row.append(
+            new UI.Link(`File Manager`, {
+                class: "button",
+                href: get_file_manager_url(),
+                click: (e)=>{
+                    e.preventDefault();
+                    open_file_manager({ new_window:true, standalone:true, hidden_id:"file-manager-standalone" });
+                }
+            })
+        );
+        this.footer_buttons.append(row);
         
         /* this.footer_buttons.append(
             new UI.Button(`Font Manager`, {
@@ -9750,13 +9585,366 @@ export class App extends utils.EventEmitter {
             }),
         );
         
-        setInterval(()=>this.tick(), 1000/10);
+        this.tick_interval = setInterval(()=>this.tick(), 1000/10);
         this.tick();
         
-        requestAnimationFrame(()=>{
-            this.passwords.load();
-            this.settings.load();
-        })
+        this.update_layout();
+
+        this.settings.load(true);
+        this.passwords.load(true);
+    }
+
+    async update(changes) {
+        this.media.update();
+
+        await this.init();
+
+        var rebuild_playlist;
+
+        var client_id = this.$.client_id;
+        var is_new_session = !!(changes.clients && changes.clients[client_id] && changes.clients[client_id].session_id);
+        var session_changes = is_new_session ? this.$._session : changes.sessions && changes.sessions[this.$._session.id];
+        // var is_new_stream = !!(changes.sessions && changes.sessions[this.$._session.id] && changes.sessions[this.$._session.id].stream);
+        // remove_empty_objects_from_tree(changes);
+        var is_null_session = this.$._session === NULL_SESSION;
+        var access_control = new AccessControl(this.$._session.access_control);
+        var has_ownership = access_control.self_is_owner_or_admin || access_control.owners.length == 0;
+        var has_access = is_null_session || access_control.self_has_access(app.passwords.get(this.$._session.id)) || this.$._client.is_admin;
+        var requires_password = access_control.self_requires_password;
+        var is_external_session = this.$._session.type === "ExternalSession";
+        var is_running = this.$._session._is_running;
+
+        /* if (is_new_session && this.last_session.id != this.$._session.id) {
+            alert(`'${this.last_session.name}' was terminated by another user or internally.`);
+        } */
+
+        if (changes.client && changes.client.session_id && changes.client.session_id !== window.location.hash.slice(1)) {
+            window.location.hash = changes.client.session_id;
+        }
+        // var hash = this.$.session ? `#${this.$.session.id}` : "";
+        // if (window.location.hash !== hash) window.location.hash = hash;
+
+        this.session_elem.classList.toggle("d-none", is_null_session);
+        this.session_elem.dataset.type = this.$._session.type;
+
+        this.session_inner_elem.classList.toggle("d-none", !has_access);
+
+        this.session_controls_wrapper_elem.classList.toggle("d-none", is_null_session);
+        this.no_sessions_elem.classList.toggle("d-none", !is_null_session && has_access);
+        this.no_sessions_elem.querySelector(".no-session").classList.toggle("d-none", !has_access);
+        this.no_sessions_elem.querySelector(".no-access").classList.toggle("d-none", has_access);
+        this.no_sessions_elem.querySelector(".owner").classList.toggle("d-none", has_access);
+        dom_utils.set_inner_html(this.no_sessions_elem.querySelector(".owner"), `This session is owned by ${access_control.owners.map(u=>`[${u.username}]`).join(" | ")}`);
+        this.session_password_elem.classList.toggle("d-none", has_access || !requires_password);
+        
+        this.session_load_save_elem.style.display = is_external_session ? "none": "";
+
+        this.playlist.hidden = is_external_session;
+        this.media_player.hidden = is_external_session;
+        this.media_settings.hidden = is_external_session;
+
+        this.load_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
+        this.save_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
+        this.history_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
+        
+        this.sign_out_session_button.classList.toggle("d-none", has_ownership || !(requires_password && has_access));
+        this.config_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
+        this.destroy_session_button.toggleAttribute("disabled", !has_ownership);
+
+        if (changes.settings) {
+            for (let k in changes.settings) {
+                let v = changes.settings[k];
+                if (k.startsWith("drawer:")) {
+                    var panel = this.panels[k.slice(7)];
+                    if (panel) panel.toggle(!v)
+                } else if (typeof v === "boolean") {
+                    this.body_elem.toggleAttribute(`data-${k}`, v);
+                    [...this.elem.querySelectorAll(`button.${k}`)].forEach(c=>{
+                        if (v) delete c.dataset.toggled; else c.dataset.toggled = 1;
+                    });
+                } else {
+                    var t = typeof v;
+                    if (t != "object" && t != "function") {
+                        this.body_elem.setAttribute(`data-${k}`, v);
+                    }
+                }
+                if (k === "playlist_mode") {
+                    this.playlist.timeline_mode = v;
+                } else if (k === "playlist_sticky") {
+                    this.playlist.update_position_next_frame();
+                }
+            }
+        }
+
+        // if (is_new_stream) this.encoder.reset_chart();
+        if (is_new_session) {
+            this.playlist.sortables.forEach(s=>s.deselect_all());
+            this.session_logger.empty();
+            // this.encoder.reset_chart();
+            this.session_password.reset();
+            this.playlist.open(null);
+        }
+        // var ignore_vars = new Set(["output-frames","output-pts","estimated-display-fps", "estimated-vf-fps", "real-time-pos", "time-pos", "duration", "real-duration"]);
+        
+        /* for (var s of Object.values(changes.sessions)) {
+            for (var k of ["output-frames","output-pts","estimated-display-fps", "estimated-vf-fps", "real-time-pos", "time-pos", "duration", "real-duration"]) {
+                delete s.player[k];
+            }
+        } */
+        /* var rebuild_sessions = false;
+        if (changes.sessions) {
+            for (var s of Object.values(changes.sessions)) {
+                var paths = utils.deep_entries(s).map(e=>e[0]);
+                for (var k in s) {
+                    if (k != "time") rebuild_sessions = true;
+                }
+            }
+        } */
+
+        if (changes.clients || changes.sessions) {
+            this.rebuild_sessions();
+        }
+        if (changes.clients || (session_changes && session_changes.access_control)) {
+            this.rebuild_clients();
+        }
+        
+        /* if (changes.change_log && !this.seen_change_log) {
+            this.seen_change_log = true;
+            if (this.settings.get("last_change_log") != this.$.change_log.mtime) {
+                this.settings.set("last_change_log", this.$.change_log.mtime);
+                this.change_log_menu.show();
+            }
+        } */
+        
+        if (changes.plugins) {
+            for (var k in changes.plugins) this.init_plugin(this.$.plugins[k]);
+        }
+        
+        /* if (stream_changes) {
+            console.debug("stream_changes", stream_changes);
+        } */
+
+        if (session_changes) {
+            // this.stream_settings.update_next_frame();
+            // this.media_player.update_next_frame();
+            // this.media_settings.update_next_frame();
+            
+            if (this.dev_mode) {
+                /* var walk = (o, path=[])=>{
+                    var path_str = path.join("/");
+                    if (ignore_logging_session_$.has(path_str)) return;
+                    if (typeof o === "object" && o !== null) {
+                        var copy = {...o};
+                        var all_deleted = true;
+                        for (var k of Object.keys(copy)) {
+                            var v = walk(copy[k], [...path, k]);
+                            if (v === undefined) delete copy[k];
+                            else {
+                                copy[k] = v;
+                                all_deleted = false;
+                            }
+                        }
+                        if (all_deleted) return;
+                        return copy;
+                    }
+                    return o;
+                }
+                var filtered_session_changes = walk(session_changes);
+                if (filtered_session_changes) {
+                    console.debug("session_changes", filtered_session_changes);
+                } */
+            }
+
+            if ((session_changes.stream && session_changes.stream.speed_history)) {
+                this.encoder.debounced_update_chart();
+            }
+
+            if (session_changes.playlist && !Object.isFrozen(this.$._session)) {
+                var ids = new Set([...Object.keys(this.$._session.playlist_deleted), ...Object.keys(session_changes.playlist)]);
+                for (var id of ids) {
+                    let new_item = this.$._session.playlist[id];
+                    let old_item = this.$._session.playlist_deleted[id] || new_item;
+                    if (new_item) new_item.__private.num_updates++;
+                    let old_parent = old_item ? old_item.__private.parent : null;
+                    let new_parent = new_item ? new_item._parent : null;
+                    if (old_parent) {
+                        old_parent.__private.children.delete(old_item);
+                        old_parent.__private.children_ordered = null;
+                        old_item.__private.parent = null;
+                    }
+                    if (new_parent) {
+                        new_parent.__private.children.add(new_item);
+                        new_parent.__private.children_ordered = null;
+                        new_item.__private.parent = new_parent;
+                    }
+                }
+            }
+            var curr_playlist = this.playlist.current
+            if (curr_playlist._is_deleted) {
+                this.playlist.open(null);
+            }
+
+            /* if (session_changes.playlist !== undefined || session_changes.playlist_info !== undefined || session_changes.downloads !== undefined || session_changes.media_info !== undefined || session_changes.media_info_processing !== undefined || session_changes.media_info_processing || session_changes.is_connected_rtmp !== undefined) {
+                this.playlist.debounced_rebuild();
+            } */
+            
+            if (session_changes.logs) {
+                this.session_logger.update_logs(session_changes.logs);
+            }
+
+            // this.playlist_modify_menu.update_next_frame();
+            // this.stream_settings.update_next_frame();
+            // this.session_config_menu.update_next_frame();
+            // this.schedule_stream_menu.update_next_frame();
+        }
+
+        {
+            let filenames = new Set();
+            let ids = new Set();
+            if (changes.downloads) {
+                utils.set_add(ids, Object.keys(changes.downloads));
+            }
+            if (changes.uploads) {
+                utils.set_add(ids, Object.keys(changes.uploads));
+            }
+            if (changes.uploads) {
+                for (var id in changes.uploads) {
+                    var ul = this.$.uploads[id];
+                    if (!ul || ul.status === UploadStatus.CANCELED) {
+                        this.upload_queue.cancel(id);
+                    }
+                }
+            }
+            if (changes.media_info) {
+                utils.set_add(filenames, Object.keys(changes.media_info));
+            }
+            if (changes.nms_sessions !== undefined) {
+                utils.set_add(ids, this.playlist.current._children.filter(i=>i.filename==="livestreamer://rtmp").map(i=>i.id));
+            }
+            if (session_changes) {
+                /* if (session_changes.downloads) {
+                    utils.set_add(ids, Object.keys(session_changes.downloads));
+                } */
+                if (session_changes.playlist) {
+                    utils.set_add(ids, Object.keys(session_changes.playlist));
+                }
+                /* if (session_changes.playlist_info) {
+                    utils.set_add(ids, Object.keys(session_changes.playlist_info));
+                } */
+                if (session_changes.playlist_id !== undefined) {
+                    utils.set_add(ids, [this.playlist.current.id, this.$._session.playlist_id]);
+                }
+            }
+            utils.set_add(ids, [...filenames].map(k=>this.get_items_with_media(k)).flat().map(i=>i.id));
+            
+            if (ids.size) {
+                /** @type {PlaylistItem[]} */
+                var items = [];
+                for (var id of ids) {
+                    let item = this.get_playlist_item(id);
+                    if (item) {
+                        items.push(item, ...item._parents);
+                    } else {
+                        var deleted_item = this.$._session.playlist_deleted[id];
+                        if (deleted_item) {
+                            items.push(...deleted_item._parents);
+                        }
+                    }
+                }
+                items.forEach(item=>item.__private.userdata = null);
+                rebuild_playlist = true;
+            }
+        }
+
+        // if (changes.processes || changes.sysinfo || changes.process_info) {
+        //     this.system_manager.update();
+        // }
+
+        // if (changes.settings) {
+        //     this.user_config_menu.update();
+        // }
+
+        if ((changes.settings && (changes.settings["playlist_show_scheduled_times"] !== undefined || changes.settings["schedule_generator"])) ||
+            (session_changes && (session_changes.schedule_start_time || ("playlist_id" in session_changes))) ||
+            (session_changes && session_changes.stream && "state" in session_changes.stream)) {
+                rebuild_playlist = true;
+        }
+        
+        if (changes.logs !== undefined) {
+            if (this.app_logger) this.app_logger.update_logs(changes.logs);
+        }
+
+        // this.media_player.update_video_player();
+
+        // this.playlist.update_next_frame();
+        if (rebuild_playlist) {
+            this.playlist.rebuild();
+        }
+        
+        this.app_log_section.classList.toggle("d-none", !this.$._client.is_admin);
+
+        // we can forget old items now (I think)
+        utils.clear(this.$._session.playlist_deleted);
+
+        this.loader.update({visible:false});
+        this.elem.style.display = "";
+        
+        if (!utils.is_empty(changes)) {
+            this.emit("change", changes);
+        }
+
+        this.root.update();
+    }
+    
+    media = new class {
+        time = 0;
+        duration = 0;
+        chapters = [];
+        seekable = false;
+        loaded;
+        update() {
+            this.item = app.$._session._current_playing_item;
+            var started = app.$._session._is_running;
+            var loaded = !started || !!app.$._stream.mpv.loaded;
+            var seeking = started && !!app.$._stream.mpv.seeking;
+            var special_seeking = started && !!app.$._stream.mpv.is_special && !!app.$._stream.mpv.seeking;
+            var buffering = !!(seeking || !loaded || app.$._stream.mpv.props["paused-for-cache"]);
+
+            if (special_seeking) return;
+            this.time = app.get_current_time_pos();
+            this.duration = app.get_current_duration();
+            this.chapters = app.get_current_chapters();
+            this.seekable = this.duration != 0 && (!started || !!app.$._stream.mpv.seekable) && this.item.filename !== "livestreamer://empty";
+            this.loaded = loaded;
+            this.buffering = buffering;
+            
+            if (!loaded) {
+                this.time = 0;
+                this.duration = 0;
+                this.chapters = [];
+                this.seekable = false;
+            }
+
+            this.status = started ? (loaded ? "Playing" : "Loading") : "Pending";
+            this.stats = {};
+            this.stats["V-FPS"] = (+app.$._stream.mpv.props["estimated-vf-fps"] || 0).toFixed(2);
+            if (!app.$._stream._is_encoding) this.stats["D-FPS"] = (+app.$._stream.mpv.props["estimated-display-fps"] || 0).toFixed(2);
+            this.stats["INTRP"] = app.$._stream.mpv.interpolation ? "On" : "Off";
+            this.stats["DEINT"] = app.$._stream.mpv.deinterlace ? "On" : "Off";
+
+            this.curr_chapters = app.get_current_chapters_at_time(this.time);
+        }
+        get time_left() { return Math.max(0, this.duration - this.time); }
+        get do_live_seek(){ return app.$._stream._is_running && !app.$._stream._is_encoding && !app.$._stream.mpv.is_special; }
+    }
+
+    get_rtmp_url(p) {
+        var host = window.location.hostname;
+        var port = this.$.conf["media-server.rtmp_port"];
+        if (port != 1935) host += `:${port}`;
+        var pathname = `/media-server`;
+        if (p) pathname += `/${p.replace(/^\/+/, "")}`;
+        return `rtmp://${host}${pathname}`;
     }
 
     load_font(id) {
@@ -9792,7 +9980,7 @@ export class App extends utils.EventEmitter {
     }
 
     get_layout() {
-        return this.areas.map(e=>[...e.children].map(c=>c.dataset.id))
+        return this.areas.map(area=>[...area.elem.children].map(c=>c.dataset.id))
     }
     save_layout() {
         this.settings.set("layout", this.get_layout())
@@ -9826,9 +10014,9 @@ export class App extends utils.EventEmitter {
         var promises = [];
         var add_items = [];
         var remove_items = [];
-        items = items.filter(i=>i.is_splittable);
+        items = items.filter(i=>i._is_splittable);
         for (var item of items) {
-            var ud = item.userdata;
+            var ud = item._userdata;
             var clip_length = ud.clipping ? ud.clipping.length : ud.duration;
             var clip_offset = item.props.clip_offset || 0;
             var start = local_times ? 0 : ud.timeline_start;
@@ -9842,7 +10030,7 @@ export class App extends utils.EventEmitter {
                 var d = Math.max(0, segment_end - segment_start);
                 // var segment = [segment_start, segment_end];
                 if (!(utils.almost_equal(segment_start, start) && utils.almost_equal(segment_end, end)) && segment_start >= start && segment_end <= end && d>0 && !utils.almost_equal(d, 0)) {
-                    var new_item = item.copy();
+                    var new_item = item._copy();
                     new_item.props.clip_offset = clip_offset;
                     new_item.props.clip_duration = d;
                     clip_offset = (clip_offset + d) % clip_length;
@@ -9861,7 +10049,7 @@ export class App extends utils.EventEmitter {
         if (!Array.isArray(items)) items = [items];
         items.sort((a,b)=>a.index-b.index);
         var index = items[0].index;
-        var name = items[0].get_pretty_name()
+        var name = items[0]._get_pretty_name()
         var track_index = items[0].track_index
         var props = {};
         // if (items.length == 1)
@@ -9885,17 +10073,17 @@ export class App extends utils.EventEmitter {
     /** @param {PlaylistItem[]} items */
     playlist_breakdown(items) {
         if (!Array.isArray(items)) items = [items];
-        items = items.filter(item=>item.is_playlist);
+        items = items.filter(item=>item._is_playlist);
         // var affected_ids = [];
         var changes = {}
         var selection = [];
         items.forEach((item)=>{
-            var children = item.children;
+            var children = item._children;
             children.forEach((c)=>{
                 // affected_ids.push(c.id);
                 changes[c.id] = {parent_id: item.parent_id, track_index: item.track_index};
             });
-            var parent_items = item.parent.get_track(item.track_index);
+            var parent_items = item._parent._get_track(item.track_index);
             var i = parent_items.indexOf(item);
             parent_items.splice(i, 1, ...children);
             selection.push(...children);
@@ -9916,12 +10104,12 @@ export class App extends utils.EventEmitter {
     playlist_move(items, pos=null, track_index=null) {
         var affected = new Set(items);
         var parent = this.playlist.current;
-        var parent_session_id = parent.session.id;
+        var parent_session_id = parent._session.id;
         if (track_index == null) track_index = this.playlist.active_track_index;
         pos = this.fix_insert_pos(pos, track_index);
-        var parent_items = parent.get_track(track_index);
+        var parent_items = parent._get_track(track_index);
         parent_items = parent_items.map(item=>affected.has(item)?null:item);
-        for (var [session_id, group] of Object.entries(utils.group_by(items, i=>i.session.id))) {
+        for (var [session_id, group] of Object.entries(utils.group_by(items, i=>i._session.id))) {
             if (session_id == parent_session_id) {
                 parent_items.splice(pos, 0, ...group);
             } else {
@@ -9951,7 +10139,7 @@ export class App extends utils.EventEmitter {
         var add_file = (d,i,parent_id,track_index)=>{
             let filename = null;
             var item = {};
-            var id = dom_utils.uuidv4();
+            var id = dom_utils.uuid4();
             if (d instanceof File) {
                 if (IS_ELECTRON) {
                     filename = d.path;
@@ -9978,14 +10166,14 @@ export class App extends utils.EventEmitter {
 
             new_items.push(item);
             if (d instanceof PlaylistItem) {
-                d.children.forEach((c,i)=>add_file(c, i, item.id, c.track_index||0));
+                d._children.forEach((c,i)=>add_file(c, i, item.id, c.track_index||0));
             }
             return item;
         }
         items.forEach((f,i)=>add_file(f, insert_pos + i, parent.id, track_index));
 
         var new_playlist = Object.fromEntries(new_items.map(f=>[f.id,f]));
-        parent.get_track(track_index).slice(insert_pos).forEach((item,i)=>{
+        parent._get_track(track_index).slice(insert_pos).forEach((item,i)=>{
             new_playlist[item.id] = {index: insert_pos + items.length + i};
         });
 
@@ -10010,22 +10198,22 @@ export class App extends utils.EventEmitter {
         if (!Array.isArray(items)) items = [items];
         if (items.length == 0) return;
         for (var item of items) {
-            var ul = item.upload;
+            var ul = item._upload;
             if (ul) app.upload_queue.cancel(ul.id);
         }
-        for (var [session_id, group] of Object.entries(utils.group_by(items, i=>i.session.id))) {
-            var all_deleted_items = new Set(group.map(i=>[i, ...i.descendents]).flat());
+        for (var [session_id, group] of Object.entries(utils.group_by(items, i=>i._session.id))) {
+            var all_deleted_items = new Set(group.map(i=>[i, ...i._descendents]).flat());
             this.request({
                 call: ["sessions", session_id, "playlist_remove"],
                 arguments: [group.map(i=>i.id)]
             });
             this.$._push(...[...all_deleted_items].map(item=>[`sessions/${session_id}/playlist/${item.id}`, null]));
             var next_item, current_item;
-            next_item = current_item = this.$._session.current_playing_item;
+            next_item = current_item = this.$._session._current_playing_item;
             if (all_deleted_items.has(next_item)) {
-                if (this.$._session.is_running) {
+                if (this.$._session._is_running) {
                     while (all_deleted_items.has(next_item)) {
-                        next_item = next_item.next;
+                        next_item = next_item._next;
                     }
                 } else {
                     next_item = NULL_PLAYLIST_ITEM;
@@ -10049,7 +10237,7 @@ export class App extends utils.EventEmitter {
                 arguments: [changes]
             });
         } else {
-            this.playlist.rebuild_next_frame();
+            this.playlist.rebuild();
         }
     }
     
@@ -10088,13 +10276,13 @@ export class App extends utils.EventEmitter {
     /** @param {PlaylistItem} item */
     playlist_play(item, start=0) {
         var options = {pause:false};
-        var root_merged = item.root_merged_playlist;
+        var root_merged = item._root_merged_playlist;
         if (root_merged) {
             var t = 0;
-            for (var p of [item, ...item.get_parents(root_merged)]) {
-                t += p.userdata.start;
-                p = p.parent;
-                var ud = p.userdata;
+            for (var p of [item, ...item._get_parents(root_merged)]) {
+                t += p._userdata.start;
+                p = p._parent;
+                var ud = p._userdata;
                 if (ud.clipping) {
                     // damn this gets complicated... but it works.
                     t = utils.loop(t - ud.clipping.offset, ud.clipping.start, ud.clipping.end) - ud.clipping.start;
@@ -10167,7 +10355,7 @@ export class App extends utils.EventEmitter {
     }
 
     fix_insert_pos(pos, track_index) {
-        var num_items = this.playlist.current.get_track(track_index).length;
+        var num_items = this.playlist.current._get_track(track_index).length;
         if (pos == null) {
             var last_active = this.playlist.sortables[track_index].get_last_active();
             pos = (last_active) ? dom_utils.get_index(last_active) + 1 : num_items;
@@ -10185,32 +10373,32 @@ export class App extends utils.EventEmitter {
         return this.$.media_info[filename];
     }
     get_items_with_media(filename) {
-        return Object.values(this.$._session.playlist).filter(i=>i.userdata.filenames.includes(filename));
+        return Object.values(this.$._session.playlist).filter(i=>i._userdata.filenames.includes(filename));
     }
     /** @return {Chapter[]} */
     get_current_chapters() {
-        return this.$._session.current_playing_item.userdata.chapters;
+        return this.$._session._current_playing_item._userdata.chapters;
     }
     get_current_duration() {
         var d;
-        if (this.$._stream.is_running) {
+        if (this.$._stream._is_running) {
             d = this.$._stream.mpv.duration || 0;
         } else {
             d = 0;
-            var item = this.$._session.current_playing_item;
-            if (item.is_playlist && !item.is_merged_playlist) d = 0;
-            else d = item.userdata.duration;
+            var item = this.$._session._current_playing_item;
+            if (item._is_playlist && !item._is_merged_playlist) d = 0;
+            else d = item._userdata.duration;
         }
         return round_ms(d || 0);
     }
 
     get_current_time_pos() {
-        if (this.$._stream.is_running) return this.$._session.stream.mpv.time;
+        if (this.$._stream._is_running) return this.$._session.stream.mpv.time;
         return this.$._session.current_time;
     }
 
     get_current_seekable_ranges() {
-        if (this.$._stream.is_running) return this.$._stream.mpv.seekable_ranges;
+        if (this.$._stream._is_running) return this.$._stream.mpv.seekable_ranges;
         return [];
     }
 
@@ -10220,16 +10408,16 @@ export class App extends utils.EventEmitter {
     
     /** @param {Element} parent_elem @param {PlaylistItem} item */
     build_playlist_breadcrumbs(parent_elem, item, exclude_root=false, bold_current=false) {
-        var path = [item, ...item.parents].reverse().filter(p=>p);
-        var path_hash = JSON.stringify([this.playlist.current.id, path.map(i=>[i.id, i.hash])]);
+        var path = [item, ...item._parents].reverse().filter(p=>p);
+        var path_hash = JSON.stringify([this.playlist.current.id, path.map(i=>[i.id, i._hash])]);
         if (parent_elem._path_hash === path_hash) return;
         parent_elem._path_hash = path_hash;
         dom_utils.empty(parent_elem);
         parent_elem.classList.add("breadcrumbs");
         path.forEach((item,i)=>{
             var elem = $(`<a></a>`)[0];
-            var name = item.get_pretty_name() || "[Untitled]";
-            if (item.is_root) {
+            var name = item._get_pretty_name() || "[Untitled]";
+            if (item._is_root) {
                 if (exclude_root) return;
                 elem.style.overflow = "visible";
                 elem.innerHTML = `<i class="fas fa-house"></i>`;
@@ -10238,11 +10426,8 @@ export class App extends utils.EventEmitter {
             }
             elem.href = "javascript:void(0)";
             parent_elem.append(elem);
-            elem.onclick = ()=>item.reveal();
+            elem.onclick = ()=>item._reveal();
             elem.title = name;
-            if (bold_current && !item.is_null && item.parent === this.playlist.current.parent) {
-                elem.style["font-weight"] = "bold";
-            }
             if (i != path.length-1) {
                 parent_elem.append($(`<i></i>`)[0]);
             }
@@ -10254,7 +10439,7 @@ export class App extends utils.EventEmitter {
     }
 
     get_handover_sessions_options(include_none=true) {
-        var sessions = this.sessions_ordered.filter(s=>s.type==="InternalSession" && !s.is_running);
+        var sessions = this.sessions_ordered.filter(s=>s.type==="InternalSession" && !s._is_running);
         var names = sessions.map(s=>s.name);
         names = utils.uniquify(names, (s,i,n)=>n>1?`${s} [${i+1}]`:s);
         var options = names.map((n,i)=>[sessions[i].id,n])
@@ -10266,13 +10451,13 @@ export class App extends utils.EventEmitter {
         var items = items.filter(i=>i);
         if (items.length > 1) return `${items.length} Files`;
         if (items.length == 1) {
-            return `'${items[0].get_pretty_name()}'`;
+            return `${items[0]._get_pretty_name()}`;
         }
         return `[No Item]`;
     }
 
     update_request_loading() {
-        this.request_loading_elem.classList.toggle("v-none", this.$.pending_requests.size == 0);
+        this.request_loading_elem.classList.toggle("v-none", this.$._pending_requests.size == 0);
     }
 
     request_no_timeout(data) {
@@ -10296,7 +10481,7 @@ export class App extends utils.EventEmitter {
             }
             var ws_promise = this.ws.request(data, opts.timeout);
 
-            if (opts.show_spinner) this.$.pending_requests.add(ws_promise);
+            if (opts.show_spinner) this.$._pending_requests.add(ws_promise);
             var loader;
             if (opts.block) {
                 loader = new Loader();
@@ -10315,7 +10500,7 @@ export class App extends utils.EventEmitter {
                     }
                 })
                 .finally(()=>{
-                    if (opts.show_spinner) this.$.pending_requests.delete(ws_promise);
+                    if (opts.show_spinner) this.$._pending_requests.delete(ws_promise);
                     this.update_request_loading();
                     if (opts.block) loader.destroy();
                 });
@@ -10339,6 +10524,7 @@ export class App extends utils.EventEmitter {
         session_id = session_id || "";
         var new_hash = `#${session_id}`;
         this.settings.set("last_session_id", session_id);
+        this.last_session = this.$.sessions[session_id];
         if (window.location.hash !== new_hash) {
             window.history.replaceState({}, '', new_hash);
         }
@@ -10347,307 +10533,8 @@ export class App extends utils.EventEmitter {
                 call: ["attach_to"],
                 arguments: [session_id]
             });
-            this.$._push([`clients/${this.$.client_id}/session_id`, session_id]);
         }
         return true;
-    }
-
-    set_loading(val, text) {
-        this.elem.style.display = val ? "none" : "";
-        this.loader.update({visible:val, text});
-    }
-
-    async update_$() {
-        var last_session = this.$._session;
-        var last_stream = this.$._session.stream;
-        var last_playlist_id = this.$._session.playlist_id;
-
-        var rebuild_playlist;
-        var changes = utils.tree_from_entries(this.$._changes);
-        this.$._changes.length = 0;
-        
-        // !! IMPORTANT FOR DATES AND THINGS LIKE THAT.
-        utils.deep_walk(changes, function(k,v) {
-            if (v && typeof v === "object" && v.toJSON && typeof v.toJSON === "function") {
-                this[k] = v.toJSON();
-            }
-        });
-        
-        this.$._update(changes);
-
-        var client_id = this.$.client_id;
-        var curr_stream = this.$._session.stream;
-        var is_new_session = this.$._session != last_session;
-        var is_new_stream = curr_stream != last_stream;
-        
-        var session_changes = is_new_session ? this.$._session : (changes.sessions||EMPTY_OBJECT)[this.$._session.id];
-        var stream_changes = (is_new_session || is_new_stream) ? curr_stream : (changes.streams||EMPTY_OBJECT)[curr_stream.id];
-        // remove_empty_objects_from_tree(changes);
-
-        var is_null_session = this.$._session === NULL_SESSION;
-        var access_control = new AccessControl(this.$._session.access_control);
-        var has_ownership = access_control.self_is_owner_or_admin || access_control.owners.length == 0;
-        var has_access = is_null_session || access_control.self_has_access(app.passwords.get(this.$._session.id)) || this.$._client.is_admin;
-        var requires_password = access_control.self_requires_password;
-        var is_external_session = this.$._session.type === "ExternalSession";
-        var is_running = this.$._session.is_running;
-
-        if (this.$._client.session_id !== window.location.hash.slice(1)) {
-            window.location.hash = this.$._client.session_id || ""
-        }
-        // var hash = this.$.session ? `#${this.$.session.id}` : "";
-        // if (window.location.hash !== hash) window.location.hash = hash;
-
-        this.session_elem.classList.toggle("d-none", is_null_session);
-        this.session_elem.dataset.type = this.$._session.type;
-
-        this.session_inner_elem.classList.toggle("d-none", !has_access);
-
-        this.session_controls_wrapper_elem.classList.toggle("d-none", is_null_session);
-        this.no_sessions_elem.classList.toggle("d-none", !is_null_session && has_access);
-        this.no_sessions_elem.querySelector(".no-session").classList.toggle("d-none", !has_access);
-        this.no_sessions_elem.querySelector(".no-access").classList.toggle("d-none", has_access);
-        this.no_sessions_elem.querySelector(".owner").classList.toggle("d-none", has_access);
-        dom_utils.set_inner_html(this.no_sessions_elem.querySelector(".owner"), `This session is owned by ${access_control.owners.map(u=>`[${u.username}]`).join(" | ")}`);
-        this.session_password_elem.classList.toggle("d-none", has_access || !requires_password);
-        
-        this.session_load_save_elem.style.display = is_external_session ? "none": "";
-
-        this.playlist.hidden = is_external_session;
-        this.media_player.hidden = is_external_session;
-        this.media_settings.hidden = is_external_session;
-
-        this.load_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
-        this.save_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
-        this.history_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
-        
-        this.sign_out_session_button.classList.toggle("d-none", has_ownership || !(requires_password && has_access));
-        this.config_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
-        this.destroy_session_button.toggleAttribute("disabled", !has_ownership);
-
-        if (is_new_stream) this.encoder.reset_chart();
-        if (is_new_session) {
-            this.playlist.sortables.forEach(s=>s.deselect_all());
-            this.session_logger.empty();
-            this.encoder.reset_chart();
-            this.session_password.reset();
-            this.playlist.open(null);
-
-            if (last_session != NULL_SESSION && !this.$.sessions[last_session.id] && this.last_destroyed_session_id != last_session.id) {
-                alert(`'${last_session.name}' was terminated by another user or internally.`);
-            }
-        }
-        // var ignore_vars = new Set(["output-frames","output-pts","estimated-display-fps", "estimated-vf-fps", "real-time-pos", "time-pos", "duration", "real-duration"]);
-        
-        /* for (var s of Object.values(changes.sessions)) {
-            for (var k of ["output-frames","output-pts","estimated-display-fps", "estimated-vf-fps", "real-time-pos", "time-pos", "duration", "real-duration"]) {
-                delete s.player[k];
-            }
-        } */
-        /* var rebuild_sessions = false;
-        if (changes.sessions) {
-            for (var s of Object.values(changes.sessions)) {
-                var paths = utils.deep_entries(s).map(e=>e[0]);
-                for (var k in s) {
-                    if (k != "time") rebuild_sessions = true;
-                }
-            }
-        } */
-
-        if (changes.clients || changes.sessions) {
-            this.rebuild_sessions();
-        }
-        if (changes.clients || (session_changes && session_changes.access_control)) {
-            this.rebuild_clients();
-        }
-        
-        /* if (changes.change_log && !this.seen_change_log) {
-            this.seen_change_log = true;
-            if (this.settings.get("last_change_log") != this.$.change_log.mtime) {
-                this.settings.set("last_change_log", this.$.change_log.mtime);
-                this.change_log_menu.show();
-            }
-        } */
-        
-        if (changes.plugins) {
-            for (var k in changes.plugins) this.init_plugin(this.$.plugins[k]);
-        }
-
-        if ((session_changes && session_changes.last_stream) || (stream_changes && stream_changes.speed_history)) {
-            this.encoder.debounced_update_chart();
-        }
-        
-        /* if (stream_changes) {
-            console.debug("stream_changes", stream_changes);
-        } */
-
-        if (stream_changes || session_changes) {
-            this.stream_settings.update_next_frame();
-            this.media_player.update_next_frame();
-            this.media_settings.update_next_frame();
-        }
-        if (session_changes) {
-            if (this.dev_mode) {
-                /* var walk = (o, path=[])=>{
-                    var path_str = path.join("/");
-                    if (ignore_logging_session_$.has(path_str)) return;
-                    if (typeof o === "object" && o !== null) {
-                        var copy = {...o};
-                        var all_deleted = true;
-                        for (var k of Object.keys(copy)) {
-                            var v = walk(copy[k], [...path, k]);
-                            if (v === undefined) delete copy[k];
-                            else {
-                                copy[k] = v;
-                                all_deleted = false;
-                            }
-                        }
-                        if (all_deleted) return;
-                        return copy;
-                    }
-                    return o;
-                }
-                var filtered_session_changes = walk(session_changes);
-                if (filtered_session_changes) {
-                    console.debug("session_changes", filtered_session_changes);
-                } */
-            }
-
-            if (session_changes.playlist && !Object.isFrozen(this.$._session)) {
-                var ids = new Set([...Object.keys(this.$._session.playlist_deleted), ...Object.keys(session_changes.playlist)]);
-                for (var id of ids) {
-                    let new_item = this.$._session.playlist[id];
-                    let old_item = this.$._session.playlist_deleted[id] || new_item;
-                    if (new_item) new_item.__private.num_updates++;
-                    let old_parent = old_item ? old_item.__private.parent : null;
-                    let new_parent = new_item ? new_item.parent : null;
-                    if (old_parent) {
-                        old_parent.__private.children.delete(old_item);
-                        old_parent.__private.children_ordered = null;
-                        old_item.__private.parent = null;
-                    }
-                    if (new_parent) {
-                        new_parent.__private.children.add(new_item);
-                        new_parent.__private.children_ordered = null;
-                        new_item.__private.parent = new_parent;
-                    }
-                }
-            }
-            var curr_playlist = this.playlist.current
-            if (curr_playlist.is_deleted) {
-                this.playlist.open(null);
-            }
-
-            /* if (session_changes.playlist !== undefined || session_changes.playlist_info !== undefined || session_changes.downloads !== undefined || session_changes.media_info !== undefined || session_changes.media_info_processing !== undefined || session_changes.media_info_processing || session_changes.is_connected_rtmp !== undefined) {
-                this.playlist.debounced_rebuild();
-            } */
-            
-            if (session_changes.logs) {
-                this.session_logger.update_logs(session_changes.logs);
-            }
-            if (session_changes.playlist) {
-            }
-            if (session_changes.player || session_changes.player_default_override) {
-            }
-
-            this.playlist_modify_menu.update_next_frame();
-            this.stream_settings.update_next_frame();
-            this.session_config_menu.update_next_frame();
-            this.schedule_stream_menu.update_next_frame();
-        }
-
-        {
-            let filenames = new Set();
-            let ids = new Set();
-            if (changes.downloads) {
-                utils.set_add(ids, Object.keys(changes.downloads));
-            }
-            if (changes.uploads) {
-                utils.set_add(ids, Object.keys(changes.uploads));
-            }
-            if (changes.uploads) {
-                for (var id in changes.uploads) {
-                    var ul = this.$.uploads[id];
-                    if (!ul || ul.status === UploadStatus.CANCELED) {
-                        this.upload_queue.cancel(id);
-                    }
-                }
-            }
-            if (changes.media_info) {
-                utils.set_add(filenames, Object.keys(changes.media_info));
-            }
-            if (changes.nms_sessions !== undefined) {
-                utils.set_add(ids, this.playlist.current.children.filter(i=>i.filename==="livestreamer://rtmp").map(i=>i.id));
-            }
-            if (session_changes) {
-                /* if (session_changes.downloads) {
-                    utils.set_add(ids, Object.keys(session_changes.downloads));
-                } */
-                if (session_changes.playlist) {
-                    utils.set_add(ids, Object.keys(session_changes.playlist));
-                }
-                /* if (session_changes.playlist_info) {
-                    utils.set_add(ids, Object.keys(session_changes.playlist_info));
-                } */
-            }
-            if (last_playlist_id !== this.$._session.playlist_id) {
-                utils.set_add(ids, [last_playlist_id, this.$._session.playlist_id]);
-            }
-            utils.set_add(ids, [...filenames].map(k=>this.get_items_with_media(k)).flat().map(i=>i.id));
-            
-            if (ids.size) {
-                /** @type {PlaylistItem[]} */
-                var items = [];
-                for (var id of ids) {
-                    let item = this.get_playlist_item(id);
-                    if (item) {
-                        items.push(item, ...item.parents);
-                    } else {
-                        var deleted_item = this.$._session.playlist_deleted[id];
-                        if (deleted_item) {
-                            items.push(...deleted_item.parents);
-                        }
-                    }
-                }
-                items.forEach(item=>item.__private.userdata = null);
-                rebuild_playlist = true;
-            }
-        }
-
-        if (changes.processes || changes.sysinfo || changes.process_info) {
-            this.system_manager.update();
-        }
-
-        if (changes.settings) {
-            this.user_config_menu.update();
-        }
-
-        if ((changes.settings && (changes.settings["playlist_show_scheduled_times"] !== undefined || changes.settings["schedule_generator"])) ||
-            (session_changes && (session_changes.schedule_start_time || ("playlist_id" in session_changes) || session_changes.last_stream)) ||
-            (stream_changes && "state" in stream_changes)) {
-                rebuild_playlist = true;
-        }
-        
-        if (changes.logs !== undefined) {
-            if (this.app_logger) this.app_logger.update_logs(changes.logs);
-        }
-
-        // this.media_player.update_video_player();
-
-        if (rebuild_playlist) {
-            this.playlist.rebuild();
-        }
-        
-        this.playlist.update_playlist();
-        
-        this.app_log_section.classList.toggle("d-none", !this.$._client.is_admin);
-
-        // we can forget old items now (I think)
-        utils.clear(this.$._session.playlist_deleted);
-        
-        if (!utils.is_empty(changes)) {
-            this.emit("change", changes);
-        }
     }
 
     add_notice(content, dismissable = true) {
@@ -10660,20 +10547,25 @@ export class App extends utils.EventEmitter {
     }
 
     remove_plugins() {
-        console.log("remove_plugins");
-        for (var k in this.plugins) this.plugins[k].destroy();
+        console.debug("remove_plugins");
+        for (var k in this.plugins) {
+            this.plugins[k].destroy();
+            delete this.plugins[k];
+        }
         this.plugins = {};
     }
 
     async init_plugin(d) {
-        console.log("init_pugin", d.id);
+        console.debug("init_pugin", d.id);
         if (this.plugins[d.id]) {
             this.plugins[d.id].destroy();
             delete this.plugins[d.id];
         }
         try {
-            var plugin_js = await (await fetch(d.js)).text();
+            var plugin_js = await (await fetch(d.front_url)).text();
+            // var plugin_js = d.front_js
             this.plugins[d.id] = eval.apply(window, [plugin_js]);
+            this.plugins[d.id].init(d.options);
         } catch (e) {
             console.error(`Plugin '${d.id}' failed to load...`)
             console.error(e);
@@ -10681,7 +10573,7 @@ export class App extends utils.EventEmitter {
     }
 
     tick() {
-        dom_utils.toggle_class(this.body, "is-touch", dom_utils.has_touch_screen());
+        dom_utils.toggle_class(this.body_elem, "is-touch", dom_utils.has_touch_screen());
     }
 
     rebuild_clients() {
@@ -10727,8 +10619,8 @@ export class App extends utils.EventEmitter {
     }
 
     get sessions_ordered() {
-        if (this.conf["main.session_order_client"]) {
-            var order = this.settings.get("session-order") || EMPTY_ARRAY;
+        if (this.$.conf["main.session-order-client"]) {
+            var order = this.settings.get("session_order") || EMPTY_ARRAY;
             return utils.sort(Object.values(this.$.sessions), (s)=>{
                 var i = order.indexOf(s.id);
                 if (i == -1) return Number.MAX_SAFE_INTEGER;
@@ -10746,7 +10638,7 @@ export class App extends utils.EventEmitter {
         var session_id = this.$._client.session_id;
         dom_utils.rebuild(this.sessions_tabs_elem, items, {
             add: (item, elem, i)=>{
-                if (!elem) elem = $(`<a class="session-tab"><div class="handle"><i class="fa-solid fa-grip-lines"></i></div><span class="name"></span><span class="icons"></span></a>`)[0];
+                if (!elem) elem = $(`<a class="session-tab"><div class="handle"><i class="fas fa-grip-lines"></i></div><span class="name"></span><span class="icons"></span></a>`)[0];
                 var access_control = new AccessControl(item.access_control);
                 var has_access = access_control.self_has_access(app.passwords.get(item.id));
                 var requires_password = item.access_control.self_requires_password;
@@ -10846,11 +10738,11 @@ export class App extends utils.EventEmitter {
             var close_button = this.help_container.querySelector("button.close");
             close_button.onclick = ()=>this.toggle_help();
         }
-        dom_utils.toggle_class(this.body, "show-side-panel");
+        dom_utils.toggle_class(this.body_elem, "show-side-panel");
     }
     chapter_to_string(c, show_time=false) {
         var item = this.get_playlist_item(c.id);
-        var title = c.title || (item ? item.get_pretty_name() : null);
+        var title = c.title || (item ? item._get_pretty_name() : null);
         var parts = [`${String(c.index+1).padStart(2,"0")}.`];
         if (title) parts.push(title);
         if (show_time) parts.push(`[${utils.seconds_to_timespan_str(c.start)}]`);
@@ -10893,4 +10785,3 @@ export class App extends utils.EventEmitter {
 }); */
 
 export var app = new App();
-app.init();

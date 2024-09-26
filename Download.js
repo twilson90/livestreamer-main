@@ -1,12 +1,9 @@
-const execa = require("execa");
-const path = require("node:path");
-const os = require("node:os");
-const fs = require("fs-extra");
-const tree_kill = require("tree-kill");
-const readline = require("node:readline");
-const core = require("@livestreamer/core");
-const utils = require("@livestreamer/core/utils");
-const DataNode = require("@livestreamer/core/DataNode");
+import path from "node:path";
+import os from "node:os";
+import fs from "fs-extra";
+import readline from "node:readline";
+import { core, utils, DataNode } from "@livestreamer/core";
+import { app } from "./internal.js";
 
 const log_interval = 5 * 1000;
 
@@ -41,14 +38,15 @@ class Download extends DataNode {
                 this.$.dest_path = dest_path;
                 var exists = await fs.stat(dest_path).catch(()=>{});
                 var fail;
+                var tmp_download_path;
                 if (exists) {
                     core.logger.info(`'${this.filename}' already exists.`);
                 } else {
                     core.logger.info(`Starting download '${this.filename}'...`);
                     this.$.stage = 0;
                     this.$.num_stages = 1;
-                    var tmp_download_path = path.join(os.tmpdir(), name)
-                    var proc = execa(core.conf["main.youtube_dl"], [
+                    tmp_download_path = path.join(os.tmpdir(), name)
+                    var proc = utils.execa(core.conf["main.youtube_dl"], [
                         this.filename,
                         "--no-warnings",
                         "--no-call-home",
@@ -58,12 +56,10 @@ class Download extends DataNode {
                         `--format`, core.conf["main.youtube_dl_format"],
                         `--no-mtime`,
                         "--output", tmp_download_path
-                    ]);
-                    this.#cancel = ()=>tree_kill(proc.pid, 'SIGINT');
+                    ], {buffer:false});
+                    this.#cancel = ()=>utils.tree_kill(proc.pid, 'SIGINT');
                     this.stdout_listener = readline.createInterface(proc.stdout);
-                    // this.stderr_listener = readline.createInterface(proc.stderr);
                     var first = false;
-                    // var last_bytes = 0, last_ts = 0;
                     this.stdout_listener.on("line", line=>{
                         var m;
                         // console.log(line);
@@ -77,8 +73,6 @@ class Download extends DataNode {
                             this.$.bytes = Math.floor(percent * this.$.total);
                             this.$.speed = Math.floor(utils.string_to_bytes(m[3]));
                             var now = Date.now();
-                            // last_bytes = this.$.bytes;
-                            // last_ts = now;
 
                             if ((now - this.#last_log) > log_interval) {
                                 this.#last_log = now;
@@ -89,18 +83,18 @@ class Download extends DataNode {
                             // core.logger.error(`[download] ${line}`)
                         }
                     });
-                    /* this.stderr_listener.on("line", line=>{
-                        console.log(line)
-                    }); */
-
-                    await proc.then(async ()=>{
-                        await fs.rename(tmp_download_path, dest_path);
-                        core.logger.info(`Download finished [${this.filename}]`);
-                    }).catch(e=>{
+                    proc.on("error", (e)=>{
                         core.logger.error(e);
                         core.logger.warn(`Download [${this.filename}] interrupted.`);
                         fail = true;
-                    })
+                    });
+
+                    await new Promise(resolve=>proc.on("exit", resolve));
+
+                    if (!fail && tmp_download_path) {
+                        await fs.rename(tmp_download_path, dest_path);
+                        core.logger.info(`Download finished [${this.filename}]`);
+                    }
                 }
 
                 if (fail) reject();
@@ -131,6 +125,4 @@ class Download extends DataNode {
     }
 }
 
-module.exports = Download;
-
-const app = require(".");
+export default Download;

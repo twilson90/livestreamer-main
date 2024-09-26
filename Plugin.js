@@ -1,37 +1,23 @@
-const path = require("node:path");
-const fs = require("fs-extra");
-const utils = require("@livestreamer/core/utils");
-// const chokidar = require("chokidar");
+import path from "node:path";
+import fs from "fs-extra";
+import { utils } from "@livestreamer/core";
+import { app } from "./internal.js";
 
 class Plugin {
-    constructor(dir) {
+    constructor(id, dir, options) {
+        this.id = id;
         this.dir = path.resolve(dir);
-        this.id = path.basename(dir);
         if (app.$.plugins[this.id]) delete app.$.plugins[this.id];
-        // this.watcher = chokidar.watch(dir, {awaitWriteFinish:true});
-        // this.watcher.on("change", (...args)=>{
-        //     update();
-        // });
-        // var files = ["front.js", "front.css", "front.html"];
-        // var update = ()=>{
-        //     app.$.plugins[this.id] = {};
-        //     for (var f of files) {
-        //         var filepath = path.join(dir, f);
-        //         if (fs.existsSync(filepath)) {
-        //             var ext = path.extname(filepath).slice(1);
-        //             app.$.plugins[this.id][ext] = fs.readFileSync(filepath, "utf8");
-        //         }
-        //     }
-        // }
-        // update();
         var json = JSON.parse(fs.readFileSync(path.join(this.dir, "plugin.json"), "utf-8"));
         app.plugins[this.id] = this;
         app.$.plugins[this.id] = {
             id: this.id,
-            js: `plugins/${this.id}/`+json.front,
-            has_core: !!json.core,
+            front_js: fs.readFileSync(path.join(this.dir, json.front), "utf-8"),
+            front_url: `plugins/${this.id}/`+json.front,
+            core: json.core,
+            options
         };
-        if (json.core) utils.require(json.core);
+        if (json.core) utils.import(file_url(json.core));
     }
 
     destroy() {
@@ -41,6 +27,4 @@ class Plugin {
     }
 }
 
-module.exports = Plugin;
-
-const app = require(".");
+export default Plugin;
