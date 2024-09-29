@@ -502,7 +502,7 @@ class Stream extends DataNode {
 
         this.$.state = State.STARTED;
         
-        core.ipc_broadcast("stream.started", this.$);
+        core.ipc.emit("main.stream.started", this.$);
         this.emit("started");
 
         this.try_start_playlist();
@@ -566,16 +566,18 @@ class Stream extends DataNode {
         for (var target of Object.values(this.stream_targets)) {
             target.destroy();
         }
-        this.logger.info("Terminating MPV...");
-        let t0 = Date.now();
-        await this.mpv.quit();
-        let t1 = Date.now();
-        this.logger.info(`MPV terminated in ${(t1-t0)/1000} secs.`);
+        if (this.mpv) {
+            this.logger.info("Terminating MPV...");
+            let t0 = Date.now();
+            await this.mpv.quit();
+            let t1 = Date.now();
+            this.logger.info(`MPV terminated in ${(t1-t0)/1000} secs.`);
+        }
         this.ffmpeg.destroy();
 
         this.$.state = State.STOPPED;
 
-        core.ipc_broadcast("stream.stopped", this.$);
+        core.ipc.emit("main.stream.stopped", this.id);
         this.emit("stopped");
         
         this.logger.info(`Stream stopped, total duration was ${utils.ms_to_timespan_str(Math.round(Date.now()-this.$.start_time))}`);
@@ -658,7 +660,7 @@ class Stream extends DataNode {
                 var first_item = session.get_flat_playlist()[0]
                 if (first_item) id = first_item.id;
             }
-            await session.playlist_play(id, { start: session.$.current_time });
+            await session.playlist_play(id, { start: session.$.time });
         }
     }
 }
@@ -685,7 +687,7 @@ class StreamTarget extends DataNode {
         this.ffmpeg = new FFMPEGWrapper();
         var host = new URL(this.evaluated_target.rtmp_url).hostname;
         if (!stream.hosts[host]) stream.hosts[host] = 0;
-        var hostname = `${host} ${stream.hosts[host]++}`;
+        var hostname = `${host}:${stream.hosts[host]++}`;
         // this.ffmpeg.on("line", console.log);
         this.ffmpeg.on("info", (info)=>{
             stream.register_speed(hostname, info.speed);
@@ -1050,7 +1052,7 @@ class MPVSessionWrapper extends MPVWrapper {
         });
         
         this.on("quit", async ()=>{
-            this.session.$.current_time = this.$.time;
+            this.session.$.time = this.$.time;
         });
 
         this.on("idle", ()=>{
@@ -1897,7 +1899,7 @@ Format: Start,End,Style,Text`+"\n";
             
             if (this.#ticks % TICK_RATE == 0) {
 
-                this.session.$.current_time = this.$.time;
+                this.session.$.time = this.$.time;
 
                 let ts = Date.now();
                 if (this.$.props["output-pts"]) {

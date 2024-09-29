@@ -1195,13 +1195,16 @@ body:not([data-sessions_display=tabs]) .sessions-tabs-wrapper {
   font-size: 12px !important;
   flex-direction: column;
   font-family: monospace;
-  margin: 0 -1px -1px -1px;
 }
 .chart-wrapper .chart-info td {
   padding: 4px;
 }
+.chart-wrapper .chart-info:not(:empty) {
+  margin: 0 -1px -1px -1px;
+}
 body:not([data-show_encoder_info]) .chart-wrapper .chart-info {
   display: none;
+  margin: 0;
 }
 
 .overview-header {
@@ -2860,12 +2863,14 @@ table.keyboard-shortcuts td:first-child {
   padding-left: 10px;
   padding-right: 10px;
   padding-bottom: 10px;
+  padding-top: 48px !important;
 }
 
 .fancybox__content {
-  --min-width: 600px;
+  --min-width: 300px;
   --max-width: 100%;
   width: 50%;
+  width: max(50%, 600px);
   min-width: var(--min-width);
   max-width: var(--max-width);
   overflow-wrap: break-word;

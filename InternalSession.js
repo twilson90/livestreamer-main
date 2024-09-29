@@ -50,7 +50,7 @@ class InternalSession extends SessionBase {
                 if (c.path[2] == "filename" && c.new_value) {
                     this.#handle_filename_add_or_change(c.path[1])
                 }
-                this.debounced_playlist_update();
+                this.#debounced_update_playlist_info_after_changes();
                 if (this.#updating && c.path[2] === "props" && c.path[3] === "playlist_mode" && c.new_value == 2) {
                     this.fix_2_track_playlist(c.path[1]);
                 }
@@ -125,10 +125,10 @@ class InternalSession extends SessionBase {
             var ext = path.extname(item.filename);
             item.track_index = ext.match(/^\.(aa|aac|aax|act|aiff|alac|amr|ape|au|awb|dss|dvf|flac|gsm|iklax|ivs|m4a|m4b|m4p|mmf|movpkg|mp3|mpc|msv|nmf|ogg|oga|mogg|opus|ra|rm|raw|rf64|sln|tta|voc|vox|wav|wma|wv|8svx|cda)$/i) ? 1 : 0;
         }
-        this.debounced_update_playlist_indices();
+        this.#playlist_update_indices()
     }
 
-    async update_playlist_info(id) {
+    async #update_playlist_info(id) {
         var old_filenames = new Set((await this.#playlist_info[id]||{}).filenames||[]);
 
         if (!(id in this.$.playlist)) {
@@ -169,20 +169,26 @@ class InternalSession extends SessionBase {
         })();
     }
 
-    debounced_playlist_update = utils.debounce(async ()=>{
-        var ids = Array.from(this.#playlist_update_ids);
-        this.#playlist_update_ids.clear();
-        await Promise.all(ids.map(id=>this.update_playlist_info(id)));
-    });
+    #debounced_update_playlist_info_after_changes = utils.debounce(()=>this.#update_playlist_info_after_changes());
 
-    debounced_update_playlist_indices = utils.debounce(()=>this.update_playlist_indices());
+    async #update_playlist_info_after_changes() {
+        var ids = [...this.#playlist_update_ids];
+        this.#playlist_update_ids.clear();
+        await Promise.all(ids.map(id=>this.#update_playlist_info(id)));
+    }
+
+    async #playlist_update_indices() {
+        Object.values(utils.group_by(Object.values(this.$.playlist), i=>`${i.parent_id},${i.track_index}`)).forEach(items=>{
+            utils.sort(items, item=>item.index).forEach((item,i)=>item.index = i);
+        });
+    }
 
     async scheduled_start_stream() {
         this.logger.info(`Scheduled to start streaming now...`);
         await this.start_stream();
         this.$.schedule_start_time = null;
-        core.emit("session.scheduled-start", this.id);
-        core.ipc_broadcast("session.scheduled-start", this.$);
+        // core.emit("session.scheduled-start", this.id);
+        core.ipc.emit("main.session.scheduled-start", this.$);
     }
 
     async tick() {
@@ -361,7 +367,7 @@ class InternalSession extends SessionBase {
     }
 
     get_playlist_info(id) {
-        return this.#playlist_info[id] || this.update_playlist_info(id);
+        return this.#playlist_info[id] || this.#update_playlist_info(id);
     }
 
     /** @return {any[]} */
@@ -404,12 +410,7 @@ class InternalSession extends SessionBase {
     playlist_clear() {
         utils.clear(this.$.playlist);
     }
-
-    update_playlist_indices() {
-        Object.values(utils.group_by(Object.values(this.$.playlist), i=>`${i.parent_id},${i.track_index}`)).forEach(items=>{
-            utils.sort(items, item=>item.index).forEach((item,i)=>item.index = i);
-        });
-    }
+    
     
     #playlist_add(f) {
         if (typeof f !== "object") f = {filename:String(f)};
@@ -459,7 +460,7 @@ class InternalSession extends SessionBase {
         Object.keys(playlist_map).forEach(id=>walk(id, "0", insert_pos++));
 
         playlist_after.forEach((item,i)=>item.index = insert_pos++);
-        this.update_playlist_indices(); // <-- shouldn't be necessary but calling it just in case...
+        this.#playlist_update_indices(); // <-- shouldn't be necessary but calling it just in case...
 
         return results;
     }
@@ -473,17 +474,8 @@ class InternalSession extends SessionBase {
 
     playlist_remove(ids) {
         if (!Array.isArray(ids)) ids = [ids];
-        // var ids_set = new Set(ids);
-        // var root_ids = this.get_flat_playlist().map(i=>i.id);
-        // var current_index = root_ids.indexOf(this.current_item_id);
-        for (var id of ids) {
-            this.#playlist_remove(id);
-        }
-        /* if (ids_set.has(this.current_item_id)) {
-            var next_id = root_ids.slice(current_index).find(id=>!ids_set.has(id));
-            this.playlist_play(next_id);
-        } */
-        this.update_playlist_indices();
+        for (var id of ids) this.#playlist_remove(id);
+        this.#playlist_update_indices();
     }
     
     get_flat_playlist(id, skip_playlist=true) {
@@ -501,9 +493,12 @@ class InternalSession extends SessionBase {
         for (var k of Object.keys(data)) {
             if (!(k in this.$.playlist)) delete data[k];
         }
+        if (utils.is_circular(Object.values(data).map(({id, parent_id: parent})=>({id,parent})))) {
+            throw new Error(`Detected circular parent-child loop`);
+        }
         this.#updating = true;
         utils.deep_merge(this.$.playlist, data, true);
-        this.update_playlist_indices();
+        this.#playlist_update_indices();
         this.#updating = false;
     }
 
@@ -554,12 +549,21 @@ class InternalSession extends SessionBase {
             if (typeof this.$[k] === "object" && typeof data[k] === "object" && this.$[k] !== null && data[k] !== null) Object.assign(this.$[k], data[k]);
             else this.$[k] = data[k];
         }
-        this.update_playlist_indices();
+        this.#fix_circular();
+        this.#playlist_update_indices();
 
         if (full) {
             this.#autosaves = (await utils.readdir_stats(this.save_dir).catch(()=>[])).sort((a,b)=>a.stat.mtime-b.stat.mtime).map(f=>f.filename);
         }
         // this.autosave();
+    }
+
+    #fix_circular() {
+        var ids = utils.detect_circular_structure(Object.values(this.$.playlist).map(({id,parent_id:parent})=>({id,parent})));
+        if (ids.length) {
+            this.logger.error(`Found circular parent-child loops in playlist, attempting to fix:`, ids.join(", "))
+            for (var id of ids) this.$.playlist[id].parent_id = "0";
+        }
     }
     
     async autosave() {
@@ -574,7 +578,8 @@ class InternalSession extends SessionBase {
         
         var filename = `${utils.sanitize_filename(this.name)}-${utils.date_to_string()}`;
         
-        delete diff.current_time;
+        delete diff.time;
+
         if (utils.is_empty(diff) && this.#autosaves.length) {
             // if diff only included current_time, just replace previous save file...
             filename = this.#autosaves[this.#autosaves.length-1];
@@ -687,7 +692,7 @@ class InternalSession extends SessionBase {
         if (this.is_running) {
             this.mpv.seek(time)
         } else {
-            this.$.current_time = time;
+            this.$.time = time;
         }
     }
 
@@ -718,7 +723,7 @@ class InternalSession extends SessionBase {
 
         this.$.playlist_id = item ? item.id : null;
 
-        this.$.current_time = opts.start || 0;
+        this.$.time = opts.start || 0;
         
         if (this.is_running) {
             if (item) {
@@ -757,16 +762,6 @@ class InternalSession extends SessionBase {
 
     is_item_playlist(id) {
         return this.get_playlist_items(id).length > 0 || (this.get_playlist_item(id) || {}).filename === "livestreamer://playlist";
-    }
-
-    async update_playlist(ids, name, value) {
-        if (!Array.isArray(ids)) ids = [ids];
-        for (var id of ids) {
-            utils.set(this.$.playlist[id], name.split("/"), value);
-            if (id == this.$.playlist_id && this.is_running) {
-                await this.mpv.set_property(name, value);
-            }
-        }
     }
 
     async clear_playlist_props(ids) {
@@ -911,7 +906,7 @@ const PROPS_CLASS = InternalSession.PROPS_CLASS = class extends SessionBase.PROP
     volume_speed = {
         default: 2.0,
     };
-    current_time = {
+    time = {
         default: 0,
     };
 

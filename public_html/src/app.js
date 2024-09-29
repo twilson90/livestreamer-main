@@ -1,16 +1,14 @@
 import { utils, dom_utils, jQuery, $, Fancybox as _Fancybox, noUiSlider, flvjs, Chart, Hammer, Sortable, MultiDrag } from "./core.js";
 import "./app.scss";
-
-export {utils, dom_utils};
+export { utils, dom_utils };
+export const { UI, add_class, remove_class, toggle_attribute, set_inner_html, set_children, set_attribute, set_select_options, set_text, set_value, set_style_property, update_style_properties, remove_style_property, toggle_class } = dom_utils;
+const { Observer } = utils;
 
 Sortable.mount(new MultiDrag());
-
-export const UI = dom_utils.UI;
 
 // if (window.videojs) window.videojs.options.autoplay = true;
 // export const WS_MIN_WAIT = 1000;
 export const WS_MIN_WAIT = 0;
-
 export const MIN_VIDEO_BUFFER_TIME = 1000; // 1 second
 
 export const IMAGE_DURATION = 0.040;
@@ -48,7 +46,11 @@ export const PLAYLIST_MODE = { NORMAL: 0, MERGED: 1, DUAL_TRACK: 2 };
 
 // --------------------------------------------------------------------
 
-export var moving_average = (points, windowSize)=>{
+export function time_to_minutes(s) {
+    return Math.round(s / (60*1000));
+}
+
+export function moving_average(points, windowSize) {
     const smoothedPoints = [];
     for (let i = 0; i < points.length; i++) {
         let sumX = 0;
@@ -75,7 +77,7 @@ export var moving_average = (points, windowSize)=>{
     let media_type = function(type) {
         var v = this.value;
         if (!v) return true;
-        var mi = app.get_media_info(v);
+        var mi = app.$.media_info[v];
         if (!mi || !mi.exists) return "Media does not exist.";
         if (type && mi && mi.streams && !mi.streams.find(s=>s.type === type)) return `No ${type} streams detected.`
         return true;
@@ -300,12 +302,12 @@ export class FileDrop extends utils.EventEmitter{
         var is_files = (e)=>{
             return [...e.dataTransfer.items].some(i=>i.kind === "file");
         }
-        elem.classList.add("drop-area");
+        add_class(elem, "drop-area");
         elem.addEventListener("drop", async (e) => {
             if (!is_files(e)) return;
             e.preventDefault();
             e.stopPropagation();
-            elem.classList.remove("file-over");
+            remove_class(elem, "file-over");
             i--;
             var entries = await get_entries_from_drag_event(e);
             var files = await Promise.all(entries.map(e=>new Promise(resolve=>e.file(resolve))));
@@ -322,14 +324,14 @@ export class FileDrop extends utils.EventEmitter{
             e.preventDefault();
             e.stopPropagation();
             i++;
-            elem.classList.add("file-over");
+            add_class(elem, "file-over");
         });
         elem.addEventListener("dragleave", (e) => {
             if (!is_files(e)) return;
             e.preventDefault();
             e.stopPropagation();
             i--;
-            if (i == 0) elem.classList.remove("file-over")
+            if (i == 0) remove_class(elem, "file-over")
         });
     }
 }
@@ -378,16 +380,6 @@ export function cull(o1,o2) {
     } else {
         if (o1 === o2 || (o1 === null && o2 === undefined)) return null
     }
-}
-
-/** @template T @param {new () => T} clazz @return {Record<string,T>} */
-export function create_proxy(clazz) {
-    return new Proxy({}, {
-        set(target, prop, value) {
-            target[prop] = new clazz(value);
-            return true;
-        }
-    });
 }
 
 export function remove_empty_objects_from_tree(obj) {
@@ -547,7 +539,7 @@ export function create_background_properties(options, is_session) {
         "hidden": ()=>background_mode.value !== "color"
     });
 
-    var get_file_duration = ()=>utils.try(()=>app.get_media_info(background_file.value).duration, 0);
+    var get_file_duration = ()=>app.$.media_info[background_file.value] ? app.$.media_info[background_file.value].duration : 0;
     var is_file_image = ()=>get_file_duration()<=IMAGE_DURATION;
 
     var background_file = new FileProperty(`${name}_file`, is_session ? "Logo File" : "Replace Video with Image/Video File", {
@@ -591,7 +583,7 @@ export class TicksBar {
         this.start = 0;
         this.end = 0;
         this.elem = elem || $(`<div></div>`)[0];
-        this.elem.classList.add("ticks-bar");
+        add_class(this.elem, "ticks-bar");
         this.elem.dataset.placement = opts.placement;
         if (!opts.hover_elem) opts.hover_elem = elem;
 
@@ -607,14 +599,14 @@ export class TicksBar {
             seek_time.style.top = `${data.rect.y}px`;
             cursor_elem.style.left = `${data.pt.x-data.rect.x}px`;
             var html = `<div>${utils.seconds_to_timespan_str(data.time, app.user_time_format)}</div>`;
-            seek_time.innerHTML = `<div>${opts.modifier(html, data.time)}</div>`;
+            set_inner_html(seek_time, `<div>${opts.modifier(html, data.time)}</div>`);
         }
 
         this.hover_listener = new dom_utils.TouchListener(opts.hover_elem, {
             mode: "hover",
             start: (e)=>{
                 // console.log("in")
-                this.elem.classList.toggle("hover", true);
+                toggle_class(this.elem, "hover", true);
                 update_seek_time(e);
             },
             move: (e)=>{
@@ -623,7 +615,7 @@ export class TicksBar {
             },
             end: (e)=>{
                 // console.log("end")
-                this.elem.classList.toggle("hover", false);
+                toggle_class(this.elem, "hover", false);
             }
         });
     }
@@ -642,7 +634,7 @@ export class TicksBar {
         this.start = start;
         this.end = end;
 
-        this.elem.classList.toggle("no-duration", this.duration == 0);
+        toggle_class(this.elem, "no-duration", this.duration == 0);
 
         var ticks = [];
         var duration = end-start;
@@ -676,7 +668,7 @@ export class TicksBar {
                 ticks.push(`<div class="tick" style="left:${tx}%;height:${th}">${text}</div>`);
             }
         }
-        this.ticks_elem.innerHTML = ticks.join("");
+        set_inner_html(this.ticks_elem, ticks.join(""));
     }
 }
 TicksBar.tick_times = [0.1, 0.5, 1, 5, 15, 60, 5*60, 15*60, 60*60, 4*60*60, 12*60*60, 24*60*60];
@@ -858,7 +850,7 @@ export function create_menu(items, o={}) {
             elem = $(`<li class="item"></li>`)[0];
             var get = (p) => (typeof item[p] === "function") ? item[p].apply(item, [...opts.params, elem]) : item[p];
             var title = get("title");
-            if (title) elem.title = title;
+            if (title) set_attribute(elem, "title", title);
             var icon = get("icon");
             var name = get("name");
             var disabled = get("disabled");
@@ -873,14 +865,14 @@ export function create_menu(items, o={}) {
             }
             if (disabled) {
                 elem.disabled = true;
-                elem.classList.add("disabled");
+                add_class(elem, "disabled");
             } else {
                 elem.addEventListener("click", (e)=>{
                     get("click");
                     opts.click();
                 });
             }
-            if (visible === false) elem.classList.add("d-none");
+            if (visible === false) add_class(elem, "d-none");
             get("render");
         }
         list.appendChild(elem);
@@ -974,8 +966,8 @@ export class CancelSortPlugin {
             // Undo changes on the drag element.
             if (dragEl) {
                 // Remove ghost & chosen class.
-                dragEl.classList.remove(this.options.ghostClass);
-                dragEl.classList.remove(this.options.chosenClass);
+                remove_class(dragEl, this.options.ghostClass);
+                remove_class(dragEl, this.options.chosenClass);
                 dragEl.removeAttribute('draggable');
             }
             // In case of a copy, the cloneEl
@@ -1007,7 +999,7 @@ export class ResponsiveSortable extends Sortable {
         this.orientation = Orientation.VERTICAL
         
         // $(this.el).disableSelection();
-        this.el.classList.add("sortable");
+        add_class(this.el, "sortable");
 
         ResponsiveSortable.instances.push(this);
 
@@ -1181,7 +1173,7 @@ export class ResponsiveSortable extends Sortable {
         if (old) old.deselect_all();
         for (var s of [old, this]) {
             if (!s) continue;
-            s.el.classList.toggle("active", s===this);
+            toggle_class(s.el, "active", s===this);
             s._dispatchEvent("active-change", {active:s===this});
         }
     }
@@ -1207,7 +1199,7 @@ export class ResponsiveSortable extends Sortable {
 
     set_last_active(e) {
         e = this.get_item(e);
-        this.get_items().forEach(i=>i.classList.toggle(this.options.lastActiveClass, i === e));
+        this.get_items().forEach(i=>toggle_class(i, this.options.lastActiveClass, i === e));
         this.last_active = e;
         this.last_active_index = this.get_item_index(e);
     }
@@ -1277,8 +1269,8 @@ export class ResponsiveSortable extends Sortable {
     /* toggle_select: function(e, value) {
         e = this.get_item(e);
         if (!e) return;
-        e.classList.toggle(this.options.selectedClass, value);
-        e.classList.toggle(this.options.lastSelectedClass, value);
+        toggle_class(e, this.options.selectedClass, value);
+        toggle_class(e, this.options.lastSelectedClass, value);
     }, */
     /* select: function(e) {
         this.toggle_select(e, true);
@@ -1442,20 +1434,93 @@ AccessControl.ACCESS_ORDER = {"owner":1,"allow":2,"deny":3};
 
 // --------------------------------------------
 
-export class Client {
-    session_id = undefined;
-    is_admin = false;
-    username = null;
-    email = null;
-    constructor(data) {
-        Object.assign(this, data);
+
+/** @template T @param {new () => T} clazz @return {Record<string,T>} */
+export function create_proxy(clazz) {
+    return new Proxy({}, {
+        set(target, prop, value) {
+            target[prop] = new clazz();
+            Object.assign(target[prop], value);
+            return true;
+        }
+    });
+}
+
+export class Remote extends utils.EventEmitter {
+    constructor() {
+        super();
+        this._changes = [];
+
+        this.client_id = null;
+        this.clients = create_proxy(Client);
+        this.sessions = create_proxy(Session);
+        this.targets = create_proxy(Target);
+        this.volumes = {};
+        this.change_log = {};
+        this.plugins = {};
+        this.logs = {};
+        this.nms_sessions = {};
+        this.properties = {};
+        this.fonts = {};
+        this.uploads = {};
+        this.downloads = {};
+        this.media_info = {};
+        this.processes = {};
+        this.sysinfo = {};
+        this.process_info = {};
+        this.conf = {};
+        this.server_time_diff = 0;
+        this._pending_requests = new Set();
+        /** @type {Session} */
+        this._last_session = null;
+    }
+
+    _debounced_update = dom_utils.debounce_next_frame(()=>this._update());
+    _update() {
+        var changes = utils.tree_from_entries(this._changes);
+        utils.clear(this._changes);
+        // !! IMPORTANT FOR DATES AND THINGS LIKE THAT.
+        utils.deep_walk(changes, function(k,v) {
+            if (v && typeof v === "object" && v.toJSON && typeof v.toJSON === "function") {
+                this[k] = v.toJSON();
+            }
+        });
+        // !!
+        // var a = utils.try(()=>changes.sessions["hedgehog90"].stream.id)
+        // if (a) debugger;
+        Observer.apply_changes(this, changes);
+        this.emit("update", changes);
+    }
+    _push(...items) {
+        this._changes.push(...items.map(i=>utils.deep_copy(i)));
+        this._debounced_update();
+    }
+    /** @type {Session} */
+    get _session() { return this.sessions[this._client.session_id] || NULL_SESSION; }
+    /** @type {Client} */
+    get _client() { return this.clients[this.client_id] || NULL_CLIENT; }
+    get _stream() { return this._session.stream; }
+    get _streams() { return Object.values(this.sessions).map(s=>s.stream).filter(s=>s); }
+}
+
+export class DataNode {
+    constructor() {
+        this[Observer.RESET_KEY]();
+    }
+    [Observer.RESET_KEY]() { throw new Error("Not implemented") }
+}
+
+export class Client extends DataNode {
+    [Observer.RESET_KEY]() {
+        this.session_id = undefined;
+        this.is_admin = false;
+        this.username = null;
+        this.email = null;
     }
 }
 
-export class Target {
-    get _streams() { return app.$._streams.filter(s=>s.targets.find(t=>t.id == this.id)); }
-    get _active_streams() { return this._streams.filter(s=>s._is_running); }
-    constructor(data) {
+export class Target extends DataNode {
+    [Observer.RESET_KEY]() {
         this.name = ""
         this.description = ""
         this.rtmp_host = ""
@@ -1465,53 +1530,177 @@ export class Target {
         this.ts = 0
         this.limit = 0
         this.locked = false
-        Object.assign(this, data);
     }
+    get _streams() { return app.$._streams.filter(s=>s.targets.find(t=>t.id == this.id)); }
+    get _active_streams() { return this._streams.filter(s=>s._is_running); }
 }
 
-export class PlaylistItem {
-    /**
-     * @property {Number}
-     * @name PlaylistItem#rnd
-     */
-    /** @property {object} __private */
+/** @typedef {{index:number,start:number,end:number,id:string}} Chapter */
+/** @typedef {{filenames:string[],modified:boolean}} PlaylistInfo */
+/** @typedef {{duration:Number,media_duration:Number,children_duration:Number}} PlaylistItemDurations */
+/** @typedef {{start:Number,end:Number,duration:Number,offset:Number}} PlaylistItemClipping */
+/** @typedef {{download:Download,is_processing:boolean,color:string,modified:boolean,clipping:PlaylistItemClipping,is_playlist:boolean, is_merged:boolean,display_name:string,chapters:Chapter[],timeline_duration:Number,start:Number,end:Number,timeline_start:Number,timeline_end:Number,parent_ids:string[]} & PlaylistItemDurations} PlaylistUserData */
+/** @typedef {{evaluated_target:any[]}} StreamTarget */
+
+export class Stream extends DataNode {
+    [Observer.RESET_KEY]() {
+        this.start_time = 0;
+        this.state = "stopped";
+        this.speed_history = {};
+        this.session_id = 0;
+        this.mpv = new MPV();
+        /** @type {StreamTarget[]} */
+        this.targets = [];
+        this.test = false;
+    }
+    get _session() {
+        return app.$.sessions[this.session_id];
+    }
+    get _is_running() {
+        return this.state !== "stopped";
+    }
+    get _is_encoding() {
+        return !!this.mpv.is_encoding && this._is_running;
+    }
+}
+export class MPV extends DataNode {
+    [Observer.RESET_KEY]() {
+        this.is_encoding = false;
+        this.seeks = 0;
+        this.preloaded = false;
+        this.loaded = false;
+        this.seeking = false;
+        this.is_special = false;
+        this.seekable = false;
+        this.interpolation = false;
+        this.deinterlace = false;
+        this.duration = 0;
+        this.time = 0;
+        this.seekable_ranges = [];
+        this.props = {};
+    }
+}
+export class Session extends DataNode {
+    [Observer.RESET_KEY]() {
+        this.id = "";
+        this.type;
+        this.index = 0;
+        this.playlist_id = -1;
+        this.time = 0;
+        this.logs = {};
+        this.downloads = {};
+        this.access_control = {};
+        this.detected_crops = {};
+        this.player = {};
+        this.player_default_override = {};
+        this.stream_settings = {};
+        this.stream = new Stream();
+        this.current_item_on_load = null;
+        this.current_descendents_on_load = null;
+        this.target_configs = {};
+        this.playlist_info = {};
+        this.name = "";
+        /** @type {Record<string,PlaylistItem>} */
+        this.playlist = new Proxy({}, {
+            /** @param {Record<string,PlaylistItem>} target */
+            get: (target, prop)=>{
+                if (prop == "0") return this._root_playlist_item;
+                return target[prop];
+            },
+            /** @param {Record<string,PlaylistItem>} target */
+            set:(target, prop, value)=>{
+                target[prop] = new PlaylistItem(value, this);
+                return true;
+            },
+            /** @param {Record<string,PlaylistItem>} target */
+            deleteProperty: (target, prop)=>{
+                if (prop == "0") return true;
+                if (prop in target) {
+                    this._deleted_playlist_items[prop] = target[prop];
+                    delete target[prop];
+                }
+                return true;
+            }
+        });
+        this._root_playlist_item = new PlaylistItem({id:"0"}, this);
+        /** @type {Record<string,PlaylistItem>} */
+        this._deleted_playlist_items = {};
+    }
+    get _connected_nms_sessions() {
+        return Object.values(app.$.nms_sessions).filter(s=>s.publishStreamPath.split("/").pop() === this.id);
+    }
+    get _current_playing_item() {
+        return this.playlist[this.playlist_id] || NULL_PLAYLIST_ITEM;
+    }
+    get _is_running() {
+        return !!this.stream._is_running;
+    }
+    /** @return {Chapter[]} */
+    get _current_chapters() {
+        return this._current_playing_item._userdata.chapters;
+    }
+    get _current_duration() {
+        var d;
+        if (this.stream._is_running) {
+            d = this.stream.mpv.duration || 0;
+        } else {
+            d = 0;
+            var item = this._current_playing_item;
+            if (item._is_playlist && !item._is_merged_playlist) d = 0;
+            else d = item._userdata.duration;
+        }
+        return round_ms(d || 0);
+    }
+    get _current_time() {
+        if (this.stream._is_running) return this.stream.mpv.time;
+        return this.time;
+    }
+    get _current_seekable_ranges() {
+        if (this.stream._is_running) return this.stream.mpv.seekable_ranges;
+        return [];
+    }
+    _get_connected_nms_session_with_appname(appname) {
+        return this._connected_nms_sessions.find(s=>s.appname === appname);
+    }
+    _get_items_with_media(filename) {
+        return Object.values(this.playlist).filter(i=>i._userdata.filenames.includes(filename));
+    }
+    _get_current_chapters_at_time(t) {
+        return this._current_chapters.filter(c=>t>=c.start && t<c.end);
+    }
+    _get_current_chapter_at_time(t) {
+        return this._get_current_chapters_at_time(t).pop();
+    }
+}
+/** @typedef {{session:Session,num_updates:number,userdata:object,children:Set<PlaylistItem>,children_ordered:PlaylistItem[],parent:PlaylistItem}} PlaylistItemPrivate */
+
+export class PlaylistItem extends DataNode {
     /** @param {Session} session */
     constructor(data, session) {
+        super();
         if (!session) session = NULL_SESSION;
+        /** @type {PlaylistItemPrivate} */
+        this.__private;
+        Object.defineProperty(this, "__private", {
+            value: {
+                session: session,
+                num_updates: 0,
+                userdata: null,
+                children: new Set(),
+                children_ordered: null,
+                parent: null,
+            },
+            enumerable: false,
+        });
+        Object.assign(this, data);
+    }
+    [Observer.RESET_KEY]() {
         this.id = "-1";
         this.parent_id = null;
         this.filename = "";
         this.index = 0;
         this.track_index = 0;
         this.props = {};
-        Object.defineProperty(this, "__private", {
-            value: {},
-            enumerable: false,
-        });
-        /* Object.defineProperty(this, "parent_id", {
-            set:(new_parent_id)=>{
-                if (new_parent_id === this.__private.parent_id) return;
-                if (this.parent) {
-                    this.parent.__private.children.remove(this);
-                }
-                this.__private.parent_id = new_parent_id;
-                this.parent.__private.children.add(this);
-                this.parent.__private.children_ordered = null;
-            },
-            get:()=>{
-                return this.__private.parent_id;
-            },
-            enumerable: true,
-        }); */
-        // this.__private.parent_id = null;
-        this.__private.session = session;
-        this.__private.num_updates = 0;
-        this.__private.userdata = null;
-        this.__private.children = new Set();
-        this.__private.children_ordered = null;
-        // this.__private.uid = dom_utils.uuid4();
-        
-        Object.assign(this, data);
     }
     /** @return {Session} */
     get _session() {
@@ -1541,7 +1730,7 @@ export class PlaylistItem {
         return app.$.media_info[this.filename];
     }
     get _is_deleted() {
-        return this.id in this._session.playlist_deleted;
+        return !this._session.playlist[this.id];
     }
     get _is_playlist() {
         return this._is_root || this.filename === "livestreamer://playlist" || this._has_children;
@@ -1732,7 +1921,7 @@ export class PlaylistItem {
                 c.index = i;
                 c.start = Math.max(0, c.start-min);
                 c.end = Math.min(max-min, c.end-min);
-                if (!c.id && !c.title) c.title = `Chapter ${i+1}`
+                if (!c.id && !c.title) set_attribute(c, "title", `Chapter ${i+1}`);
             });
             ud.chapters = chapters;
         }
@@ -1759,9 +1948,6 @@ export class PlaylistItem {
         if (!info) return false;
         return info.filenames.some(f=>app.$.media_info[f] && app.$.media_info[f].processing) || this._children.some(i=>i._is_processing);
     }
-    /* get _depth() {
-        return this.parents.length;
-    } */
     get _parents() {
         return [...this._get_parents()].filter(p=>p);
     }
@@ -1905,94 +2091,15 @@ export class PlaylistItem {
         if (include_non_enumerable) return Object.fromEntries((utils.get_property_keys(this).map(k=>[k,utils.deep_copy(this[k])])));
         return utils.deep_copy(this);
     }
-}
-
-/** @typedef {{index:number,start:number,end:number,id:string}} Chapter */
-/** @typedef {{filenames:string[],modified:boolean}} PlaylistInfo */
-/** @typedef {{duration:Number,media_duration:Number,children_duration:Number}} PlaylistItemDurations */
-/** @typedef {{start:Number,end:Number,duration:Number,offset:Number}} PlaylistItemClipping */
-/** @typedef {{download:Download,is_processing:boolean,color:string,modified:boolean,clipping:PlaylistItemClipping,is_playlist:boolean, is_merged:boolean,display_name:string,chapters:Chapter[],timeline_duration:Number,start:Number,end:Number,timeline_start:Number,timeline_end:Number,parent_ids:string[]} & PlaylistItemDurations} PlaylistUserData */
-
-/** @typedef {{evaluated_target:any[]}} StreamTarget */
-export class Stream {
-    constructor(data) {
-        this.start_time = 0;
-        this.state = "stopped";
-        this.speed_history = {};
-        this.session_id = 0;
-        this.mpv = {
-            props: {},
-        };
-        /** @type {StreamTarget[]} */
-        this.targets = [];
-        this.test = false;
-        Object.assign(this, data);
+    /** @param {PlaylistItem[]} items */
+    static get_items_title(items) {
+        var items = items.filter(i=>i);
+        if (items.length > 1) return `${items.length} Files`;
+        if (items.length == 1) {
+            return `${items[0]._get_pretty_name()}`;
+        }
+        return `[No Item]`;
     }
-    get _session() {
-        return app.$.sessions[this.session_id];
-    }
-    get _is_running() {
-        return this.state !== "stopped";
-    }
-    get _is_encoding() {
-        return !!this.mpv.is_encoding && this._is_running;
-    }
-}
-export class Session {
-    constructor(data) {
-        this.id = "";
-        this.type;
-        this.index = 0;
-        this.logs = {};
-        this.downloads = {};
-        this.access_control = {};
-        this.detected_crops = {};
-        this.player = {};
-        this.player_default_override = {};
-        this.stream_settings = {};
-        this.stream = new Stream();
-        this.current_item_on_load = null;
-        this.current_descendents_on_load = null;
-        this.target_configs = {};
-        
-        this.playlist_info = {};
-        /** @type {Record<string,PlaylistItem>} */
-        this.playlist_deleted = {};
-        /** @type {Record<string,PlaylistItem>} */
-        this.playlist = new Proxy({}, {
-            set: (target, prop, value)=>{
-                target[prop] = new PlaylistItem(value, this);
-                return true;
-            },
-            deleteProperty: (target, prop)=>{
-                if (prop == "0") return true;
-                if (prop in target) {
-                    this.playlist_deleted[prop] = target[prop];
-                    delete target[prop];
-                }
-                return true;
-            }
-        });
-
-        Object.assign(this, data);
-        this.playlist["0"] = {id:"0"}; // weird
-    }
-    get _connected_nms_sessions() {
-        return Object.values(app.$.nms_sessions).filter(s=>s.publishStreamPath.split("/").pop() === this.id);
-    }
-    _get_connected_nms_session_with_appname(appname) {
-        return this._connected_nms_sessions.find(s=>s.appname === appname);
-    }
-    get _current_playing_item() {
-        return app.get_playlist_item(this.playlist_id) || NULL_PLAYLIST_ITEM;
-    }
-    get _is_running() {
-        return !!this.stream._is_running;
-    }
-    /* get movable() {
-        var ac = new AccessControl(this.access_control);
-        return ac.self_is_owner_or_admin || ac.owners.length == 0;
-    } */
 }
 
 export const NULL_CLIENT = Object.freeze(new Client());
@@ -2000,79 +2107,6 @@ export const NULL_SESSION = Object.freeze(new Session());
 export const NULL_PLAYLIST_ITEM = Object.freeze(new PlaylistItem());
 export const NULL_STREAM = Object.freeze(new Stream());
 
-export class Remote extends utils.EventEmitter {
-    constructor() {
-        super();
-        this._changes = [];
-
-        this.client_id = null;
-        /** @type {Record<string,Client>} */
-        this.clients = new Proxy({}, {
-            set(target, prop, value) {
-                // if (prop == null || prop == "null") {
-                //     debugger;
-                // }
-                target[prop] = new Client(value);
-                return true;
-            }
-        });
-        /** @type {Record<string,Session>} */
-        this.sessions = new Proxy({}, {
-            set(target, prop, value) {
-                target[prop] = new Session(value);
-                return true;
-            }
-        });
-        /** @type {Record<string,Target>} */
-        this.targets = new Proxy({}, {
-            set(target, prop, value) {
-                target[prop] = new Target(value);
-                return true;
-            }
-        });
-        this.volumes = {};
-        this.change_log = {};
-        this.plugins = {};
-        this.logs = {};
-        this.nms_sessions = {};
-        this.properties = {};
-        // this.processes = {};
-        this.fonts = {};
-        this.uploads = {};
-        this.downloads = {};
-        this.media_info = {};
-        this.processes = {};
-        this.sysinfo = {};
-        this.process_info = {};
-        this.conf = {};
-        this.server_time_diff = 0;
-        this._pending_requests = new Set();
-    }
-
-    _debounced_update = utils.debounce(()=>this._update());
-    _update() {
-        var changes = utils.tree_from_entries(this._changes);
-        utils.clear(this._changes);
-        // !! IMPORTANT FOR DATES AND THINGS LIKE THAT.
-        utils.deep_walk(changes, function(k,v) {
-            if (v && typeof v === "object" && v.toJSON && typeof v.toJSON === "function") {
-                this[k] = v.toJSON();
-            }
-        });
-        utils.Observer.apply_changes(this, changes);
-        this.emit("update", changes);
-    }
-    _push(...items) {
-        this._changes.push(...items.map(i=>utils.deep_copy(i)));
-        this._debounced_update();
-    }
-    /** @type {Session} */
-    get _session() { return this.sessions[this._client.session_id] || NULL_SESSION; }
-    /** @type {Client} */
-    get _client() { return this.clients[this.client_id] || NULL_CLIENT; }
-    get _stream() { return this._session.stream; }
-    get _streams() { return Object.values(this.sessions).map(s=>s.stream).filter(s=>s); }
-}
 export class CropPreview extends utils.EventEmitter {
     add_legend(name, clazz) {
         var elem = $(`<div><div class="${clazz}" style="width:15px;height:15px"></div><span>${name}</span></div>`)[0]
@@ -2085,7 +2119,7 @@ export class CropPreview extends utils.EventEmitter {
 
         this.elem = $(`<div class="crop-preview-wrapper"><div class="crop-preview"><div class="crop-edges"></div><div class="detected-crop-border"></div><div class="crop-border"></div><img src="${url}" draggable="false"></div></div>`)[0];
         this.crop_border_elem = this.elem.querySelector(".crop-border");
-        this.crop_border_elem.classList.toggle("d-none", !rect2);
+        toggle_class(this.crop_border_elem, "d-none", !rect2);
         this.detected_crop_border_elem = this.elem.querySelector(".detected-crop-border");
         this.content_elem = this.elem.querySelector(".crop-preview");
         this.edges_elem = this.elem.querySelector(".crop-edges");
@@ -2201,7 +2235,7 @@ export class CropPreview extends utils.EventEmitter {
                 left:`${r[parts[1]]*100}%`,
             })
         }
-        if (this.save_button) this.save_button.toggleAttribute("disabled",this.rect.equals(this.orig_crop_rect));
+        if (this.save_button) toggle_attribute(this.save_button, "disabled",this.rect.equals(this.orig_crop_rect));
         /* $(this.edges["top"]).css({
             top:`${r.y*100}%`,
             left:`${r.x*100}%`,
@@ -2222,22 +2256,23 @@ export class CropPreview extends utils.EventEmitter {
             left:`${r.right*100}%`,
             height:`${r.height*100}%`
         }) */
-        this.edges_elem.innerHTML = "";
-        this.edges_elem.innerHTML = [
+        set_inner_html(this.edges_elem, "");
+        set_inner_html(this.edges_elem, [
             `<div style="left:0;width:${r.left*100}%;top:0;bottom:0"></div>`,
             `<div style="right:0;left:${r.right*100}%;top:0;bottom:0"></div>`,
             `<div style="left:${r.left*100}%;width:${r.width*100}%;top:0;height:${r.top*100}%"></div>`,
             `<div style="left:${r.left*100}%;width:${r.width*100}%;top:${r.bottom*100}%;height:${(1-r.bottom)*100}%;"></div>`,
-        ].join("")
+        ].join(""));
 
         if (this.crop_border_elem) {
             this.set_crop_border(this.crop_border_elem, this.fixed_rect);
         }
         if (this.info_elem) {
-            this.info_elem.innerHTML=["left","top","right","bottom","width","height"].map((e,i)=>{
+            let html = ["left","top","right","bottom","width","height"].map((e,i)=>{
                 var v = (i!=2 && i!=3) ? this.fixed_rect[e] : 1-this.fixed_rect[e];
                 return `<span>${e}=${(v*100).toFixed(2)}%</span>`;
             }).join("");
+            set_inner_html(this.info_elem, html);
         }
     }
 }
@@ -2248,8 +2283,8 @@ export class SelectableList extends utils.EventEmitter {
         super();
         /** @type {HTMLElement} */
         this.elem = elem || $("<div></div>")[0];
-        elem.classList.add("selectable-list");
-        elem.setAttribute("tabindex", "-1");
+        add_class(elem, "selectable-list");
+        set_attribute(elem, "tabindex", "-1");
         $(elem).disableSelection();
         this.options = Object.assign({
             "selector":"*",
@@ -2291,12 +2326,12 @@ export class SelectableList extends utils.EventEmitter {
         this.elem.focus();
         if (this._selected === item) return;
         if (this._selected) {
-            this._selected.classList.remove(this.options.selectedClass);
+            remove_class(this._selected, this.options.selectedClass);
             this.emit("deselect", this._selected);
         }
         this._selected = item;
         if (this._selected) {
-            this._selected.classList.add(this.options.selectedClass);
+            add_class(this._selected, this.options.selectedClass);
             this._selected.scrollIntoView({block:"nearest", inline:"nearest"})
             this.emit("select", this._selected);
         }
@@ -2373,9 +2408,9 @@ class JsonElement {
         else if (this.data === null) this.type = "null";
 
         this.elem = document.createElement("div");
-        this.elem.classList.add("json-node");
+        add_class(this.elem, "json-node");
         this.value_elem = document.createElement("div");
-        this.value_elem.classList.add("json-value");
+        add_class(this.value_elem, "json-value");
         var prefix = "";
         var suffix = "";
         if (key) prefix = key+": ";
@@ -2387,11 +2422,11 @@ class JsonElement {
             suffix += "}";
         }
         var prefix_elem = document.createElement("span");
-        prefix_elem.classList.add("json-prefix");
+        add_class(prefix_elem, "json-prefix");
         prefix_elem.innerText = prefix;
 
         var suffix_elem = document.createElement("span");
-        suffix_elem.classList.add("json-suffix");
+        add_class(suffix_elem, "json-suffix");
         suffix_elem.innerText = suffix;
 
         if (this.type == "array" || this.type == "object") {
@@ -2409,7 +2444,7 @@ class JsonElement {
         var placeholder_elem;
         if (collapsible) {
             placeholder_elem = document.createElement("span");
-            placeholder_elem.classList.add("json-placeholder");
+            add_class(placeholder_elem, "json-placeholder");
             placeholder_elem.innerText = `${this.children.length} items`;
             if (collapsible) {
                 placeholder_elem.onclick=()=>this.toggle();
@@ -2424,8 +2459,8 @@ class JsonElement {
         this.elem.append(suffix_elem);
         
         this.elem.dataset.jsonType = this.type;
-        this.elem.classList.toggle("collapsible", collapsible);
-        this.elem.classList.toggle("empty", empty);
+        toggle_class(this.elem, "collapsible", collapsible);
+        toggle_class(this.elem, "empty", empty);
         
         Object.assign(this.elem.style, {
             "font-family": "monospace",
@@ -2434,7 +2469,7 @@ class JsonElement {
         });
     }
     toggle() {
-        this.elem.classList.toggle("collapsed")
+        toggle_class(this.elem, "collapsed")
     }
 }
 class JsonRoot extends JsonElement {
@@ -2482,23 +2517,30 @@ export class ModalPropertyContainer extends UI.PropertyContainer {
         this.elem.append(this.header);
         this.elem.append(this.content);
         this.elem.append(this.footer);
-        this.elem.style.padding = "0";
-        this.elem.style.gap = "0";
-        this.content.elem.style.display = "flex";
-        this.content.elem.style["flex-direction"] = "column";
-        this.content.elem.style.gap = "var(--gap)";
+        
+        update_style_properties(this.elem, {
+            padding: "0",
+            gap: "0"
+        });
+        update_style_properties(this.content.elem, {
+            display: "flex",
+            ["flex-direction"]: "column",
+            gap: "var(--gap)",
+        });
 
         this.on("update", ()=>{
             var width = this.get_setting("modal.width");
             var min_width = this.get_setting("modal.min-width");
             var max_width = this.get_setting("modal.max-width");
-            this.elem.style.width = typeof width === "number" ? `${width}px` : width;
-            this.elem.style.setProperty("--min-width", typeof min_width === "number" ? `${min_width}px` : min_width);
-            this.elem.style.setProperty("--max-width", typeof max_width === "number" ? `${max_width}px` : max_width);
-            dom_utils.set_inner_html(this.header.elem, this.get_setting("modal.title"));
-            dom_utils.toggle_class(this.header.elem, "overflow", this.get_setting("modal.title-overflow"));
-            dom_utils.toggle_class(this.footer.elem, "d-none", !this.get_setting("modal.footer"));
-            dom_utils.toggle_class(this.header.elem, "d-none", !this.get_setting("modal.header"));
+            update_style_properties(this.elem, {
+                "width": typeof width === "number" ? `${width}px` : width,
+                "--min-width": typeof min_width === "number" ? `${min_width}px` : min_width,
+                "--max-width": typeof max_width === "number" ? `${max_width}px` : max_width,
+            });
+            set_inner_html(this.header.elem, this.get_setting("modal.title"));
+            toggle_class(this.header.elem, "overflow", this.get_setting("modal.title-overflow"));
+            toggle_class(this.footer.elem, "d-none", !this.get_setting("modal.footer"));
+            toggle_class(this.header.elem, "d-none", !this.get_setting("modal.header"));
         });
     }
     
@@ -2515,7 +2557,6 @@ export class ModalPropertyContainer extends UI.PropertyContainer {
             src: this.elem,
             type: "html",
         }], {
-            // click:()=>this.get_setting("modal.modal_click"),
             on: {
                 shouldClose:(e)=>{
                     return this.get_setting("modal.close");
@@ -2530,18 +2571,13 @@ export class ModalPropertyContainer extends UI.PropertyContainer {
             // this.items = [null];
             // this.update_properties_with_data();
         });
-
         this.datas = datas;
-
-        // properties havent registered yet... wait until next frame.
-        // but important to do before emit show, queues next frame before update_layout->update_next_frame
-        requestAnimationFrame(()=>{
-            this.update();
+        this.property_lookup_on_show = this.property_lookup;
+        this.on("register", ()=>{
             this.property_lookup_on_show = this.property_lookup;
         });
-
         this.emit("show", [...this.datas]);
-        // this.update_next_frame();
+        this.update_next_frame();
     }
 
     hide() {
@@ -2793,7 +2829,7 @@ export class FileSystemInfoMenu extends ModalPropertyContainer {
         };
         var create_bar = (p)=>{
             var outer = document.createElement("div");
-            outer.classList.add("percent-bar");
+            add_class(outer, "percent-bar");
             var inner = document.createElement("div");
             var text = document.createElement("span");
             inner.style.width = `${p*100}%`;
@@ -2837,7 +2873,7 @@ export class FileSystemInfoMenu extends ModalPropertyContainer {
             tbody.append(row_el);
             
             var name_outer_el = document.createElement("td");
-            name_outer_el.classList.add("name");
+            add_class(name_outer_el, "name");
 
             var name_inner_el = document.createElement("div");
             name_inner_el.style.display="flex"
@@ -2861,30 +2897,30 @@ export class FileSystemInfoMenu extends ModalPropertyContainer {
                 open_file_manager({start: path.join("/")});
             }
             var arrow_el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-            arrow_el.innerHTML = `<use href="icons.svg#chevron-right"></use>`;
-            arrow_el.classList.add("arrow");
+            set_inner_html(arrow_el, `<use href="icons.svg#chevron-right"></use>`);
+            add_class(arrow_el, "arrow");
             name_inner_el.append(arrow_el);
             if (!node.isdir) arrow_el.style.visibility = "hidden";
 
             var icon_el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-            icon_el.innerHTML = `<use href="icons.svg#${node.icon}"></use>`;
+            set_inner_html(icon_el, `<use href="icons.svg#${node.icon}"></use>`);
             name_inner_el.append(icon_el, name_el);
             name_outer_el.append(name_inner_el);
 
             var size_el = document.createElement("td");
-            size_el.classList.add("size");
+            add_class(size_el, "size");
             size_el.innerText = utils.format_bytes(node.size);
             var files_el = document.createElement("td");
-            files_el.classList.add("files");
+            add_class(files_el, "files");
             files_el.innerText = node.isdir ? node.files.toLocaleString() : "-";
             var folders_el = document.createElement("td");
-            folders_el.classList.add("folders");
+            add_class(folders_el, "folders");
             folders_el.innerText = node.isdir ? node.folders.toLocaleString() : "-";
             var percent_el = document.createElement("td");
-            percent_el.classList.add("percent");
+            add_class(percent_el, "percent");
             percent_el.append(create_bar(node.percent));
             var percent_total_el = document.createElement("td");
-            percent_total_el.classList.add("percent-total");
+            add_class(percent_total_el, "percent-total");
             percent_total_el.append(create_bar(node.total_percent));
 
             row_el.append(name_outer_el, size_el, files_el, folders_el, percent_total_el, percent_el);
@@ -2894,7 +2930,7 @@ export class FileSystemInfoMenu extends ModalPropertyContainer {
                 node.open = false;
                 node.toggle = ()=>{
                     var open = node.open = !node.open;
-                    row_el.classList.toggle("open", open);
+                    toggle_class(row_el, "open", open);
                     var next = node;
                     if (!node.sorted) {
                         node.sorted = true;
@@ -2932,13 +2968,13 @@ export class FileSystemInfoMenu extends ModalPropertyContainer {
         // -------------------------------
 
         var table = document.createElement("table");
-        table.classList.add("files");
+        add_class(table, "files");
         var th = document.createElement("thead");
         table.append(th);
         var tr = document.createElement("tr");
         tr.append(...["Name", "Size", "Files", "Folders", "% Total", "% Parent"].map((c)=>{
             var td = document.createElement("td");
-            td.innerHTML = c;
+            set_inner_html(td, c);
             return td;
         }))
         th.append(tr);
@@ -2991,7 +3027,7 @@ export class SystemManagerMenu extends ModalPropertyContainer {
                 var is_running = ()=>app.$.processes[name].status == "online"
 
                 var row = this.append(new UI.Row());
-                this.elem.classList.add("process");
+                add_class(this.elem, "process");
                 var info_ui = row.append(new UI({flex:1}));
                 var name_ui = info_ui.append(new UI());
                 var description_ui = info_ui.append(new UI());
@@ -3036,29 +3072,29 @@ export class SystemManagerMenu extends ModalPropertyContainer {
                     if (p.status.match(/(online|launch)/)) color="#0a0";
                     else if (p.status.match(/stop/)) color="#666";
                     else if (p.status.match(/error/)) color="f00";
-                    dom_utils.set_inner_html(name_ui.elem, `${conf_name} [<span class="status">${p.status.toUpperCase()}</span>]`);
+                    set_inner_html(name_ui.elem, `${conf_name} [<span class="status">${p.status.toUpperCase()}</span>]`);
                     var status_el = name_ui.elem.querySelector(".status");
                     status_el.style.color = color;
-                    name_ui.style["font-weight"] = "bold";
-                    dom_utils.set_inner_html(description_ui.elem, conf_desc);
+                    set_style_property(name_ui, "font-weight", "bold");
+                    set_inner_html(description_ui.elem, conf_desc);
                     
                     var pinfo = app.$.process_info[p.pid] || {};
                     var cpu = Number((pinfo.cpu||0)*100).toLocaleString(undefined, {minimumFractionDigits:2,maximumFractionDigits:2})+"%";
                     var mem = utils.format_bytes(pinfo.memory||0);
                     var uptime = utils.ms_to_human_readable_str(pinfo.elapsed||0);
                     var s = {"CPU":cpu,"Memory":mem,"Transfer rate":`↑ ${utils.format_bytes(pinfo.sent)}ps / ↓ ${utils.format_bytes(pinfo.received)}ps`, "Uptime":uptime};
-                    dom_utils.set_inner_html(stats_ui.elem, Object.entries(s).map(([k,v])=>`${k}: ${v}`).join(" | "));
+                    set_inner_html(stats_ui.elem, Object.entries(s).map(([k,v])=>`${k}: ${v}`).join(" | "));
                 })
             }
         }
         var uptime = this.content.append(new UI({
             "update":()=>{
-                dom_utils.set_inner_html(uptime.elem, `System uptime: ${utils.ms_to_human_readable_str(app.$.sysinfo.uptime*1000)}`)
+                set_inner_html(uptime.elem, `System uptime: ${utils.ms_to_human_readable_str(app.$.sysinfo.uptime*1000)}`)
             }
         }));
         var transfer = this.content.append(new UI({
             "update":()=>{
-                dom_utils.set_inner_html(transfer.elem, `Transfer rate: ↑ ${utils.format_bytes(app.$.sysinfo.sent)}ps / ↓ ${utils.format_bytes(app.$.sysinfo.received)}ps`)
+                set_inner_html(transfer.elem, `Transfer rate: ↑ ${utils.format_bytes(app.$.sysinfo.sent)}ps / ↓ ${utils.format_bytes(app.$.sysinfo.received)}ps`)
             }
         }));
         this.content.append(new Bar({
@@ -3119,10 +3155,9 @@ export class FileManagerMenu extends ModalPropertyContainer {
         super({
             "modal.footer": false,
             "modal.header": false,
+            "modal.width":"100%"
         });
         Object.assign(this.elem.style, {
-            "padding": "0",
-            "width": "100%",
             "height": "100%",
             "min-height": "200px",
         });
@@ -3227,7 +3262,7 @@ export class ScheduleGenerator extends ModalPropertyContainer {
                     for (var c of item._children) walk(c);
                 }
             }
-            app.get_playlist_item("0")._children.forEach(c=>walk(c));
+            app.$._session.playlist["0"]._children.forEach(c=>walk(c));
             add_line(`Fin`);
             this.output.set_value(rows.join("\n"));
         });
@@ -3247,7 +3282,7 @@ export class FontSettings extends ModalPropertyContainer {
             "modal.footer":false,
         });
 
-        this.elem.classList.add("font-manager");
+        add_class(this.elem, "font-manager");
 
         var row = this.content.append(new UI.FlexRow());
         
@@ -3317,7 +3352,7 @@ export class FontSettings extends ModalPropertyContainer {
 export class SplitSettings extends ModalPropertyContainer {
     constructor() {
         super({
-            "modal.title": ()=>`Split '<span>${app.get_playlist_items_title(this.datas)}</span>'`,
+            "modal.title": ()=>`Split '<span>${PlaylistItem.get_items_title(this.datas)}</span>'`,
             "modal.title-overflow": true,
             "modal.footer":true,
         });
@@ -3440,10 +3475,12 @@ export class SplitSettings extends ModalPropertyContainer {
     };
 
     show(datas) {
+        /** @type {PlaylistItem} */
+        this.data;
         super.show(datas);
         this.seek.update_settings({
-            "seek.duration": this.data.userdata ? this.data.userdata.duration : 0,
-            "seek.chapters": this.data.userdata ? this.data.userdata.chapters : []
+            "seek.duration": this.data._userdata.duration,
+            "seek.chapters": this.data._userdata.chapters
         });
         this.update_markers();
     }
@@ -3627,7 +3664,7 @@ export class ChangeLog extends ModalPropertyContainer {
                 "font-size": "1.2rem",
             });
             app.settings.set("last_change_log", app.$.change_log.mtime);
-            this.content.elem.innerHTML = `<div>${app.$.change_log.html}</div>`;
+            set_inner_html(this.content.elem, `<div>${app.$.change_log.html}</div>`);
         })
     }
 }
@@ -3690,8 +3727,8 @@ export class JSONViewer extends ModalPropertyContainer {
         super.show();
         this.update_settings({"modal.title": title });
         var json = new JSONContainer(json);
-        this.content.elem.innerHTML = "";
-        this.content.elem.style["margin-bottom"] = 0;
+        set_inner_html(this.content.elem, "");
+        set_style_property(this.content.elem, "margin-bottom", 0);
         this.content.elem.append(json);
     }
 }
@@ -3728,9 +3765,9 @@ export class SetTimePosSettings extends ModalPropertyContainer {
         var row = this.content.append(new UI.FlexRow());
         row.append(
             this.chapter_select = new UI.Property(null, "Chapter", `<select>`, {
-                "hidden":()=>!app.settings.get("show_chapters") || app.get_current_chapters().length < 2,
+                "hidden":()=>!app.settings.get("show_chapters") || app.$._session._current_chapters.length < 2,
                 "options":()=>{
-                    return app.get_current_chapters().map((c,i)=>[i, app.chapter_to_string(c, true)])
+                    return app.$._session._current_chapters.map((c,i)=>[i, app.chapter_to_string(c, true)])
                 },
                 "reset":false,
             }),
@@ -3742,11 +3779,11 @@ export class SetTimePosSettings extends ModalPropertyContainer {
         );
         this.time_pos.on("change",(e)=>{
             if (!e.trigger) return;
-            this.chapter_select.set_values((app.get_current_chapter_at_time(e._value)||EMPTY_OBJECT).index);
+            this.chapter_select.set_values((app.$._session._get_current_chapter_at_time(e._value)||EMPTY_OBJECT).index);
         })
         this.chapter_select.on("change",(e)=>{
             if (!e.trigger) return;
-            var c = app.get_current_chapters()[e._value];
+            var c = app.$._session._current_chapters[e._value];
             this.time_pos.set_values(c.start);
         })
 
@@ -3762,7 +3799,7 @@ export class SetTimePosSettings extends ModalPropertyContainer {
         this.footer.append(this.ok, this.cancel);
 
         this.on("show",()=>{
-            this.time_pos.settings.default = app.get_current_time_pos();
+            this.time_pos.settings.default = app.$._session._current_time;
             this.time_pos.reset(true);
         })
     }
@@ -3830,9 +3867,9 @@ export class ExternalSessionConfigurationMenu extends ModalPropertyContainer {
         });
         
         var row = this.content.append(new UI.FlexRow());
-        row.elem.innerHTML = `Setup your streaming software to stream to cabtv and restream to multiple targets.`;
+        set_inner_html(row.elem, `Setup your streaming software to stream to cabtv and restream to multiple targets.`);
         var row = this.content.append(new UI.FlexRow());
-        row.elem.innerHTML = `<hr/>`;
+        set_inner_html(row.elem, `<hr/>`);
         
         this.content.append(new StreamKeyGeneratorSettings());
     }
@@ -3988,18 +4025,18 @@ export class TargetConfigurationMenu extends ModalPropertyContainer {
         });
 
         this.parent_prop = parent_prop;
-        this.content.elem.classList.add("target-config");
+        add_class(this.content.elem, "target-config");
 
         var selected_el
         if (parent_prop) {
             selected_el = new UI.Column().elem;
-            selected_el.classList.add("target-list");
+            add_class(selected_el, "target-list");
             this.content.append(selected_el);
             this.content.append(new UI.Separator());
         }
 
         var list_el = new UI.Column().elem;
-        list_el.classList.add("target-list");
+        add_class(list_el, "target-list");
         this.content.append(list_el);
 
         var new_button = new UI.Button(`New Target <i class="fas fa-plus" style="padding:0 5px"></i>`, {
@@ -4043,12 +4080,12 @@ export class TargetConfigurationMenu extends ModalPropertyContainer {
             if (parent_prop) {
                 dom_utils.rebuild(selected_el, this.targets_selected, { add });
                 if (this.targets_selected.length == 0) {
-                    selected_el.innerHTML = `<span style="display: flex; justify-content: center; padding: 10px;">No Targets Selected.</span>`;
+                    set_inner_html(selected_el, `<span style="display: flex; justify-content: center; padding: 10px;">No Targets Selected.</span>`);
                 }
             }
             dom_utils.rebuild(list_el, this.targets_remaining, { add });
             if (this.targets_remaining.length == 0) {
-                list_el.innerHTML = `<span style="display: flex; justify-content: center; padding: 10px;">No Remaining Targets.</span>`;
+                set_inner_html(list_el, `<span style="display: flex; justify-content: center; padding: 10px;">No Remaining Targets.</span>`);
             }
         }
         var update_value = (force)=>{
@@ -4137,7 +4174,7 @@ export class TargetConfigurationMenu extends ModalPropertyContainer {
             var in_use = !!target._active_streams.length;
             var name_elem = $(`<span class="name"></span>`)[0];
             var description_elem = $(`<div class="description"></div>`)[0];
-            text_wrapper_elem.innerHTML = "";
+            set_inner_html(text_wrapper_elem, "");
             text_wrapper_elem.append(name_elem, description_elem);
             var checkbox_input = elem.querySelector(`input[type="checkbox"]`);
 
@@ -4145,8 +4182,8 @@ export class TargetConfigurationMenu extends ModalPropertyContainer {
             if (in_use) parts.push(`<span class="flashing-slow">[Currently In Use]</span>`);
             if (target.locked) parts.push(` <i class="fas fa-lock"></i>`);
             if (target.url) parts.push(`<a href="${target.url}" target="_blank"><i class="fas fa-arrow-up-right-from-square"></i></a>`);
-            name_elem.innerHTML = parts.join(" ");
-            description_elem.innerHTML = utils.convert_links_to_html(target.description || "");
+            set_inner_html(name_elem, parts.join(" "));
+            set_inner_html(description_elem, utils.convert_links_to_html(target.description || ""));
             checkbox_input.checked = this.targets_selected.includes(target)
             checkbox_input.style.display = parent_prop ? "" : "none";
             checkbox_input.disabled = !parent_prop;
@@ -4227,15 +4264,15 @@ export class SeekBar extends UI {
         this.bg_elem = this.elem.querySelector(".bg");
         
         this.time_elem = this.elem.querySelector("#time");
-        this.time_elem.title = "Time Position";
+        set_attribute(this.time_elem, "title", "Time Position");
         this.time_left_elem = this.elem.querySelector("#time-left");
-        this.time_left_elem.title = "Time Left";
+        set_attribute(this.time_left_elem, "title", "Time Left");
         this.buffer_bar_elem = this.elem.querySelector(".buffer-bar");
 
         var set_hover_chapters = (chapters)=>{
             var indices = new Set(chapters.map(c=>+c.index));
             [...this.chapters_elem.children].forEach(e=>{
-                e.classList.toggle("hover", indices.has(+e.dataset.index));
+                toggle_class(e, "hover", indices.has(+e.dataset.index));
             });
         };
 
@@ -4302,7 +4339,6 @@ export class SeekBar extends UI {
             end: (e)=>{
                 clearInterval(seek_interval);
                 if (seeking) {
-                    app.seek(seek_time)
                     this.emit("seek-end", {time:seek_time});
                 }
                 seeking = false;
@@ -4360,7 +4396,7 @@ export class SeekBar extends UI {
 
         this.on("update", ()=>{
             var time_left_mode = this.get_setting("seek.time_left_mode");
-            this.time_left_elem.title = time_left_mode == 0 ? "Time Left" : "Duration";
+            set_attribute(this.time_left_elem, "title", time_left_mode == 0 ? "Time Left" : "Duration");
 
             var _time = this.get_setting("seek.time");
             var duration = this.get_setting("seek.duration");
@@ -4385,11 +4421,11 @@ export class SeekBar extends UI {
             this.time_left_elem.style.display = show_times ? "" : "none";
 
             var add_markers = show_markers;
-            this.seek_elem.toggleAttribute("disabled", !seekable)
+            toggle_attribute(this.seek_elem, "disabled", !seekable)
             this.elem.style.cursor = add_markers ? "copy" : "";
-            dom_utils.toggle_class(this.bar_elem, "d-none", add_markers);
+            toggle_class(this.bar_elem, "d-none", add_markers);
             this.markers_elem.style.display = add_markers ? "" : "none";
-            // dom_utils.toggle_class(this.input, "d-none", add_markers);
+            // toggle_class(this.input, "d-none", add_markers);
 
             var ranges_hash = JSON.stringify([duration, ranges]);
             if (this._ranges_hash != ranges_hash) {
@@ -4405,7 +4441,7 @@ export class SeekBar extends UI {
                 }
             }
 
-            dom_utils.toggle_class(this.seek_elem, "buffering", buffering);
+            toggle_class(this.seek_elem, "buffering", buffering);
 
             var markers_hash = JSON.stringify([markers, duration]);
             if (this._markers_hash != markers_hash) {
@@ -4431,7 +4467,7 @@ export class SeekBar extends UI {
                         var e = $(`<div class="chapter"></div>`)[0];
                         e.style.left = `${c.start / duration*100}%`;
                         e.style.width = `${d / duration*100}%`;
-                        e.style["z-index"] = i+1;
+                        set_style_property(e, "z-index", i+1);
                         e.dataset.index =  c.index;
                         this.chapters_elem.appendChild(e);
                     });
@@ -4440,12 +4476,12 @@ export class SeekBar extends UI {
 
             this.ticks_bar.update(0, duration);
 
-            dom_utils.set_text(this.time_elem, `${utils.seconds_to_timespan_str(time, app.user_time_format)}`);
+            set_text(this.time_elem, `${utils.seconds_to_timespan_str(time, app.user_time_format)}`);
             var tl = "";
             var tlm = this.get_setting("seek.time_left_mode");
             if (tlm === TimeLeftMode.TIME_LEFT) tl = `-${utils.seconds_to_timespan_str(Math.max(0, time_left), app.user_time_format)}`;
             else if (tlm === TimeLeftMode.DURATION) tl = utils.seconds_to_timespan_str(Math.max(0, duration), app.user_time_format)
-            dom_utils.set_text(this.time_left_elem, tl);
+            set_text(this.time_left_elem, tl);
         });
 
         this.on("destroy", ()=>{
@@ -4516,7 +4552,7 @@ export class MediaSeekBar extends SeekBar {
                 "seek.seekable": app.media.seekable,
                 "seek.duration": app.media.duration,
                 "seek.chapters": app.media.chapters,
-                "seek.ranges": app.get_current_seekable_ranges(),
+                "seek.ranges": app.$._session._current_seekable_ranges,
                 "seek.seek_pause": seek_pause,
                 "seek.buffering": buffering,
             });
@@ -4591,12 +4627,12 @@ export class StreamKeyGeneratorSettings extends UI.PropertyContainer {
             var query_str = params.toString();
             var host = app.get_rtmp_url();
             this.output_host.set_values(host);
-            var key = `livestream/${utils.md5(app.$._client.username)}`;
+            var key = `livestream/${app.$._client.username}`;
             if (query_str) key += "?"+query_str;
             this.output_key.set_values(key);
         };
 
-        var debounced_update_output = dom_utils.debounce_next_frame(update_output);
+        var debounced_update_output = dom_utils.debounce_next_frame(()=>update_output());
         this.on("property-change",(e)=>{
             if (!e.trigger) return;
             debounced_update_output();
@@ -4784,12 +4820,12 @@ export class HistorySettings extends ModalPropertyContainer {
         super({
             "modal.min-width": "900px"
         });
-        this.content.elem.classList.add("autosave-history");
+        add_class(this.content.elem, "autosave-history");
         var table_data = {
             "Time":(data)=>{
                 var mtime = new Date(data.mtime);
                 var e = $(`<span>${utils.time_diff_readable(new Date(), mtime)}</span>`)[0];
-                e.title = mtime.toLocaleString();
+                set_attribute(e, "title", mtime.toLocaleString());
                 return e;
             },
             "Current Changes":(data)=>{
@@ -4981,7 +5017,7 @@ export class PlaylistModifySettings extends ModalPropertyContainer {
             },
             "modal.title": function() {
                 if (this.is_new) return `Add [${this._new_type}]`;
-                return `Modify '<span>${app.get_playlist_items_title(this.datas)}</span>'`;
+                return `Modify '<span>${PlaylistItem.get_items_title(this.datas)}</span>'`;
             },
             "modal.title-overflow": true,
             "modal.footer":true,
@@ -5014,7 +5050,7 @@ export class PlaylistModifySettings extends ModalPropertyContainer {
                             call: ["session", "update_values"],
                             arguments: this.datas.map(data=>[`playlist/${data.id}/props`, {}])
                         });
-                        app.$._push(...this.datas.map(data=>[`sessions/${app.$._session.id}/playlist/${data.id}/props`,{[utils.Observer.RESET_KEY]:1}]));
+                        app.$._push(...this.datas.map(data=>[`sessions/${app.$._session.id}/playlist/${data.id}/props`,{[Observer.RESET_KEY]:"Object"}]));
                     }
                 }
             })
@@ -5038,7 +5074,7 @@ export class PlaylistModifySettings extends ModalPropertyContainer {
         var update_layout = ()=>{
             this.content.update_layout(this.interface.get_layout());
         }
-        var update_layout_next_frame = dom_utils.debounce_next_frame(update_layout);
+        var update_layout_next_frame = dom_utils.debounce_next_frame(()=>update_layout());
     }
 }
 
@@ -5813,7 +5849,7 @@ export class MediaSettingsInterface {
                         title_preview_style = $(`<style></style>`)[0];
                         app.body_elem.append(title_preview_style);
                     }
-                    title_preview_style.textContent = `
+                    let style_text = `
                     @keyframes title-preview-timeline {
                         0% { width:0; }
                         100% { width:100%; }
@@ -5822,7 +5858,7 @@ export class MediaSettingsInterface {
                     if (fade_duration) {
                         var fade_in_duration_percent = (fade_duration / duration)*100;
                         var fade_out_duration_percent = 100 - fade_in_duration_percent;
-                        title_preview_style.textContent += "\n" + `@keyframes title-preview-fade {
+                        style_text += "\n" + `@keyframes title-preview-fade {
                             0% { opacity:0; }
                             ${fade_in_duration_percent}% { opacity:1; }
                             ${fade_out_duration_percent}% { opacity:1; }
@@ -5838,11 +5874,8 @@ export class MediaSettingsInterface {
                     } else {
                         black_overlay.style.opacity = 0;
                     }
-
-                    /* elem.querySelectorAll(".preview-text").forEach(e=>{
-                        e.style["animation"] = fade_duration ? `title-preview-fade linear ${duration}s 1 forwards` : "";
-                    }); */
-                    timeline_elem.firstElementChild.style["animation"] = `title-preview-timeline linear ${duration}s 1 forwards`
+                    title_preview_style.textContent = style_text;
+                    set_style_property(timeline_elem.firstElementChild, "animation", `title-preview-timeline linear ${duration}s 1 forwards`)
                     dom_utils.restart_animation(elem);
                 }
 
@@ -5859,7 +5892,7 @@ export class MediaSettingsInterface {
                     });
 
                     elem.querySelectorAll(".preview-text").forEach(e=>{
-                        e.innerHTML = this.title_text.value;
+                        set_inner_html(e, this.title_text.value);
                         Object.assign(e.style, {
                             "white-space": "pre-wrap",
                             "transition":"all 0.5s",
@@ -5899,7 +5932,7 @@ export class MediaSettingsInterface {
                         "-webkit-text-stroke-color": this.title_outline_color.value,
                     });
                     var shadow_offset = this.title_shadow_depth.value*scale*1.25;
-                    shadow_container.style["transform"] = `translate(${shadow_offset}px,${shadow_offset}px) `+shadow_container.style["transform"];
+                    set_style_property(shadow_container, "transform", `translate(${shadow_offset}px,${shadow_offset}px) `+shadow_container.style["transform"]);
                     Object.assign(shadow_container.style, {
                         "opacity":this.title_shadow_depth.value?1:0,
                     });
@@ -5943,7 +5976,7 @@ export class MediaSettingsInterface {
                     return {value:k, text:utils.capitalize(k), style:{"background-color":item_colors[k]||"#fff"}};
                 }),
                 "update":function() {
-                    this.input.style["background-color"] = item_colors[this.value || "none"];
+                    set_style_property(this.input, "background-color", item_colors[this.value || "none"]);
                 },
                 "default": "none",
             });
@@ -6179,7 +6212,7 @@ export class AccessControlProperty extends UI.Property {
         });
         
         this.access_control = new AccessControl();
-        this.debounced_update_value = utils.debounce(this.update_value, 0);
+        this.debounced_update_value = dom_utils.debounce_next_frame(()=>this.update_value());
 
         var columns = {
             "Username": (data)=>$(`<span>${data.username}</span>`)[0],
@@ -6224,7 +6257,7 @@ export class AccessControlProperty extends UI.Property {
         table_elem.append(tfoot_elem);
         elem.append(table_elem);
         var footer_cell = tfoot_elem.querySelector("td");
-        footer_cell.setAttribute("colspan", Object.keys(columns).length);
+        set_attribute(footer_cell, "colspan", Object.keys(columns).length);
         footer_cell.style.padding = 0;
         footer_cell.append(add_button);
         add_button.addEventListener("click", async ()=>{
@@ -6239,7 +6272,7 @@ export class AccessControlProperty extends UI.Property {
         var render = ()=>{
             dom_utils.empty(tbody_elem);
             add_button.innerText = add_button.title = this.access_control.owners.length == 0 ? "Claim Ownership" : "Add User";
-            add_button.toggleAttribute("disabled", !this.access_control.self_can_edit);
+            toggle_attribute(add_button, "disabled", !this.access_control.self_can_edit);
             for (let user of this.access_control.users) {
                 var tr = $(`<tr></tr>`)[0];
                 if (user.suspended) tr.style.color = "rgba(0,0,0,0.4)";
@@ -6370,7 +6403,7 @@ export class Panel extends UI.PropertyContainer {
         this.panel_id = title.toLowerCase().replace(/[^\w]+/, "-");
         app.panels[this.panel_id] = this;
 
-        this.elem.classList.add("drawer");
+        add_class(this.elem, "drawer");
         this.elem.dataset.id = this.panel_id;
         var header_container_elem = $(`<div class="header"><div class="inner"></div><div class="collapse-arrow"><i class="fas fa-chevron-down"></i></div></div>`)[0];
         this.body_elem = $(`<div class="body"></div>`)[0];
@@ -6380,7 +6413,7 @@ export class Panel extends UI.PropertyContainer {
         this.collapse_arrow_elem = header_container_elem.querySelector(".collapse-arrow");
 
         var title_elem = $(`<span></span>`)[0];
-        title_elem.innerHTML = title;
+        set_inner_html(title_elem, title);
         this.header_elem.append(title_elem);
 
         this.elem.append(header_container_elem, this.body_elem);
@@ -6398,7 +6431,7 @@ export class Panel extends UI.PropertyContainer {
     }
 
     toggle(value) {
-        this.elem.classList.toggle("hide", value)
+        toggle_class(this.elem, "hide", value)
     }
 }
 
@@ -6415,7 +6448,7 @@ export class StreamSettings extends Panel {
         var right = new UI.Row({flex:0, gap:0});
         var inner = new UI();
         inner.append(left, right);
-        inner.elem.classList.add("stream-settings");
+        add_class(inner.elem, "stream-settings");
         this.body_elem.append(inner);
         
         this.properties_ui = new UI.Row({
@@ -6488,7 +6521,7 @@ export class StreamSettings extends Panel {
             hidden:()=>!app.$._session._is_running || app.$._stream.test
         });
         var row = new UI.FlexRow({gap:0});
-        row.elem.style["flex-wrap"] = "nowrap";
+        set_style_property(row.elem, "flex-wrap", "nowrap");
         row.append(this.schedule_stream_button, this.handover_button, this.config_button);
         this.button_group_ui.append(this.toggle_streaming_button, row);
 
@@ -6606,17 +6639,17 @@ export class StreamSettings extends Panel {
             var session = app.$._session || EMPTY_OBJECT;
             var stream = session.stream;
 
-            dom_utils.toggle_class(this.properties_ui.elem, "d-none", session._is_running);
-            dom_utils.toggle_class(this.info_ui.elem, "d-none", !session._is_running);
-            dom_utils.toggle_class(this.properties_ui.elem, "d-none", session._is_running);
-            dom_utils.toggle_class(this.info_ui.elem, "d-none", !session._is_running);
+            toggle_class(this.properties_ui.elem, "d-none", session._is_running);
+            toggle_class(this.info_ui.elem, "d-none", !session._is_running);
+            toggle_class(this.properties_ui.elem, "d-none", session._is_running);
+            toggle_class(this.info_ui.elem, "d-none", !session._is_running);
     
             var state;
             if (stream.state === "stopped") state = `Start`;
             else if (stream.state === "started") state = `Stop`;
             else if (stream.state === "stopping") state = `Stopping...`;
             else if (stream.state === "starting") state = `Starting...`;
-            dom_utils.set_text(this.toggle_streaming_button, state);
+            set_text(this.toggle_streaming_button, state);
 
             var stream_info = {};
             stream_info["Stream Method"] = stream["method"];
@@ -6655,7 +6688,7 @@ export class StreamSettings extends Panel {
             }
             stream_info["Run Time"] = utils.ms_to_timespan_str(app.server_now - session.stream.start_time);
 
-            dom_utils.set_inner_html(this.info_ui.elem, Object.entries(stream_info).map(([k,v])=>`${k}: ${v}`).join(" | "));
+            set_inner_html(this.info_ui.elem, Object.entries(stream_info).map(([k,v])=>`${k}: ${v}`).join(" | "));
         })
     }
 }
@@ -6671,7 +6704,7 @@ export class MediaPlayerPanel extends Panel {
             data: ()=>app.$._session
         });
 
-        this.elem.classList.add("player-interface-wrapper");
+        add_class(this.elem, "player-interface-wrapper");
 
         var bg = $(`<div class="buttons border-group">
             <button class="time_display_ms" title="Show/Hide Millisecconds"><i class="ms"></i></button>
@@ -6702,8 +6735,8 @@ export class MediaPlayerPanel extends Panel {
         this.test_stream_popout_button = this.test_stream_elem.querySelector("button.popout");
         this.test_stream_info_button = this.test_stream_elem.querySelector("button.toggle-info");
         this.test_stream_info_button.onclick = ()=>{
-            dom_utils.toggle_class(this.test_stream_info_elem, "d-none");
-            dom_utils.toggle_attribute(this.test_stream_info_button, "data-toggled");
+            toggle_class(this.test_stream_info_elem, "d-none");
+            toggle_attribute(this.test_stream_info_button, "data-toggled");
         }
 
         this.test_stream_popout_button.addEventListener("click", async (e)=>{
@@ -6848,7 +6881,7 @@ video {
                 },
                 disabled:()=>!app.$._session._is_running,
                 update: function(){
-                    // this.elem.classList.toggle("pending", app.$.session.current_playing_item.userdata.pending_changes);
+                    // toggle_class(this.elem, "pending", app.$.session.current_playing_item.userdata.pending_changes);
                 }
             }),
             this.set_time_button = new UI.Button(`<i class="far fa-clock"></i>`, {
@@ -6922,7 +6955,7 @@ video {
                 app.$.push([`sessions/${app.$.session.id}/mpv/muted`, new_muted]);
             },
             update:function() {
-                this.elem.classList.toggle("mute", !!app.$.stream.mpv.muted);
+                toggle_class(this.elem, "mute", !!app.$.stream.mpv.muted);
             }
         }); */
         
@@ -6960,16 +6993,17 @@ video {
         });
         this.on("update", ()=>{
             var started = app.$._session._is_running;
-            dom_utils.set_inner_html(this.status_prefix_elem, `${app.media.status}: `);
+            set_inner_html(this.status_prefix_elem, `${app.media.status}: `);
             app.build_playlist_breadcrumbs(this.status_path_elem, app.media.item, true, true);
             
             var stats_html = Object.entries(app.media.stats).map(([k,v])=>`<span>${k}: ${v}</span>`).join(" | ");
-            dom_utils.set_inner_html(this.stats_elem, stats_html);
-            dom_utils.toggle_class(this.stats_elem, "d-none", !started);
+            set_inner_html(this.stats_elem, stats_html);
+            toggle_class(this.stats_elem, "d-none", !started);
             
             if (app.media.curr_chapters.length) {
                 this.additional_file_info_elem.style.display = "";
-                this.additional_file_info_elem.innerHTML = `Chapter(s): `+app.media.curr_chapters.map(c=>app.chapter_to_string(c)).join(" | ")
+                let html = `Chapter(s): `+app.media.curr_chapters.map(c=>app.chapter_to_string(c)).join(" | ");
+                set_inner_html(this.additional_file_info_elem, html);
             } else {
                 this.additional_file_info_elem.style.display = "none";
             }
@@ -6986,13 +7020,13 @@ video {
         var is_popped_out = !!windows["test-"+app.$._session.id];
         var is_playable = !!(show && app.$._session._get_connected_nms_session_with_appname("test"));
 
-        dom_utils.toggle_class(this.test_stream_container_elem, "d-none", !show);
-        dom_utils.toggle_class(this.test_stream_overlay_elem, "d-none", !is_playable);
-        dom_utils.toggle_class(this.test_stream_popout_button, "d-none", is_popped_out);
-        dom_utils.toggle_attribute(this.test_stream_popout_button, "data-toggled", is_popped_out);
+        toggle_class(this.test_stream_container_elem, "d-none", !show);
+        toggle_class(this.test_stream_overlay_elem, "d-none", !is_playable);
+        toggle_class(this.test_stream_popout_button, "d-none", is_popped_out);
+        toggle_attribute(this.test_stream_popout_button, "data-toggled", is_popped_out);
         
         var buffer_length = this.video_buffer_length;
-        this.test_stream_info_elem.innerHTML = `Buffered: ${buffer_length ? buffer_length.toFixed(2) : "-"} secs`;
+        set_inner_html(this.test_stream_info_elem, `Buffered: ${buffer_length ? buffer_length.toFixed(2) : "-"} secs`);
 
         if (!force && !!this.flv_player == is_playable) return;
 
@@ -7015,7 +7049,7 @@ video {
             this.video_el.autoplay = false;
             this.video_el.muted = true;
             this.video_el.addEventListener('loadedmetadata', (e)=>{
-                // this.test_stream_container_elem.style.setProperty("--aspect-ratio", this.video_el.videoWidth / this.video_el.videoHeight)
+                // set_style_property(this.test_stream_container_elem, "--aspect-ratio", this.video_el.videoWidth / this.video_el.videoHeight)
             });
             this.test_stream_video_wrapper.append(this.video_el);
             this.flv_player = flvjs.createPlayer({
@@ -7103,13 +7137,14 @@ export class MediaSettingsPanel extends Panel {
 export class LogViewerPanel extends Panel {
     constructor(name) {
         super(name);
-        this.body_elem.classList.add("no-padding");
+        add_class(this.body_elem, "no-padding");
 
         this.logs_wrapper = $(`<div class="logs-wrapper"></div>`)[0];
         this.logs_container = $(`<div class="logs"></div>`)[0];
         this.body_elem.append(this.logs_wrapper);
         this.logs_wrapper.append(this.logs_container)
         
+        this._new_log_elems = [];
         this._logs = {};
         this._num_logs = 0;
         this._default_logger_settings = {
@@ -7126,7 +7161,7 @@ export class LogViewerPanel extends Panel {
         this.i = 0;
     
         this.storage_name = `${this.panel_id}-log-viewer-settings`;
-        this.logs_container.classList.add("thin-scrollbar");
+        add_class(this.logs_container, "thin-scrollbar");
         $(this.logs_wrapper).resizable({handles:"s"});
         
         var create_toggle_button = (text)=>{
@@ -7164,95 +7199,91 @@ export class LogViewerPanel extends Panel {
         this.bar_wrapper.append(this.bar);
         this.logs_wrapper.append(this.bar_wrapper);
 
-        setTimeout(()=>this.load(), 0);
+        this.load();
+
+        this.on("update", ()=>{
+            toggle_class(this.show_dates_button, "toggled", this._logger_settings.show_dates);
+            toggle_class(this.show_times_button, "toggled", this._logger_settings.show_times);
+            for (var k in this.level_buttons) {
+                toggle_class(this.level_buttons[k], "toggled", this._logger_settings.level_filters[k]);
+            }
+            for (var log_elem of this._new_log_elems) {
+                var level = log_elem.dataset.level;
+                toggle_class(log_elem, "d-none", this._logger_settings.level_filters[level] === false);
+                toggle_class(log_elem.querySelector(".date"), "d-none", !this._logger_settings.show_dates);
+                toggle_class(log_elem.querySelector(".time"), "d-none", !this._logger_settings.show_times);
+            }
+        });
     }
 
-    update_logs(logs=null) {
-        var scroll_bottom = dom_utils.scroll_percent(this.logs_container)[1] == 1;
-        var log_elems = [];
-        if (logs) {
-            for (var log of Object.values(logs)) {
-                if (!log || !log.message) continue;
-                var d = new Date(log.ts);
-                var log_id = JSON.stringify([log.message, log.level]);
-                var log_elem;
-                if (this.last_log_elem && this.last_log_elem._log_id === log_id) {
-                    log_elem = this.last_log_elem;
-                } else {
-                    log_elem = $(`<p><span class="date"></span><span class="time"></span><span class="level"></span><span class="number"></span><span class="message"></span></p>`)[0];
-                    this.i++;
-                    if (!this._logs[log.level]) this._logs[log.level] = [];
-                    this._logs[log.level].push(log_elem);
-                }
-                log_elem.dataset.number = +(log_elem.dataset.number || 0) + 1;
-                log_elem.dataset.level = log.level;
-                log_elem.querySelector(".date").textContent = `[${d.toLocaleDateString("en-GB")}]`;
-                log_elem.querySelector(".time").textContent = `[${d.toLocaleTimeString("en-GB")}]`;
-                log_elem.querySelector(".number").textContent = (+log_elem.dataset.number > 1) ? log_elem.dataset.number : "";
-                var level_html;
-                var message = log_elem.querySelector(".message");
-                var message_html = "";
-                if (log.level === "error") {
-                    message.style["font-weight"] = "bold";
-                    level_html = `<i title="Error" class="fas fa-exclamation-circle"></i>`;
-                } else if (log.level === "warn") {
-                    level_html = `<i title="Warning" class="fas fa-exclamation-triangle"></i>`;
-                } else if (log.level === "debug") {
-                    level_html = `<i title="Warning" class="fas fa-bug"></i>`;
-                } else {
-                    level_html = `<i title="Info" class="fas fa-info-circle"></i>`;
-                }
-                message_html += log.message.replace(/\n/g,"<br>");
-                message.innerHTML = message_html;
-                log_elem._log_id = log_id
-                this.last_log_elem = log_elem;
-                log_elem.querySelector(".level").innerHTML = level_html;
-
-                this.logs_container.append(log_elem);
-
-                if (this._logs[log.level].length > logs_max_length) {
-                    this._logs[log.level].shift().remove();
-                }
-                log_elems.push(log_elem);
+    append_logs(logs) {
+        var scroll_bottom = dom_utils.scroll_y_percent(this.logs_container) == 1;
+        this._new_log_elems = [];
+        for (var log of Object.values(logs)) {
+            if (!log || !log.message) continue;
+            var d = new Date(log.ts);
+            var log_id = JSON.stringify([log.message, log.level]);
+            var log_elem;
+            if (this.last_log_elem && this.last_log_elem._log_id === log_id) {
+                log_elem = this.last_log_elem;
+            } else {
+                log_elem = $(`<p><span class="date"></span><span class="time"></span><span class="level"></span><span class="number"></span><span class="message"></span></p>`)[0];
+                this.i++;
+                if (!this._logs[log.level]) this._logs[log.level] = [];
+                this._logs[log.level].push(log_elem);
             }
-        }
-        if (log_elems.length === 0) log_elems = Array.from(this.logs_container.children);
+            log_elem.dataset.number = +(log_elem.dataset.number || 0) + 1;
+            log_elem.dataset.level = log.level;
+            log_elem.querySelector(".date").textContent = `[${d.toLocaleDateString("en-GB")}]`;
+            log_elem.querySelector(".time").textContent = `[${d.toLocaleTimeString("en-GB")}]`;
+            log_elem.querySelector(".number").textContent = (+log_elem.dataset.number > 1) ? log_elem.dataset.number : "";
+            var level_html;
+            var message = log_elem.querySelector(".message");
+            var message_html = "";
+            if (log.level === "error") {
+                set_style_property(message, "font-weight", "bold");
+                level_html = `<i title="Error" class="fas fa-exclamation-circle"></i>`;
+            } else if (log.level === "warn") {
+                level_html = `<i title="Warning" class="fas fa-exclamation-triangle"></i>`;
+            } else if (log.level === "debug") {
+                level_html = `<i title="Warning" class="fas fa-bug"></i>`;
+            } else {
+                level_html = `<i title="Info" class="fas fa-info-circle"></i>`;
+            }
+            message_html += log.message.replace(/\n/g,"<br>");
+            set_inner_html(message, message_html);
+            log_elem._log_id = log_id
+            this.last_log_elem = log_elem;
+            set_inner_html(log_elem.querySelector(".level"), level_html);
 
-        this.show_dates_button.classList.toggle("toggled", this._logger_settings.show_dates);
-        this.show_times_button.classList.toggle("toggled", this._logger_settings.show_times);
-        for (var k in this.level_buttons) {
-            this.level_buttons[k].classList.toggle("toggled", this._logger_settings.level_filters[k]);
-        }
+            this.logs_container.append(log_elem);
 
-        for (var log_elem of log_elems) {
-            var level = log_elem.dataset.level
-            log_elem.classList.toggle("d-none", this._logger_settings.level_filters[level] === false);
-            log_elem.querySelector(".date").classList.toggle("d-none", !this._logger_settings.show_dates);
-            log_elem.querySelector(".time").classList.toggle("d-none", !this._logger_settings.show_times);
+            if (this._logs[log.level].length > logs_max_length) {
+                this._logs[log.level].shift().remove();
+            }
+            this._new_log_elems.push(log_elem);
         }
-
-        if (scroll_bottom) {
-            dom_utils.scroll_percent(this.logs_container, [0,1]);
-        }
+        if (scroll_bottom) dom_utils.scroll_y_percent(this.logs_container, 1);
+        this.update_next_frame();
     }
 
     save() {
         app.settings.set(this.storage_name, this._logger_settings);
-        this.update_logs();
+        this.update_next_frame();
     }
 
     load() {
         this._logger_settings = utils.deep_copy(Object.assign({}, this._default_logger_settings, app.settings.get(this.storage_name)));
         // console.log(this.storage_name, this._logger_settings);
-        this.update_logs();
+        this.update_next_frame();
     }
 
     empty() {
-        this.logs_container.innerHTML = "";
+        set_inner_html(this.logs_container, "");
         utils.clear(this._logs);
         this.last_log_elem = null;
         this._num_logs = 0;
-        this.update_logs();
+        this.update_next_frame();
     }
 }
 
@@ -7260,16 +7291,14 @@ export class EncoderPanel extends Panel {
     constructor() {
         super("Encoder");
 
-        this.debounced_update_chart = utils.debounce(this.update_chart, 0);
-
         var button_group = $(`<div class="buttons border-group">`)[0];
         button_group.append($(`<button class="show_encoder_info" title="Toggle Encoder Info"><i class="fas fa-info-circle"></i></button>`)[0]);
         button_group.append($(`<button class="pause_encoder" title="Toggle Pause"><i class="fas fa-pause"></i></button>`)[0]);
         
         this.header_elem.append(button_group);
 
-        this.body_elem.classList.add("chart-wrapper");
-        this.body_elem.classList.add("no-padding");
+        add_class(this.body_elem, "chart-wrapper");
+        add_class(this.body_elem, "no-padding");
         var chart_wrapper =
         $(`<div class="chart-wrapper">
             <div class="chart-inner">
@@ -7357,20 +7386,25 @@ export class EncoderPanel extends Panel {
         });
 
         this.on("update", ()=>{
-            this.update_chart();
+            this.#update_chart();
         });
     }
 
-    update_chart() {
+    #update_chart() {
         if (app.settings.get("pause_encoder") && this.chart.data.datasets.length) return;
+
+        var raw_data = app.$._session.stream.speed_history;
+        var _hash = JSON.stringify(raw_data);
+
+        if (this._hash === _hash) return;
+        this._hash = _hash;
+        
         var max_window = 60*1000;
         var datasets = this.chart.data.datasets;
         var info_rows = [];
-        var speed_history = app.$._session.stream.speed_history;
-        if (!speed_history) speed_history = EMPTY_OBJECT;
         const annotations = {};
 
-        for (var [g,values] of Object.entries(speed_history)) {
+        for (var [g,values] of Object.entries(raw_data)) {
             var dataset = datasets.find(d=>d.label==g);
             if (!dataset) {
                 dataset = {
@@ -7413,7 +7447,7 @@ export class EncoderPanel extends Panel {
             };
         }
 
-        datasets = datasets.filter(d=>speed_history[d.label]);
+        datasets = datasets.filter(d=>raw_data[d.label]);
         this.chart.data.datasets = datasets;
         this.chart.options.plugins.annotation = { annotations };
 
@@ -7421,7 +7455,7 @@ export class EncoderPanel extends Panel {
         // this.chart.options.plugins.annotation = { annotations: { annotation } };
         
         var table = dom_utils.build_table(info_rows);
-        dom_utils.set_children(this.chart_info_elem, table ? [table] : []);
+        set_children(this.chart_info_elem, table ? [table] : []);
         var min_x = Math.max(...datasets.map(ds=>Math.min(...ds.data.map(d=>d.x))));
         var max_x = Math.max(...datasets.map(ds=>Math.max(...ds.data.map(d=>d.x))));
         /* datasets.forEach(ds=>{
@@ -7432,11 +7466,6 @@ export class EncoderPanel extends Panel {
         this.chart.config.options.scales.x.max = Math.max(max_x, max_window);
         this.chart.update();
     }
-
-    // reset_chart(){
-    //     utils.clear(this.chart.data.datasets);
-    //     this.debounced_update_chart();
-    // }
 }
 
 export const PLAYLIST_ZOOM_MIN = 0.01;
@@ -7452,7 +7481,7 @@ export class PlaylistPanel extends Panel {
     set timeline_mode(value) {
         this.timeline_mode_select.value = value;
         this.sortables.forEach(s=>s.orientation = this.orientation);
-        this.update();
+        this.update_next_frame();
     }
     get selection() { return this.active_sortable.get_selection(); }
 
@@ -7479,7 +7508,7 @@ export class PlaylistPanel extends Panel {
         dom_utils.empty(this.highlights_elem);
         this.sortables.forEach(s=>s.destroy());
 
-        this.timeline_container_elem.classList.toggle("single-track", num_tracks == 1);
+        toggle_class(this.timeline_container_elem, "single-track", num_tracks == 1);
 
         this.sortables = tracks.map((t,i)=>{
             // var playlist_top = $(`<div class="playlist-top" title="${utils.capitalize(t.name)}">${t.icon}</div>`)[0];
@@ -7488,7 +7517,7 @@ export class PlaylistPanel extends Panel {
             this.tracks_elem.append(playlist_elem);
 
             var playlist_header = $(`<div>${t.header}</div>`)[0];
-            playlist_header.title = t.title || t.header;
+            set_attribute(playlist_header, "title", t.title || t.header);
             playlist_header.onclick = ()=>sortable.set_active_sortable_in_group();
             this.headers_elem.append(playlist_header);
 
@@ -7506,17 +7535,17 @@ export class PlaylistPanel extends Panel {
             });
             sortable.orientation = this.orientation;
             sortable.el.addEventListener("select", (evt)=>{
-                this.update_info();
+                this.update_next_frame();
             });
             sortable.el.addEventListener("unchoose", (e)=>{
                 this.scroll_into_view(e.item)
             });
             sortable.el.addEventListener("deselect", (evt)=>{
-                this.update_info();
+                this.update_next_frame();
             });
             sortable.el.addEventListener("active-change", (e)=>{
-                playlist_header.classList.toggle("active", e.active);
-                playlist_highlight.classList.toggle("active", e.active);
+                toggle_class(playlist_header, "active", e.active);
+                toggle_class(playlist_highlight, "active", e.active);
             });
             sortable.el.addEventListener("end", (evt)=>{
                 this.sync();
@@ -7573,7 +7602,6 @@ export class PlaylistPanel extends Panel {
         this._current;
         this._queued_selection_ids = [];
         this.clipping = null;
-        this.rebuild = dom_utils.debounce_next_frame(()=>this.__rebuild());
         // this.debounced_update_info = dom_utils.debounce_next_frame(()=>this.update_info());
         // this.debounced_update_view = dom_utils.debounce_next_frame(()=>this.update_view());
 
@@ -7601,13 +7629,13 @@ export class PlaylistPanel extends Panel {
             </div>
             <div class="buttons border-group">
                 <button class="playlist_sticky" title="Toggle Sticky Mode"><i class="fas fa-thumbtack"></i></button>
-                <button class="playlist_show_scheduled_times" title="Toggle Scheduled Times"><i class="far fa-clock"></i></button>
+                <!-- <button class="playlist_show_scheduled_times" title="Toggle Scheduled Times"><i class="far fa-clock"></i></button> -->
                 <button class="wrap_playlist_items" title="Toggle Line Wrap"><i class="fas fa-level-down-alt"></i></button>
                 <button class="show_extra_playlist_icons" title="Toggle Media Info Icons"><i class="far fa-play-circle"></i></button>
             </div>
         </div>`;
 
-        this.body_elem.innerHTML = 
+        this.body_elem.innerHTML =
             `<div class="playlist-info-wrapper">
                 <button class="back"><i class="fas fa-arrow-left"></i></button>
                 <div class="playlist-path">
@@ -7643,8 +7671,8 @@ export class PlaylistPanel extends Panel {
                     <button id="pl-add-other" title="Other..."><i class="fas fa-ellipsis-h"></i></button>
                 </div>
             </div>`
-        this.body_elem.classList.add("playlist-body");
-        this.elem.classList.add("playlist-wrapper");
+        add_class(this.body_elem, "playlist-body");
+        add_class(this.elem, "playlist-wrapper");
         
         this.zoom = 1.0;
         /** @type {ResponsiveSortable[]} */
@@ -7659,7 +7687,7 @@ export class PlaylistPanel extends Panel {
         this.ticks_elem = this.elem.querySelector(".timeline-ticks");
         this.headers_elem = this.elem.querySelector(".timeline-headers");
         this.overlay_elem = this.elem.querySelector(".timeline-overlay");
-        this.ticks_elem.title = `Place Timeline Cursor`;
+        set_attribute(this.ticks_elem, "title", `Place Timeline Cursor`);
         
         this.playhead_elem = this.elem.querySelector(".timeline-playhead");
         this.cursor_elem = this.elem.querySelector(".timeline-cursor");
@@ -7699,6 +7727,14 @@ export class PlaylistPanel extends Panel {
         
         this.playlist_back_button.addEventListener("click", ()=>{
             this.back();
+        })
+
+        this.timeline_container_elem.addEventListener("dblclick", (e) => {
+            var item_el = e.target.closest(".item");
+            if (!item_el) return;
+            var item = app.$._session.playlist[item_el.dataset.id];
+            app.playlist_play(item);
+            // elem.ondblclick = ()=>app.playlist_play(item);
         })
 
         this.timeline_container_elem.addEventListener("contextmenu", (e) => {
@@ -7957,7 +7993,7 @@ export class PlaylistPanel extends Panel {
                 visible: (items)=>items.length>0 && this.timeline_mode,
                 click: (items)=>{
                     this.cursor_position = Math.min(...items.map(i=>i._userdata.timeline_start));
-                    this.update_view();
+                    this.#update_view();
                 },
                 mode: PLAYLIST_VIEW.TIMELINE,
             }),
@@ -7968,11 +8004,11 @@ export class PlaylistPanel extends Panel {
                 visible: (items)=>items.length>0 && this.timeline_mode,
                 click: (items)=>{
                     this.cursor_position = Math.max(...items.map(i=>i._userdata.timeline_end));
-                    this.update_view();
+                    this.#update_view();
                 },
                 mode: PLAYLIST_VIEW.TIMELINE,
             }),
-            copy: new PlaylistCommand({
+            clipboard_copy: new PlaylistCommand({
                 name: "Copy",
                 description: "Copy Selection to Clipboard",
                 icon: `<i class="fas fa-copy"></i>`,
@@ -7982,7 +8018,7 @@ export class PlaylistPanel extends Panel {
                 },
                 shortcut: "Ctrl+C",
             }),
-            cut: new PlaylistCommand({
+            clipboard_cut: new PlaylistCommand({
                 name: "Cut",
                 description: "Cut Selection to Clipboard",
                 icon: `<i class="fas fa-cut"></i>`,
@@ -7992,15 +8028,23 @@ export class PlaylistPanel extends Panel {
                 },
                 shortcut: "Ctrl+X",
             }),
-            paste: new PlaylistCommand({
+            clipboard_paste: new PlaylistCommand({
                 name: "Paste from Clipboard",
                 icon: `<i class="fas fa-paste"></i>`,
                 // visible: (items)=>true,
-                disabled: (items)=>!this.clipboard,
+                visible: (items)=>!!this.clipboard,
                 click: (items)=>{
-                    this.paste_clipboard();
+                    this.clipboard_paste();
                 },
                 shortcut: "Ctrl+V",
+            }),
+            clipboard_clear: new PlaylistCommand({
+                name: "Clear Clipboard",
+                icon: `<i class="far fa-clipboard"></i>`,
+                visible: (items)=>!!this.clipboard,
+                click: (items)=>{
+                    this.clipboard_clear();
+                },
             }),
             move_to_top: new PlaylistCommand({
                 name: "Move to Start",
@@ -8171,10 +8215,10 @@ export class PlaylistPanel extends Panel {
                         call: ["session", "update_values"],
                         arguments: items.map(i=>[`playlist/${i.id}/props/color`, v])
                     });
-                    app.playlist.rebuild();
+                    app.$._push([`sessions/${app.$._session.id}/playlist/${i.id}/props/color`, v]);
                 },
                 render:(items, elem)=>{
-                    elem.classList.add("color");
+                    add_class(elem, "color");
                     var colors = new Set(items.map(i=>i.props.color||"none"));
                     var inner = colors.has(color_key) ? ((colors.size == 1) ? `✓` : "-") : "";
                     var el = $(`<div class="color" style="background: ${color}; outline: 1px solid #ddd; text-align: center;">${inner}</div>`)[0];
@@ -8203,7 +8247,7 @@ export class PlaylistPanel extends Panel {
             this.inc_timeline_zoom(d, e);
         });
 
-        this.tracks_elem.addEventListener("scroll", ()=>this.update_view());
+        this.tracks_elem.addEventListener("scroll", ()=>this.#update_view());
 
         ondrag(this.timeline_container_elem, (e)=>{
             if (e.button == 0 && e.altKey) {
@@ -8236,15 +8280,10 @@ export class PlaylistPanel extends Panel {
         }
 
         // this.ticks_elem.style.cursor = "none" // "text";
-        $(this.ticks_elem).on("click", (e)=>{
+        this.ticks_elem.addEventListener("click", (e)=>{
             var data = this.ticks_bar.parse_event(e);
             this.cursor_position = data.time;
-            this.update_view();
-        });
-
-        var on_resize;
-        window.addEventListener("resize", on_resize = ()=>{
-            this.update_view();
+            this.#update_view();
         });
         
         window.addEventListener("keydown", this.on_keydown = (e)=>{
@@ -8253,6 +8292,12 @@ export class PlaylistPanel extends Panel {
             }
         }, true);
 
+        var on_scroll;
+        // window.addEventListener("resize", ()=>this.#update_position());
+        app.main_elem.addEventListener("scroll", on_scroll=()=>this.#update_position());
+        var resize_observer = new ResizeObserver(()=>this.#update_position());
+        this.on("register", ()=>resize_observer.observe(this.elem.parentElement));
+
         this.on("update", ()=>{
             var current = this.current;
             var current_ud = current._userdata;
@@ -8260,8 +8305,8 @@ export class PlaylistPanel extends Panel {
             var timeline_duration = current_ud.timeline_duration;
             var self_and_parents = [app.$._session._current_playing_item, ...app.$._session._current_playing_item._parents];
             var a_index = self_and_parents.indexOf(current);
-            var timeline_time = utils.sum(self_and_parents.slice(0, a_index).map(item=>utils.try(()=>item._userdata.timeline_start)||0)) + Math.min(app.get_current_time_pos(), app.$._session._current_playing_item._userdata.timeline_duration);
-            var time = utils.sum(self_and_parents.slice(0, a_index).map(item=>utils.try(()=>item._userdata.start)||0)) + Math.min(app.get_current_time_pos(), app.$._session._current_playing_item._userdata.duration);
+            var timeline_time = utils.sum(self_and_parents.slice(0, a_index).map(item=>utils.try(()=>item._userdata.timeline_start)||0)) + Math.min(app.$._session._current_time, app.$._session._current_playing_item._userdata.timeline_duration);
+            var time = utils.sum(self_and_parents.slice(0, a_index).map(item=>utils.try(()=>item._userdata.start)||0)) + Math.min(app.$._session._current_time, app.$._session._current_playing_item._userdata.duration);
     
             this.time = timeline_time;
             this.duration = timeline_duration;
@@ -8274,63 +8319,58 @@ export class PlaylistPanel extends Panel {
     
             this.playlist_back_button.disabled = !current._parent;
             
-            dom_utils.set_inner_html(this.playlist_time_total_elem, `(${utils.seconds_to_timespan_str(duration)})`);
-            dom_utils.set_inner_html(this.playlist_time_left_elem, `[-${utils.seconds_to_timespan_str(duration-time)}]`);
+            set_inner_html(this.playlist_time_total_elem, `(${utils.seconds_to_timespan_str(duration)})`);
+            set_inner_html(this.playlist_time_left_elem, `[-${utils.seconds_to_timespan_str(duration-time)}]`);
     
             this.playlist_time_left_elem.style.display = current === app.$._session.playlist["0"] ? "" : "none"
             
             app.build_playlist_breadcrumbs(this.playlist_path_text, current, true);
-    
-            this.update_view();
+            
+            this.#update_position();
+            this.#update_view();
+            this.#rebuild_items();
+            this.#update_info();
         })
 
         this.on("destroy", ()=>{
-            window.removeEventListener("resize", on_resize);
+            resize_observer.disconnect();
+            app.main_elem.removeEventListener("scroll", on_scroll);
             this.sortables.forEach(s=>s.destroy());
             this.sortables = [];
         });
-        
-        this.update_position_next_frame = dom_utils.debounce_next_frame(()=>this.update_position());
 
         this.set_tracks(1);
     }
 
-    async __rebuild() {
-        this.update();
-
-        var d0 = Date.now();
-        
+    async #rebuild_items() {
         await Promise.all(this.sortables.map(s=>s.last_drag));
 
         let is_running = app.$._session._is_running;
         
         var current_playlist = this.current;
-        /** @type {PlaylistItem} */
-        // var last_playlist = this.last_playlist_on_rebuild || NULL_PLAYLIST_ITEM;
-        var current_item = app.$._session._current_playing_item;
-        var current_parents = new Set(current_item._parents);
         var current_playlist_tracks = current_playlist._tracks;
+        // var last_playlist = this.last_playlist_on_rebuild || NULL_PLAYLIST_ITEM;
+        /** @type {PlaylistItem} */
+        var current_item = app.$._session._current_playing_item;
+        var current_item_parents = new Set(current_item._parents);
         
-        var day_seconds = 60 * 60 * 24;
         var start_time = null;
-        var now = (Date.now()/1000); // - (new Date().getTimezoneOffset()*60);
-        if (app.settings.get("playlist_show_scheduled_times")) {
-            if (is_running) {
-                start_time = (now - current_item._userdata.start - app.get_current_time_pos()) * 1000;
-            } else {
-                if (app.$._session.schedule_start_time) {
-                    start_time = +new Date(app.$._session.schedule_start_time);
-                } else {
-                    var d = app.settings.get("schedule_generator") || EMPTY_OBJECT;
-                    start_time = ((Math.floor(now/day_seconds)*day_seconds) + utils.timespan_str_to_seconds(d.start_time || "00:00", "hh:mm")) * 1000;
-                }
-                start_time += utils.sum([current_playlist, ...current_playlist._parents].map(item=>item._userdata && item._userdata.start || 0)) * 1000;
-            }
-            // console.log(new Date(start_time));
-        }
+        // var now = Date.now();
+        // /** @param {PlaylistItem} item */
+        // var calculate_start_time = (item)=>{
+        //     var t = (utils.sum([item, ...item._get_parents()].map(i=>i._userdata.start || 0))) * 1000;
+        //     if (item === current_item) t -= app.$._session._current_time * 1000;
+        //     return t;
+        // }
+        // if (app.settings.get("playlist_show_scheduled_times")) {
+        //     if (!is_running && app.$._session.schedule_start_time) {
+        //         start_time = +new Date(app.$._session.schedule_start_time);
+        //     } else {
+        //         // start_time = calculate_start_time(current_item)
+        //     }
+        // }
 
         this.set_tracks(current_playlist_tracks.length, current_playlist && current_playlist.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK);
-
         var new_items = [];
 
         this.sortables.forEach((sortable,i)=>{
@@ -8339,21 +8379,17 @@ export class PlaylistPanel extends Panel {
             dom_utils.rebuild(sortable.el, items, {
                 add: (item, elem, index)=>{
                     if (!elem) {
-                        // console.log(`added ${item.id}`)
                         new_items.push(item);
                         elem = $(`<li class="item"><div><div class="clips"></div><div class="front"><span class="play-icons"></span><span class="icons"></span><span class="filename"></span><span class="extra"></span><span class="badges"></span><div class="duration"></div></div></div></li>`)[0];
                     }
-                    
-                    // if (item._hash == elem._hash) return;
-                    // elem._hash = item._hash;
-
                     var ud = item._userdata;
                     var is_current_item = item.id == current_item.id;
-                    var is_current_ancestor = current_parents.has(item);
+                    var is_current_ancestor = current_item_parents.has(item);
                     var is_cutting = !!(this.clipboard && this.clipboard.cutting && this.clipboard.items_set.has(item));
                     
                     var _hash = JSON.stringify([index, item, ud, is_current_item, is_current_ancestor, is_cutting, start_time, is_running]);
                     if (_hash === elem._hash) return;
+
                     elem._hash = _hash;
                     elem._item = item;
                     
@@ -8371,7 +8407,7 @@ export class PlaylistPanel extends Panel {
                     let background_color, outline_color;
                     let badges = {};
     
-                    dom_utils.toggle_class(elem, "cutting", is_cutting);
+                    toggle_class(elem, "cutting", is_cutting);
                     var is_upload_dummy = item.filename.startsWith("upload://");
                     
                     var play_icons_elem = elem.querySelector(".play-icons");
@@ -8407,9 +8443,9 @@ export class PlaylistPanel extends Panel {
                         blocks = blocks.filter(b=>b.width>0.0001);
                         if (blocks.length == 1 && blocks[0].width == 1) blocks = [];
                     }
-                    clips_elem.innerHTML = blocks.map(b=>`<div style="left:${b.x.toFixed(5)*100}%;width:${b.width.toFixed(5)*100}%;"></div>`).join("");
-                    clips_elem.classList.toggle("repeats", !!(ud.clipping && ud.clipping.loops > 1))
-                    
+                    let clips_html = blocks.map(b=>`<div style="left:${b.x.toFixed(5)*100}%;width:${b.width.toFixed(5)*100}%;"></div>`).join("");
+                    set_inner_html(clips_elem, clips_html);
+                    toggle_class(clips_elem, "repeats", !!(ud.clipping && ud.clipping.loops > 1))
                     
                     if (ud.is_processing) {
                         play_icons.push(`<i class="fas fa-sync fa-spin"></i>`);
@@ -8479,7 +8515,7 @@ export class PlaylistPanel extends Panel {
                     
                     if (media_info.downloadable && item.filename.match(/^https?:/)) {
                         let icon = $(`<i class="fas fa-globe"></i>`)[0]; //  style="color:cornflowerblue"
-                        icon.title = item.filename;
+                        set_attribute(icon, "title", item.filename);
                         main_icon = icon.outerHTML;
                         badges["web"] = new URL(item.filename).hostname.replace(/^www\./, "");
                     }
@@ -8532,22 +8568,22 @@ export class PlaylistPanel extends Panel {
                             let icon = extra_elem.querySelector(`.fas`) || $(`<i class="fas"></i>`)[0];
                             
                             let p = d.total ? ( d.bytes / d.total) : 0;
-                            bar.title = `${utils.capitalize(t)}ing [${utils.format_bytes(d.bytes || 0)} / ${utils.format_bytes(d.total || 0)}]`;
+                            set_attribute(bar, "title", `${utils.capitalize(t)}ing [${utils.format_bytes(d.bytes || 0)} / ${utils.format_bytes(d.total || 0)}]`);
 
                             let percent_text = [];
                             if (d.num_stages) percent_text.push(`${d.stage+1}/${d.num_stages}`);
                             percent_text.push(`${(p * 100).toFixed(2)}%`);
 
-                            bar.style.setProperty("--progress",`${p*100}%`);
-                            bar.querySelector(".percent").innerHTML = percent_text.join(" | ");
-                            bar.querySelector(".speed").innerHTML = `${utils.format_bytes(d.speed || 0)}ps`;
+                            set_style_property(bar, "--progress",`${p*100}%`);
+                            set_inner_html(bar.querySelector(".percent"), percent_text.join(" | "));
+                            set_inner_html(bar.querySelector(".speed"), `${utils.format_bytes(d.speed || 0)}ps`);
                             icon.className = `fas fa-${t}`;
                             extra_elem_children = [icon, bar];
                         }
-                        dom_utils.set_children(extra_elem, extra_elem_children);
+                        set_children(extra_elem, extra_elem_children);
                     }
 
-                    dom_utils.set_inner_html(badges_elem, Object.entries(badges).map(([k,v])=>{
+                    set_inner_html(badges_elem, Object.entries(badges).map(([k,v])=>{
                         var parts = v.split(" ");
                         parts[0] = parts[0].toUpperCase();
                         return `<i class="badge" data-badge-type="${k}">${parts.join(" ")}</i>`
@@ -8557,17 +8593,26 @@ export class PlaylistPanel extends Panel {
                         icons.push(`<i class="fas fa-wrench"></i>`);
                     }
     
-                    var duration_str;
-                    let _start_time = start_time ? (start_time + ud.start * 1000) : 0;
-                    if (_start_time >= Date.now() || (start_time && is_current_item)) {
-                        let s = new Date(_start_time);
-                        let t_str = `${String(s.getHours()).padStart(2,"0")}:${String(s.getMinutes()).padStart(2,"0")}`;
-                        duration_str = `<i class="far fa-clock" style="padding-right:3px"></i><span>${t_str}</span>`;
-                    } else {
+                    var duration_str = null;
+                    // let _start_time = start_time ? (start_time + ud.start * 1000) : 0;
+                    // if (_start_time >= now) {
+                    //     let s = new Date(_start_time);
+                    //     let t_str = `${String(s.getHours()).padStart(2,"0")}:${String(s.getMinutes()).padStart(2,"0")}`;
+                    //     duration_str = `<i class="far fa-clock" style="padding-right:3px"></i><span>${t_str}</span>`;
+                    // }
+                    // if (start_time) {
+                    //     let _start_time = (calculate_start_time(item) - calculate_start_time(current_item));
+                    //     // if (_start_time >= start_time) {
+                    //     let s = new Date(_start_time);
+                    //     let t_str = `${String(s.getHours()).padStart(2,"0")}:${String(s.getMinutes()).padStart(2,"0")}`;
+                    //     duration_str = `<i class="far fa-clock" style="padding-right:3px"></i><span>${t_str}</span>`;
+                    //     // }
+                    // }
+                    if (!duration_str) {
                         if (ud.duration || ud.media_duration) duration_str = utils.seconds_to_timespan_str(ud.duration || ud.children_duration, "h?:mm:ss");
                     }
 
-                    duration_elem.innerHTML = duration_str || "  -  ";
+                    set_inner_html(duration_elem, duration_str || "  -  ");
                     
                     if (problems.length) {
                         var problem_groups = utils.group_by(problems, p=>p.level);
@@ -8577,28 +8622,25 @@ export class PlaylistPanel extends Panel {
                         else if (problem_groups["1"]) err_icon_html = `<i class="fas fa-question-circle" style="color:#6495ED;"></i>`;
                         if (err_icon_html) {
                             let icon = $(err_icon_html)[0];
-                            icon.title = problems.map(p=>" - "+p.text).join("\n");
+                            set_attribute(icon, "title", problems.map(p=>" - "+p.text).join("\n"));
                             icons.push(icon.outerHTML);
                         }
                     }
     
-                    dom_utils.set_inner_html(play_icons_elem, play_icons.join(""));
+                    set_inner_html(play_icons_elem, play_icons.join(""));
 
                     // if (!main_icon) main_icon = `<i class="fas fa-file"></i>`;
-                    dom_utils.set_inner_html(icons_elem, [main_icon, ...icons].join(""));
+                    set_inner_html(icons_elem, [main_icon, ...icons].join(""));
     
-                    filename_elem.innerHTML = filename_parts.join(" ");
+                    set_inner_html(filename_elem, filename_parts.join(" "));
     
-                    elem.style.setProperty("--duration", ud.timeline_duration);
-                    elem.style.setProperty("--start", ud.timeline_start);
-                    elem.style.setProperty("--end", ud.timeline_end);
-    
-                    elem.title = title_parts.join(" ");
-                    elem.classList.toggle("current", is_current_item);
-                    elem.style.setProperty("--background-color", background_color || "");
-                    elem.style.setProperty("--outline-color", outline_color || "");
-    
-                    elem.ondblclick = ()=>app.playlist_play(item);
+                    set_style_property(elem, "--duration", ud.timeline_duration);
+                    set_style_property(elem, "--start", ud.timeline_start);
+                    set_style_property(elem, "--end", ud.timeline_end);
+                    set_style_property(elem, "--background-color", background_color || "");
+                    set_style_property(elem, "--outline-color", outline_color || "");
+                    set_attribute(elem, "title", title_parts.join(" "));
+                    toggle_class(elem, "current", is_current_item);
     
                     return elem;
                 },
@@ -8611,37 +8653,6 @@ export class PlaylistPanel extends Panel {
                 }
             });
         });
-
-        console.debug(`rebuild_playlist ${(Date.now()-d0)}ms`);
-
-        // var last_session = last_playlist.session;
-        // var current_session = current_playlist.session;
-
-        // var selection = [];
-        // if (last_session === current_session) {
-        //     if (last_playlist === current_playlist) {
-        //         selection = [...new_items]
-        //     } else {
-        //         if (last_playlist.parent === current_playlist) {
-        //             selection = [last_playlist];
-        //         } else {
-        //             var first = this.get_datas()[0];
-        //             if (first) selection = [first];
-        //         }
-        //         this.reset_scroll();
-        //     }
-        //     if (selection.length) {
-        //         this.set_selection(selection);
-        //     }
-        // } else {
-        //     this.set_selection([]);
-        // }
-
-        // this.last_playlist_on_rebuild = current_playlist;
-        
-        this.update_info();
-        
-        this.emit("rebuild");
     }
 
 
@@ -8732,7 +8743,7 @@ export class PlaylistPanel extends Panel {
             [c.download, c.cancel_download, c.cancel_upload],
             [c.edit_playlist, c.breakdown_playlist, c.add_to_playlist],
             [/* c.timeline_cursor_play,*/ c.slice_at_timeline_cursor, c.timeline_cursor_to_start, c.timeline_cursor_to_end],
-            [c.copy, c.cut, c.paste],
+            [c.clipboard_copy, c.clipboard_cut, c.clipboard_paste, c.clipboard_clear],
             [c.move_to_top, c.move_up, c.move_down, c.move_to_bottom],
         ];
         if (items.length) {
@@ -8768,10 +8779,10 @@ export class PlaylistPanel extends Panel {
         var all_items = items.map(i=>[i, ...i._descendents]).flat().map(i=>i._copy());
         var items_set = new Set(items);
         this.clipboard = { items, items_set, all_items, cutting };
-        this.rebuild();
+        this.update_next_frame();
     }
 
-    async paste_clipboard() {
+    async clipboard_paste() {
         if (!this.clipboard) return;
         var clipboard = this.clipboard;
         if (clipboard.cutting) {
@@ -8782,6 +8793,12 @@ export class PlaylistPanel extends Panel {
         }
     }
 
+    async clipboard_clear() {
+        this.clipboard = null;
+        this.update();
+    }
+
+    /** @param {PlaylistItem} item */
     rename(item) {
         var el = this.get_element(item);
 
@@ -8790,10 +8807,10 @@ export class PlaylistPanel extends Panel {
 
         var filename = el.querySelector(".filename");
         var old_name = filename.innerText;
-        var default_name = item.get_pretty_name({label:false});
+        var default_name = item._get_pretty_name({label:false});
 
         filename.contentEditable = true;
-        filename.innerHTML = item.props.label || default_name;
+        set_inner_html(filename, item.props.label || default_name);
         filename.focus();
         window.getSelection().selectAllChildren(filename);
         var blur_listener, keydown_listener;
@@ -8810,7 +8827,7 @@ export class PlaylistPanel extends Panel {
             filename.removeEventListener("keydown", keydown_listener);
             var new_name = filename.innerText;
             if (!new_name || new_name == default_name) new_name = null;
-            filename.innerHTML = `<span>${new_name || default_name}</span>`;
+            set_inner_html(filename, `<span>${new_name || default_name}</span>`);
 
             if (old_name != new_name) {
                 app.request({
@@ -8840,6 +8857,7 @@ export class PlaylistPanel extends Panel {
         this.set_timeline_view(null, this.time || 0);
     }
 
+    /** @param {PlaylistItem[]} items */
     set_selection(items) {
         if (!Array.isArray(items)) items = [items];
         this.sortables.forEach(s=>s.deselect_all());
@@ -8853,6 +8871,7 @@ export class PlaylistPanel extends Panel {
         this._queued_selection_ids.push(ids);
     } */
 
+    /** @param {PlaylistItem} item */
     get_element(item) {
         var id;
         if (item instanceof Element) id = item.dataset.id;
@@ -8870,10 +8889,10 @@ export class PlaylistPanel extends Panel {
         return this.get_selection()[0];
     }
     get_datas() {
-        return this.get_elements().map(e=>app.get_playlist_item(e.dataset.id)).filter(i=>i);
+        return this.get_elements().map(e=>app.$._session.playlist[e.dataset.id]).filter(i=>i);
     }
     get_selection_datas() {
-        return this.get_selection().map(e=>app.get_playlist_item(e.dataset.id)).filter(i=>i);
+        return this.get_selection().map(e=>app.$._session.playlist[e.dataset.id]).filter(i=>i);
     }
     get_selection_indices() {
         return this.get_selection().map(e=>dom_utils.get_index(e));
@@ -8889,16 +8908,16 @@ export class PlaylistPanel extends Panel {
         this.sortables.forEach(s=>s.forget_last_active());
         this.current = item;
         this.cursor_position = null;
-        this.rebuild();
+        this.update_next_frame();
         item.__private.hash_on_open = item._calculate_contents_hash()
-        this.once("rebuild", ()=>{
+        this.once("update", ()=>{
             if (this.timeline_mode && this.clipping) this.set_timeline_view([this.clipping.start, this.clipping.end], this.time);
             else this.scroll_into_view(this.get_elements()[0]);
             if (selection) this.set_selection(selection);
         })
     }
     
-    update_info() {
+    #update_info() {
         var selected_items = this.get_selection_datas();
         var len = this.get_elements().length;
         var info = {};
@@ -8910,9 +8929,9 @@ export class PlaylistPanel extends Panel {
         if (this.clipboard) {
             info["Clipboard"] = `${this.clipboard.cutting ? `<i class="fas fa-scissors"></i>` : `<i class="far fa-clipboard"></i>`} [${this.clipboard.items.length}]`;
         }
-        this.playlist_info_text.innerHTML = Object.entries(info).map(([name,text])=>`<span title="${name}">${text}</span>`).join("");
-        this.toggle_selection_button.innerHTML = `${selected_items.length?"Deselect":"Select"} All`;
-        this.toggle_selection_button.disabled = len == 0;
+        set_inner_html(this.playlist_info_text, Object.entries(info).map(([name,text])=>`<span title="${name}">${text}</span>`).join(""));
+        set_inner_html(this.toggle_selection_button, `${selected_items.length?"Deselect":"Select"} All`);
+        toggle_attribute(this.toggle_selection_button, "disabled", len == 0);
         this.toggle_selection_button.onclick = ()=>{
             if (selected_items.length) this.active_sortable.deselect_all();
             else this.active_sortable.select_all();
@@ -8920,20 +8939,7 @@ export class PlaylistPanel extends Panel {
         };
     };
 
-    setup_resize() {
-        var on_scroll;
-        var resize_observer = new ResizeObserver(()=>this.update_position());
-        app.main_elem.addEventListener("scroll", on_scroll=()=>this.update_position());
-        var parent = this.elem.parentElement;
-        resize_observer.observe(parent);
-
-        this.on("destroy", ()=>{
-            resize_observer.disconnect();
-            app.main_elem.removeEventListener("scroll", on_scroll);
-        });
-    }
-
-    update_position() {
+    #update_position() {
         if (!this.base_min_height) {
             var c = window.getComputedStyle(this.elem);
             this.base_min_height = parseFloat(c.getPropertyValue("--min-height"));
@@ -8973,25 +8979,25 @@ export class PlaylistPanel extends Panel {
         });
     };
 
-    update_view() {
-
+    #update_view() {
         if (this.timeline_mode) {
             this.view_start = this.tracks_elem.scrollLeft / this.zoom;
             this.view_duration = this.tracks_elem.clientWidth / this.zoom;
             this.view_end = this.view_start + this.view_duration;
 
             if (this.clipping) {
-                this.limits_elem.innerHTML = [
+                let limits_html = [
                     `<div style="left:0; width:${Math.max(0,(this.clipping.start - this.view_start)/this.view_duration*100).toFixed(3)}%"></div>`,
                     `<div style="right:0; width:${Math.max(0,(this.view_end - this.clipping.end)/this.view_duration*100).toFixed(3)}%"></div>`,
                 ].join("");
+                set_inner_html(this.limits_elem, limits_html);
             }
             
             this.limits_elem.style.display = this.clipping ? "" : "none";
 
             // var max_width = Math.max(...this.sortables.map(s=>s.el.offsetWidth));
-            // this.elem.style.setProperty("--timeline-width", `${max_width}px`);
-            this.timeline_container_elem.style.setProperty("--timeline-width", `${this.duration * this.zoom}px`);
+            // set_style_property(this.elem, "--timeline-width", `${max_width}px`);
+            set_style_property(this.timeline_container_elem, "--timeline-width", `${this.duration * this.zoom}px`)
 
             this.ticks_bar.update(this.view_start, this.view_end);
 
@@ -9008,7 +9014,7 @@ export class PlaylistPanel extends Panel {
         }
 
         this.scrollbar_width = Math.max(...get_scrollbar_width(this.tracks_elem));
-        this.timeline_container_elem.style.setProperty("--scrollbar-width", `${this.scrollbar_width}px`);
+        set_style_property(this.timeline_container_elem, "--scrollbar-width", `${this.scrollbar_width}px`);
     }
     
     get timeline_window_duration() {
@@ -9024,16 +9030,14 @@ export class PlaylistPanel extends Panel {
     set_timeline_zoom(v){
         this.zoom = utils.clamp(v, PLAYLIST_ZOOM_MIN, PLAYLIST_ZOOM_MAX);
         if (isNaN(this.zoom) || !isFinite(this.zoom)) this.zoom = 1.0;
-        this.timeline_container_elem.style.setProperty("--playlist-zoom", this.zoom);
+        set_style_property(this.timeline_container_elem, "--playlist-zoom", this.zoom);
     }
     reset_scroll(){
         this.tracks_elem.scrollLeft = this.tracks_elem.scrollTop = 0;
     }
-
     inc_timeline_zoom(v=0, e) {
         this.set_timeline_view(Math.pow(PLAYLIST_ZOOM_BASE, utils.log(this.zoom, PLAYLIST_ZOOM_BASE) + v), null, e);
     }
-
     set_timeline_view(zoom, time, e=null) {
         var ox = 0.5;
         if (e instanceof MouseEvent) {
@@ -9051,8 +9055,7 @@ export class PlaylistPanel extends Panel {
             if (zoom != null) this.set_timeline_zoom(zoom);
             this.set_timeline_scroll_percent(scroll_x, ox);
         }
-        
-        this.update();
+        this.update_next_frame();
     }
 }
 
@@ -9070,7 +9073,7 @@ export class Loader {
     update(opts) {
         var msg = this.el.querySelector(".msg");
         if ("text" in opts) {
-            msg.innerHTML = opts.text;
+            set_inner_html(msg, opts.text);
         }
         if ("visible" in opts) {
             if (opts.visible && this.el.parentElement != document.body) document.body.append(this.el);
@@ -9085,18 +9088,18 @@ export class Loader {
 export class Area extends UI.Column {
     constructor(elem, settings) {
         super(elem, settings);
-        this.elem.classList.add("area");
-        this.elem.classList.add(`area-${app.areas.length+1}`);
+        add_class(this.elem, "area");
+        add_class(this.elem, `area-${app.areas.length+1}`);
         app.areas.push(this);
     }
 }
 
 export class App extends utils.EventEmitter {
+    #initialized = false;
     get server_now() { return Date.now() + this.$.server_time_diff; }
     get playlist_item_props_class() { return utils.try(()=>this.$.properties.playlist.enumerable_props.props.props); }
     get focused_element() { return this.root_elem.activeElement; }
     get dev_mode() { return this.$.conf["debug"] || new URLSearchParams(window.location.search.slice(1)).has("dev"); }
-    last_session = NULL_SESSION;
     
     /** @type {Remote} */
     $;
@@ -9104,29 +9107,76 @@ export class App extends utils.EventEmitter {
     constructor() {
         super();
         app = this;
-        jQuery(()=>{
-            this._pre_initialize();
-        })
+        jQuery(async ()=>{
+            this.loader = new Loader();
+            this.loader.update({visible:true, text:"Initializing..."});
+
+            this.settings = new dom_utils.LocalStorageBucket("livestreamer-1.0", {
+                "playlist_mode": 0,
+                // "playlist_show_scheduled_times": false,
+                "playlist_sticky": true,
+                "show_extra_playlist_icons": true,
+                "wrap_playlist_items": false,
+                "time_display_ms": false,
+                "test_stream_info": true,
+                "show_chapters": true,
+                "show_encoder_info": true,
+                "pause_encoder": false,
+                "sessions_display": "tabs",
+                "open_file_manager_in_new_window": false,
+                "time_left_mode": TimeLeftMode.TIME_LEFT,
+                "layout":null,
+                "session_order": null,
+                "last_session_id": null
+            });
+            this.passwords = new dom_utils.LocalStorageBucket("livestreamer-passwords");
+
+            var messenger = new dom_utils.WindowCommunicator();
+            var key;
+            if (window.self == window.top) {
+                key = dom_utils.Cookie.get("ls_key") || new URLSearchParams(window.location.search).get("ls_key");
+            } else {
+                key = await messenger.request(window.parent, "key");
+            }
+            if (key) dom_utils.Cookie.set("ls_key", key, { expires: 365 });
+            messenger.destroy();
+    
+            var ws_url = window.location.origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")+"/main/";
+            var ws_params = new URLSearchParams();
+            if (key) ws_params.set("key", key);
+            var session_id = this.settings.get("last_session_id");
+            if (session_id) ws_params.set("session_id", session_id);
+            this.ws = new dom_utils.WebSocket(ws_url+"?"+ws_params.toString());
+            this.ws.on("open", ()=>{
+                this.$ = new Remote();
+                this.$.on("update", (changes)=>this.update(changes));
+            });
+            this.ws.on("data", (data)=>{
+                // if (this.dev_mode) console.debug("ws:", data);
+                if (data.init) {
+                    this.$._push(data.init);
+                    this.$._push({
+                        settings: {...this.settings.$, [Observer.RESET_KEY]:"Object"},
+                        passwords: {...this.passwords.$, [Observer.RESET_KEY]:"Object"}
+                    });
+                }
+                if (data.$) {
+                    this.$._push(data.$);
+                }
+            });
+            this.ws.on("close", ()=>{
+                this.loader.update({visible:true, text:"Lost connection..."});
+                this.remove_plugins();
+                Fancybox.close(true);
+            });
+        
+            this.loader.update({text:"Connecting..."});
+        });
     }
 
-    async _pre_initialize() {
-        if (this._pre_initialized) return;
-        this._pre_initialized = true;
-
-        this.loader = new Loader();
-        this.loader.update({visible:true, text:"Initializing..."});
-
-        var messenger = new dom_utils.WindowCommunicator();
-        var key;
-        if (window.self == window.top) {
-            key = dom_utils.Cookie.get("ls_key") || new URLSearchParams(window.location.search).get("ls_key");
-        } else {
-            key = await messenger.request(window.parent, "key");
-        }
-        if (key) dom_utils.Cookie.set("ls_key", key, { expires: 365 });
-        messenger.destroy();
-        
-        this.loader.update({text:"Connecting..."});
+    init() {
+        if (this.#initialized) return;
+        this.#initialized = true;
 
         this.elem = document.querySelector("#livestreamer");
         this.body_elem = this.elem.parentElement;
@@ -9148,7 +9198,7 @@ export class App extends utils.EventEmitter {
         this.show_help_button = this.root_elem.querySelector("#show-help");
         this.show_config_button = this.root_elem.querySelector("#show-config");
         this.show_admin_button = this.root_elem.querySelector("#show-admin");
-        this.show_admin_button.classList.toggle("d-none", true); // !app.user.is_admin
+        toggle_class(this.show_admin_button, "d-none", true); // !app.user.is_admin
         this.session_elem = this.root_elem.querySelector("#session");
         this.session_controls_wrapper_elem = this.root_elem.querySelector(".session-controls-wrapper");
         this.session_load_save_elem = this.root_elem.querySelector("#session-load-save");
@@ -9159,7 +9209,7 @@ export class App extends utils.EventEmitter {
         this.new_session_button = this.root_elem.querySelectorAll(".new-session");
         this.destroy_session_button = this.root_elem.querySelector("#destroy-session");
         this.minimize_session_button = this.root_elem.querySelector("#minimize-session");
-        // if (!this.dev_mode) this.minimize_session_button.classList.add("d-none");
+        // if (!this.dev_mode) add_class(this.minimize_session_button, "d-none");
         this.sign_out_session_button = this.root_elem.querySelector("#sign-out-session");
         this.config_session_button = this.root_elem.querySelector("#config-session");
         this.load_session_button = this.root_elem.querySelector("#load-session");
@@ -9170,61 +9220,14 @@ export class App extends utils.EventEmitter {
         this.users_elem = this.root_elem.querySelector("#users");
         this.request_loading_elem = this.root_elem.querySelector("#request-loading");
         
-        this.settings = new dom_utils.LocalStorageBucket("livestreamer-1.0", {
-            "playlist_mode": 0,
-            "playlist_show_scheduled_times": false,
-            "playlist_sticky": true,
-            "show_extra_playlist_icons": true,
-            "wrap_playlist_items": false,
-            "time_display_ms": false,
-            "test_stream_info": true,
-            "show_chapters": true,
-            "show_encoder_info": true,
-            "pause_encoder": false,
-            "sessions_display": "tabs",
-            "open_file_manager_in_new_window": false,
-            "time_left_mode": TimeLeftMode.TIME_LEFT,
-            "layout":null,
-            "session_order": null,
-            "last_session_id": null
-        });
-        this.passwords = new dom_utils.LocalStorageBucket("livestreamer-passwords");
-
-        var ws_url = window.location.origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")+"/main/";
-        var ws_params = new URLSearchParams();
-        if (key) ws_params.set("key", key);
-        var session_id = this.settings.get("last_session_id");
-        if (session_id) ws_params.set("session_id", session_id);
-        this.ws = new dom_utils.WebSocket(ws_url+"?"+ws_params.toString());
-        this.ws.on("open", ()=>{
-            this.$ = new Remote();
-            this.$.on("update", (changes)=>this.update(changes));
-        });
-        this.ws.on("data", (data)=>{
-            // if (this.dev_mode) console.debug("ws:", data);
-            if (data.init) {
-                this.$._push(data.init);
-                this.$._push({
-                    settings: this.settings.$,
-                    passwords: this.passwords.$
-                });
-            }
-            if (data.$) {
-                this.$._push(data.$);
-            }
-        });
-        this.ws.on("close", ()=>{
-            this.loader.update({visible:true, text:"Lost connection..."});
-            this.remove_plugins();
-            Fancybox.close(true);
-        });
-    }
-
-    async init() {
-        if (this._initialized) return;
-        this._initialized = true;
-        
         this.root = new UI.Root();
+        // this.root.on("pre_update", ()=>{
+        //     var t0 = Date.now();
+        //     this.root.once("post_update", ()=>{
+        //         var t1 = Date.now();
+        //         console.debug(`UI update: ${t1-t0}ms`);
+        //     })
+        // });
         
         var session_ui = new UI.Column();
         var row1 = new UI.Row();
@@ -9242,7 +9245,6 @@ export class App extends utils.EventEmitter {
 
         this.playlist = new PlaylistPanel();
         this.areas[1].append(this.playlist);
-        this.playlist.setup_resize();
         
         this.media_player = new MediaPlayerPanel();
         this.media_settings = new MediaSettingsPanel();
@@ -9290,7 +9292,7 @@ export class App extends utils.EventEmitter {
         // -------------------------------
 
         this.sessions_select.addEventListener("change", ()=>{
-            window.location.hash = `#${this.sessions_select.new_value}`;
+            window.location.hash = `#${this.sessions_select.value}`;
         })
         
         Object.assign(Fancybox.defaults, {parentEl: this.body_elem});
@@ -9354,7 +9356,8 @@ export class App extends utils.EventEmitter {
                     call: ["session", "destroy"],
                     arguments: [true],
                 });
-                this.last_destroyed_session_id = this.$._session.id;
+                this.$._push([`clients/${this.$.client_id}/session_id`, null]);
+                // this.last_destroyed_session_id = this.$._session.id;
             }
         });
 
@@ -9501,7 +9504,7 @@ export class App extends utils.EventEmitter {
 
         this.footer_buttons = new UI.Row().elem;
         this.main_elem.append(this.footer_buttons);
-        this.footer_buttons.style["justify-content"] = "end";
+        set_style_property(this.footer_buttons, "justify-content", "end");
 
         var row = new UI.Row({
             gap: 0,
@@ -9594,15 +9597,17 @@ export class App extends utils.EventEmitter {
         this.passwords.load(true);
     }
 
-    async update(changes) {
+    update(changes) {
+        this.init();
         this.media.update();
 
-        await this.init();
+        this.loader.update({visible:false});
+        this.elem.style.display = "";
 
-        var rebuild_playlist;
-
+        var last_session_id = window.location.hash.slice(1);
         var client_id = this.$.client_id;
-        var is_new_session = !!(changes.clients && changes.clients[client_id] && changes.clients[client_id].session_id);
+        var client_changes = changes.clients && changes.clients[client_id];
+        var is_new_session = !!(client_changes && client_changes.session_id);
         var session_changes = is_new_session ? this.$._session : changes.sessions && changes.sessions[this.$._session.id];
         // var is_new_stream = !!(changes.sessions && changes.sessions[this.$._session.id] && changes.sessions[this.$._session.id].stream);
         // remove_empty_objects_from_tree(changes);
@@ -9614,28 +9619,25 @@ export class App extends utils.EventEmitter {
         var is_external_session = this.$._session.type === "ExternalSession";
         var is_running = this.$._session._is_running;
 
-        /* if (is_new_session && this.last_session.id != this.$._session.id) {
-            alert(`'${this.last_session.name}' was terminated by another user or internally.`);
-        } */
-
-        if (changes.client && changes.client.session_id && changes.client.session_id !== window.location.hash.slice(1)) {
-            window.location.hash = changes.client.session_id;
+        // if (this.$._last_session && !this.$.sessions[this.$._last_session.id]) {
+        //     alert(`'${this.$._last_session.name}' was terminated internally or by another user.`);
+        // }
+        if (client_changes && "session_id" in client_changes && client_changes.session_id != last_session_id) {
+            window.location.hash = client_changes.session_id || "";
         }
         // var hash = this.$.session ? `#${this.$.session.id}` : "";
         // if (window.location.hash !== hash) window.location.hash = hash;
 
-        this.session_elem.classList.toggle("d-none", is_null_session);
         this.session_elem.dataset.type = this.$._session.type;
-
-        this.session_inner_elem.classList.toggle("d-none", !has_access);
-
-        this.session_controls_wrapper_elem.classList.toggle("d-none", is_null_session);
-        this.no_sessions_elem.classList.toggle("d-none", !is_null_session && has_access);
-        this.no_sessions_elem.querySelector(".no-session").classList.toggle("d-none", !has_access);
-        this.no_sessions_elem.querySelector(".no-access").classList.toggle("d-none", has_access);
-        this.no_sessions_elem.querySelector(".owner").classList.toggle("d-none", has_access);
-        dom_utils.set_inner_html(this.no_sessions_elem.querySelector(".owner"), `This session is owned by ${access_control.owners.map(u=>`[${u.username}]`).join(" | ")}`);
-        this.session_password_elem.classList.toggle("d-none", has_access || !requires_password);
+        toggle_class(this.session_elem, "d-none", is_null_session);
+        toggle_class(this.session_inner_elem, "d-none", !has_access);
+        toggle_class(this.session_controls_wrapper_elem, "d-none", is_null_session);
+        toggle_class(this.no_sessions_elem, "d-none", !is_null_session && has_access);
+        toggle_class(this.no_sessions_elem.querySelector(".no-session"), "d-none", !has_access);
+        toggle_class(this.no_sessions_elem.querySelector(".no-access"), "d-none", has_access);
+        toggle_class(this.no_sessions_elem.querySelector(".owner"), "d-none", has_access);
+        set_inner_html(this.no_sessions_elem.querySelector(".owner"), `This session is owned by ${access_control.owners.map(u=>`[${u.username}]`).join(" | ")}`);
+        toggle_class(this.session_password_elem, "d-none", has_access || !requires_password);
         
         this.session_load_save_elem.style.display = is_external_session ? "none": "";
 
@@ -9643,13 +9645,13 @@ export class App extends utils.EventEmitter {
         this.media_player.hidden = is_external_session;
         this.media_settings.hidden = is_external_session;
 
-        this.load_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
-        this.save_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
-        this.history_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
+        toggle_attribute(this.load_session_button, "disabled", !has_access || !has_ownership);
+        toggle_attribute(this.save_session_button, "disabled", !has_access || !has_ownership);
+        toggle_attribute(this.history_session_button, "disabled", !has_access || !has_ownership);
         
-        this.sign_out_session_button.classList.toggle("d-none", has_ownership || !(requires_password && has_access));
-        this.config_session_button.toggleAttribute("disabled", !has_access || !has_ownership);
-        this.destroy_session_button.toggleAttribute("disabled", !has_ownership);
+        toggle_class(this.sign_out_session_button, "d-none", has_ownership || !(requires_password && has_access));
+        toggle_attribute(this.config_session_button, "disabled", !has_access || !has_ownership);
+        toggle_attribute(this.destroy_session_button, "disabled", !has_ownership);
 
         if (changes.settings) {
             for (let k in changes.settings) {
@@ -9658,20 +9660,18 @@ export class App extends utils.EventEmitter {
                     var panel = this.panels[k.slice(7)];
                     if (panel) panel.toggle(!v)
                 } else if (typeof v === "boolean") {
-                    this.body_elem.toggleAttribute(`data-${k}`, v);
+                    toggle_attribute(this.body_elem, `data-${k}`, v);
                     [...this.elem.querySelectorAll(`button.${k}`)].forEach(c=>{
                         if (v) delete c.dataset.toggled; else c.dataset.toggled = 1;
                     });
                 } else {
                     var t = typeof v;
                     if (t != "object" && t != "function") {
-                        this.body_elem.setAttribute(`data-${k}`, v);
+                        set_attribute(this.body_elem, `data-${k}`, v);
                     }
                 }
                 if (k === "playlist_mode") {
                     this.playlist.timeline_mode = v;
-                } else if (k === "playlist_sticky") {
-                    this.playlist.update_position_next_frame();
                 }
             }
         }
@@ -9680,7 +9680,6 @@ export class App extends utils.EventEmitter {
         if (is_new_session) {
             this.playlist.sortables.forEach(s=>s.deselect_all());
             this.session_logger.empty();
-            // this.encoder.reset_chart();
             this.session_password.reset();
             this.playlist.open(null);
         }
@@ -9701,12 +9700,15 @@ export class App extends utils.EventEmitter {
             }
         } */
 
-        if (changes.clients || changes.sessions) {
-            this.rebuild_sessions();
-        }
-        if (changes.clients || (session_changes && session_changes.access_control)) {
-            this.rebuild_clients();
-        }
+        // if (changes.clients || changes.sessions) {
+        //     this.rebuild_sessions();
+        // }
+        // if (changes.clients || (session_changes && session_changes.access_control)) {
+        //     this.rebuild_clients();
+        // }
+
+        this.#rebuild_sessions();
+        this.#rebuild_clients();
         
         /* if (changes.change_log && !this.seen_change_log) {
             this.seen_change_log = true;
@@ -9728,42 +9730,16 @@ export class App extends utils.EventEmitter {
             // this.stream_settings.update_next_frame();
             // this.media_player.update_next_frame();
             // this.media_settings.update_next_frame();
-            
-            if (this.dev_mode) {
-                /* var walk = (o, path=[])=>{
-                    var path_str = path.join("/");
-                    if (ignore_logging_session_$.has(path_str)) return;
-                    if (typeof o === "object" && o !== null) {
-                        var copy = {...o};
-                        var all_deleted = true;
-                        for (var k of Object.keys(copy)) {
-                            var v = walk(copy[k], [...path, k]);
-                            if (v === undefined) delete copy[k];
-                            else {
-                                copy[k] = v;
-                                all_deleted = false;
-                            }
-                        }
-                        if (all_deleted) return;
-                        return copy;
-                    }
-                    return o;
-                }
-                var filtered_session_changes = walk(session_changes);
-                if (filtered_session_changes) {
-                    console.debug("session_changes", filtered_session_changes);
-                } */
-            }
 
-            if ((session_changes.stream && session_changes.stream.speed_history)) {
-                this.encoder.debounced_update_chart();
-            }
+            // if ((session_changes.stream && session_changes.stream.speed_history)) {
+            //     this.encoder.update_next_frame();
+            // }
 
             if (session_changes.playlist && !Object.isFrozen(this.$._session)) {
-                var ids = new Set([...Object.keys(this.$._session.playlist_deleted), ...Object.keys(session_changes.playlist)]);
+                var ids = new Set([...Object.keys(this.$._session._deleted_playlist_items), ...Object.keys(session_changes.playlist)]);
                 for (var id of ids) {
                     let new_item = this.$._session.playlist[id];
-                    let old_item = this.$._session.playlist_deleted[id] || new_item;
+                    let old_item = this.$._session._deleted_playlist_items[id] || new_item;
                     if (new_item) new_item.__private.num_updates++;
                     let old_parent = old_item ? old_item.__private.parent : null;
                     let new_parent = new_item ? new_item._parent : null;
@@ -9779,7 +9755,7 @@ export class App extends utils.EventEmitter {
                     }
                 }
             }
-            var curr_playlist = this.playlist.current
+            var curr_playlist = this.playlist.current;
             if (curr_playlist._is_deleted) {
                 this.playlist.open(null);
             }
@@ -9789,7 +9765,7 @@ export class App extends utils.EventEmitter {
             } */
             
             if (session_changes.logs) {
-                this.session_logger.update_logs(session_changes.logs);
+                this.session_logger.append_logs(session_changes.logs);
             }
 
             // this.playlist_modify_menu.update_next_frame();
@@ -9835,24 +9811,24 @@ export class App extends utils.EventEmitter {
                     utils.set_add(ids, [this.playlist.current.id, this.$._session.playlist_id]);
                 }
             }
-            utils.set_add(ids, [...filenames].map(k=>this.get_items_with_media(k)).flat().map(i=>i.id));
+            utils.set_add(ids, [...filenames].map(k=>this.$._session._get_items_with_media(k)).flat().map(i=>i.id));
             
             if (ids.size) {
                 /** @type {PlaylistItem[]} */
                 var items = [];
                 for (var id of ids) {
-                    let item = this.get_playlist_item(id);
+                    let item = this.$._session.playlist[id];
                     if (item) {
                         items.push(item, ...item._parents);
                     } else {
-                        var deleted_item = this.$._session.playlist_deleted[id];
+                        var deleted_item = this.$._session._deleted_playlist_items[id];
                         if (deleted_item) {
                             items.push(...deleted_item._parents);
                         }
                     }
                 }
                 items.forEach(item=>item.__private.userdata = null);
-                rebuild_playlist = true;
+                // rebuild_playlist = true;
             }
         }
 
@@ -9864,30 +9840,27 @@ export class App extends utils.EventEmitter {
         //     this.user_config_menu.update();
         // }
 
-        if ((changes.settings && (changes.settings["playlist_show_scheduled_times"] !== undefined || changes.settings["schedule_generator"])) ||
-            (session_changes && (session_changes.schedule_start_time || ("playlist_id" in session_changes))) ||
-            (session_changes && session_changes.stream && "state" in session_changes.stream)) {
-                rebuild_playlist = true;
-        }
+        // if ((changes.settings && (changes.settings["playlist_show_scheduled_times"] !== undefined || changes.settings["schedule_generator"])) ||
+        //     (session_changes && (session_changes.schedule_start_time || ("playlist_id" in session_changes))) ||
+        //     (session_changes && session_changes.stream && "state" in session_changes.stream)) {
+        //         rebuild_playlist = true;
+        // }
         
         if (changes.logs !== undefined) {
-            if (this.app_logger) this.app_logger.update_logs(changes.logs);
+            if (this.app_logger) this.app_logger.append_logs(changes.logs);
         }
 
         // this.media_player.update_video_player();
 
         // this.playlist.update_next_frame();
-        if (rebuild_playlist) {
-            this.playlist.rebuild();
-        }
+        // if (rebuild_playlist) {
+        //     this.playlist.rebuild();
+        // }
         
-        this.app_log_section.classList.toggle("d-none", !this.$._client.is_admin);
+        toggle_class(this.app_log_section, "d-none", !this.$._client.is_admin);
 
         // we can forget old items now (I think)
-        utils.clear(this.$._session.playlist_deleted);
-
-        this.loader.update({visible:false});
-        this.elem.style.display = "";
+        utils.clear(this.$._session._deleted_playlist_items);
         
         if (!utils.is_empty(changes)) {
             this.emit("change", changes);
@@ -9911,9 +9884,9 @@ export class App extends utils.EventEmitter {
             var buffering = !!(seeking || !loaded || app.$._stream.mpv.props["paused-for-cache"]);
 
             if (special_seeking) return;
-            this.time = app.get_current_time_pos();
-            this.duration = app.get_current_duration();
-            this.chapters = app.get_current_chapters();
+            this.time = app.$._session._current_time;
+            this.duration = app.$._session._current_duration;
+            this.chapters = app.$._session._current_chapters;
             this.seekable = this.duration != 0 && (!started || !!app.$._stream.mpv.seekable) && this.item.filename !== "livestreamer://empty";
             this.loaded = loaded;
             this.buffering = buffering;
@@ -9932,19 +9905,17 @@ export class App extends utils.EventEmitter {
             this.stats["INTRP"] = app.$._stream.mpv.interpolation ? "On" : "Off";
             this.stats["DEINT"] = app.$._stream.mpv.deinterlace ? "On" : "Off";
 
-            this.curr_chapters = app.get_current_chapters_at_time(this.time);
+            this.curr_chapters = app.$._session._get_current_chapters_at_time(this.time);
         }
         get time_left() { return Math.max(0, this.duration - this.time); }
         get do_live_seek(){ return app.$._stream._is_running && !app.$._stream._is_encoding && !app.$._stream.mpv.is_special; }
     }
 
-    get_rtmp_url(p) {
+    get_rtmp_url() {
         var host = window.location.hostname;
         var port = this.$.conf["media-server.rtmp_port"];
         if (port != 1935) host += `:${port}`;
-        var pathname = `/media-server`;
-        if (p) pathname += `/${p.replace(/^\/+/, "")}`;
-        return `rtmp://${host}${pathname}`;
+        return `rtmp://${host}`;
     }
 
     load_font(id) {
@@ -9994,6 +9965,8 @@ export class App extends utils.EventEmitter {
     /** @param {PlaylistItem[]} items */
     playlist_rescan(items) {
         if (!Array.isArray(items)) items = [items];
+        if (!items.length) return;
+
         this.request({
             call: ["session", "update_media_info_from_ids"],
             arguments: [items.map(item=>item.id), true],
@@ -10009,9 +9982,11 @@ export class App extends utils.EventEmitter {
 
     /** @param {PlaylistItem[]} items */
     playlist_split(items, splits, local_times=false) {
+        if (!Array.isArray(items)) items = [items];
+        if (!items.length) return;
         splits = utils.sort(splits);
         if (!splits.length) return [];
-        var promises = [];
+
         var add_items = [];
         var remove_items = [];
         items = items.filter(i=>i._is_splittable);
@@ -10047,6 +10022,8 @@ export class App extends utils.EventEmitter {
     /** @param {PlaylistItem[]} items */
     playlist_group(items) {
         if (!Array.isArray(items)) items = [items];
+        if (!items.length) return;
+
         items.sort((a,b)=>a.index-b.index);
         var index = items[0].index;
         var name = items[0]._get_pretty_name()
@@ -10074,6 +10051,8 @@ export class App extends utils.EventEmitter {
     playlist_breakdown(items) {
         if (!Array.isArray(items)) items = [items];
         items = items.filter(item=>item._is_playlist);
+        if (!items.length) return;
+
         // var affected_ids = [];
         var changes = {}
         var selection = [];
@@ -10095,22 +10074,32 @@ export class App extends utils.EventEmitter {
         items.forEach((item)=>changes[item.id] = null);
         this.playlist_update(changes);
 
-        this.playlist.once("rebuild", ()=>{
+        this.playlist.once("update", ()=>{
             this.playlist.set_selection(selection)
         })
     }
 
     /** @param {PlaylistItem[]} items */
     playlist_move(items, pos=null, track_index=null) {
+        if (!Array.isArray(items)) items = [items];
+        if (!items.length) return;
+        var new_parent = this.playlist.current;
+        var new_parent_session_id = new_parent._session.id;
+
+        var all = items.map(i=>[{id:i.id, parent:new_parent.id}, ...i._descendents.map(d=>({id:d.id, parent:d.parent_id}))]).flat();
+        var is_circular = utils.is_circular(all);
+        if (is_circular) {
+            alert("Detected circular parent-child loop. Aborting operation.");
+            return;
+        }
+
         var affected = new Set(items);
-        var parent = this.playlist.current;
-        var parent_session_id = parent._session.id;
         if (track_index == null) track_index = this.playlist.active_track_index;
         pos = this.fix_insert_pos(pos, track_index);
-        var parent_items = parent._get_track(track_index);
+        var parent_items = new_parent._get_track(track_index);
         parent_items = parent_items.map(item=>affected.has(item)?null:item);
         for (var [session_id, group] of Object.entries(utils.group_by(items, i=>i._session.id))) {
-            if (session_id == parent_session_id) {
+            if (session_id == new_parent_session_id) {
                 parent_items.splice(pos, 0, ...group);
             } else {
                 this.playlist_remove(group);
@@ -10119,10 +10108,10 @@ export class App extends utils.EventEmitter {
             pos += group.length;
         }
         parent_items = parent_items.filter(i=>i);
-        var data = Object.fromEntries(parent_items.map((item,i)=>[item.id, {index:i, track_index, parent_id:parent.id}]));
-        this.playlist_update(data, parent_session_id);
+        var data = Object.fromEntries(parent_items.map((item,i)=>[item.id, {index:i, track_index, parent_id:new_parent.id}]));
+        this.playlist_update(data, new_parent_session_id);
 
-        this.playlist.once("rebuild", ()=>{
+        this.playlist.once("update", ()=>{
             this.playlist.set_selection(items)
         })
     }
@@ -10130,6 +10119,7 @@ export class App extends utils.EventEmitter {
     /** @param {any[]} items */
     playlist_add(items, insert_pos=null, track_index=null) {
         if (!Array.isArray(items)) items = [items];
+        if (!items.length) return;
 
         if (track_index == null) track_index = this.playlist.active_track_index;
         track_index = utils.clamp(track_index, 0, 1);
@@ -10170,11 +10160,11 @@ export class App extends utils.EventEmitter {
             }
             return item;
         }
-        items.forEach((f,i)=>add_file(f, insert_pos + i, parent.id, track_index));
+        items.forEach((f,i)=>add_file(f, insert_pos+i, parent.id, track_index));
 
         var new_playlist = Object.fromEntries(new_items.map(f=>[f.id,f]));
         parent._get_track(track_index).slice(insert_pos).forEach((item,i)=>{
-            new_playlist[item.id] = {index: insert_pos + items.length + i};
+            new_playlist[item.id] = {index: insert_pos+items.length+i};
         });
 
         this.$._push([`sessions/${this.$._session.id}/playlist`, new_playlist]);
@@ -10183,8 +10173,7 @@ export class App extends utils.EventEmitter {
             call: ["session","playlist_add"],
             arguments: [new_items, insert_pos, this.playlist.current.id, track_index]
         });
-
-        this.playlist.once("rebuild", ()=>{
+        this.playlist.once("update", ()=>{
             this.playlist.set_selection(new_items)
         });
 
@@ -10197,6 +10186,7 @@ export class App extends utils.EventEmitter {
     async playlist_remove(items) {
         if (!Array.isArray(items)) items = [items];
         if (items.length == 0) return;
+
         for (var item of items) {
             var ul = item._upload;
             if (ul) app.upload_queue.cancel(ul.id);
@@ -10237,12 +10227,15 @@ export class App extends utils.EventEmitter {
                 arguments: [changes]
             });
         } else {
-            this.playlist.rebuild();
+            this.playlist.update_next_frame();
         }
     }
     
     /** @param {PlaylistItem[]} items */
     playlist_download(items) {
+        if (!Array.isArray(items)) items = [items];
+        if (items.length == 0) return;
+
         this.request({
             call: ["session", "download_and_replace"],
             arguments: [items.map(item=>item.id)]
@@ -10253,6 +10246,9 @@ export class App extends utils.EventEmitter {
     
     /** @param {PlaylistItem[]} items */
     playlist_cancel_download(items){
+        if (!Array.isArray(items)) items = [items];
+        if (items.length == 0) return;
+
         this.request({
             call: ["session", "cancel_download"],
             arguments: [items.map(item=>item.id)]
@@ -10263,7 +10259,9 @@ export class App extends utils.EventEmitter {
     
     /** @param {PlaylistItem[]} items */
     playlist_cancel_upload(items) {
+        if (!Array.isArray(items)) items = [items];
         items.forEach(i=>app.upload_queue.cancel(i.id));
+        if (items.length == 0) return;
         // this also cancels it for other users:
         this.request({
             call: ["session", "cancel_upload"],
@@ -10292,13 +10290,13 @@ export class App extends utils.EventEmitter {
             start += t;
         }
         options.start = start
-
-        /* this.$.push(
-            [`sessions/${this.$.session.id}/playlist_id`, item.id],
-            [`sessions/${this.$.session.id}/current_time`, start]
-        ); */
         
         this.media_player.seek.seek(options.start);
+
+        this.$._push(
+            [`sessions/${this.$._session.id}/playlist_id`, item.id],
+            [`sessions/${this.$._session.id}/time`, start]
+        );
         
         return this.request({
             call: ["session","playlist_play"],
@@ -10326,10 +10324,10 @@ export class App extends utils.EventEmitter {
 
     /** @param {number} t */
     seek(t, relative=false) {
-        if (relative) t += this.get_current_time_pos();
+        if (relative) t += this.$._session._current_time;
         if (t < 0) t = 0;
         this.media_player.seek.seek(t);
-        app.$._push([`sessions/${app.$._session.id}/current_time`, t]);
+        app.$._push([`sessions/${app.$._session.id}/time`, t]);
         
         return this.request({
             call: ["session", "seek"],
@@ -10338,10 +10336,10 @@ export class App extends utils.EventEmitter {
     }
 
     seek_chapter(i, relative=false) {
-        var chapters = this.get_current_chapters();
+        var chapters = this.$._session._current_chapters;
         if (relative) {
-            var t = this.get_current_time_pos();
-            var c = this.get_current_chapter_at_time(t);
+            var t = this.$._session._current_time;
+            var c = this.$._session._get_current_chapter_at_time(t);
             if (c) {
                 if ((c.start - t) < -5 && i < 0) i++;
                 i += c.index;
@@ -10366,46 +10364,6 @@ export class App extends utils.EventEmitter {
 
     // ---------------
     
-    get_playlist_item(id) {
-        return this.$._session.playlist[id];
-    }
-    get_media_info(filename) {
-        return this.$.media_info[filename];
-    }
-    get_items_with_media(filename) {
-        return Object.values(this.$._session.playlist).filter(i=>i._userdata.filenames.includes(filename));
-    }
-    /** @return {Chapter[]} */
-    get_current_chapters() {
-        return this.$._session._current_playing_item._userdata.chapters;
-    }
-    get_current_duration() {
-        var d;
-        if (this.$._stream._is_running) {
-            d = this.$._stream.mpv.duration || 0;
-        } else {
-            d = 0;
-            var item = this.$._session._current_playing_item;
-            if (item._is_playlist && !item._is_merged_playlist) d = 0;
-            else d = item._userdata.duration;
-        }
-        return round_ms(d || 0);
-    }
-
-    get_current_time_pos() {
-        if (this.$._stream._is_running) return this.$._session.stream.mpv.time;
-        return this.$._session.current_time;
-    }
-
-    get_current_seekable_ranges() {
-        if (this.$._stream._is_running) return this.$._stream.mpv.seekable_ranges;
-        return [];
-    }
-
-    get_current_chapters_at_time(t) {
-        return this.get_current_chapters().filter(c=>t>=c.start && t<c.end);
-    }
-    
     /** @param {Element} parent_elem @param {PlaylistItem} item */
     build_playlist_breadcrumbs(parent_elem, item, exclude_root=false, bold_current=false) {
         var path = [item, ...item._parents].reverse().filter(p=>p);
@@ -10413,29 +10371,25 @@ export class App extends utils.EventEmitter {
         if (parent_elem._path_hash === path_hash) return;
         parent_elem._path_hash = path_hash;
         dom_utils.empty(parent_elem);
-        parent_elem.classList.add("breadcrumbs");
+        add_class(parent_elem, "breadcrumbs");
         path.forEach((item,i)=>{
             var elem = $(`<a></a>`)[0];
             var name = item._get_pretty_name() || "[Untitled]";
             if (item._is_root) {
                 if (exclude_root) return;
                 elem.style.overflow = "visible";
-                elem.innerHTML = `<i class="fas fa-house"></i>`;
+                set_inner_html(elem, `<i class="fas fa-house"></i>`);
             } else {
-                elem.innerHTML = name;
+                set_inner_html(elem, name);
             }
             elem.href = "javascript:void(0)";
             parent_elem.append(elem);
             elem.onclick = ()=>item._reveal();
-            elem.title = name;
+            set_attribute(elem, "title", name);
             if (i != path.length-1) {
                 parent_elem.append($(`<i></i>`)[0]);
             }
         });
-    }
-
-    get_current_chapter_at_time(t) {
-        return this.get_current_chapters_at_time(t).pop();
     }
 
     get_handover_sessions_options(include_none=true) {
@@ -10446,18 +10400,9 @@ export class App extends utils.EventEmitter {
         if (include_none) options.unshift([null, "-"]);
         return options;
     }
-    /** @param {PlaylistItem[]} items */
-    get_playlist_items_title(items) {
-        var items = items.filter(i=>i);
-        if (items.length > 1) return `${items.length} Files`;
-        if (items.length == 1) {
-            return `${items[0]._get_pretty_name()}`;
-        }
-        return `[No Item]`;
-    }
 
     update_request_loading() {
-        this.request_loading_elem.classList.toggle("v-none", this.$._pending_requests.size == 0);
+        toggle_class(this.request_loading_elem, "v-none", this.$._pending_requests.size == 0);
     }
 
     request_no_timeout(data) {
@@ -10524,11 +10469,12 @@ export class App extends utils.EventEmitter {
         session_id = session_id || "";
         var new_hash = `#${session_id}`;
         this.settings.set("last_session_id", session_id);
-        this.last_session = this.$.sessions[session_id];
+        this.$._last_session = this.$.sessions[session_id];
         if (window.location.hash !== new_hash) {
             window.history.replaceState({}, '', new_hash);
         }
         if (this.$._client.session_id != session_id) {
+            this.$._push([`clients/${this.$.client_id}/session_id`, session_id]);
             this.request({
                 call: ["attach_to"],
                 arguments: [session_id]
@@ -10540,8 +10486,8 @@ export class App extends utils.EventEmitter {
     add_notice(content, dismissable = true) {
         throw new Error("not implemented yet");
         var notice = $(`<div class="notice custom-notice">${content}</div>`)[0];
-        if (dismissable) notice.classList.add("is-dismissible");
-        notice.classList.add("below-h2"); // fixes fucking annoying wordpress automatically moving it after header on page load.
+        if (dismissable) add_class(notice, "is-dismissible");
+        add_class(notice, "below-h2"); // fixes fucking annoying wordpress automatically moving it after header on page load.
         notices_elem.appendChild(notice);
         return notice;
     }
@@ -10573,49 +10519,43 @@ export class App extends utils.EventEmitter {
     }
 
     tick() {
-        dom_utils.toggle_class(this.body_elem, "is-touch", dom_utils.has_touch_screen());
+        toggle_class(this.body_elem, "is-touch", dom_utils.has_touch_screen());
     }
 
-    rebuild_clients() {
-        console.debug("rebuild_clients");
-
-        dom_utils.empty(this.users_elem);
+    #rebuild_clients() {
         var session_id = this.$._client.session_id;
-        if (!session_id) return;
-        
         var clients = Object.values(this.$.clients).filter(c=>c.session_id == session_id);
-        var users_stacked = {};
-        clients.forEach(c=>{
-            if (users_stacked[c.username] === undefined) users_stacked[c.username] = [];
-            users_stacked[c.username].push(c);
-        });
-
-        var users = Object.values(users_stacked).map(u=>u[0].username);
-        utils.sort(users, a=>a.username);
-        var owners = new AccessControl(this.$._session.access_control).owners.map(u=>u.username);
-        var groups = {"owners":owners, "users":users};
-        for (var [k,group] of Object.entries(groups)) {
-            if (group.length == 0) continue;
-            for (var username of group) {
-                var elem = $(`<span class="user"></span>`)[0];
-                var text = username;
-                if (this.$._client.username == username) {
-                    text = `Me`;
-                    elem.classList.add("is-self");
-                }
-                if (k === "owners") {
-                    $(elem).append(`<i class="fas fa-user-tie"></i>`);
-                    elem.classList.add("is-owner");
-                } else {
-                    $(elem).append(`<i class="fas fa-user"></i>`);
-                    var num = users_stacked[username] ? users_stacked[username].length : 0;
-                    if (num > 1) text += ` (${num})`;
-                }
-                $(elem).append(`<span>${text}</span>`);
-                elem.title = `${username} (${utils.capitalize(k.slice(0,-1))})`;
-                this.users_elem.append(elem);
-            }
+        /** @type {Record<string,Client[]>} */
+        var clients_stacked = {};
+        for (var c of clients) {
+            if (clients_stacked[c.username] === undefined) clients_stacked[c.username] = [];
+            clients_stacked[c.username].push(c);
         }
+        var owners = new AccessControl(this.$._session.access_control).owners.map(u=>u.username);
+        var items = [
+            ...owners.map(o=>({username:o, type:"owner"})),
+            ...utils.sort(Object.values(clients_stacked), a=>a[0].username).map(c=>({username:c[0].username, type:"client", number:c.length}))
+        ];
+        for (var i of items) i.id = utils.md5(JSON.stringify(i));
+
+        dom_utils.rebuild(this.users_elem, items, {
+            add: (item, elem, i)=>{
+                var elem = $(`<span class="user"></span>`)[0];
+                var is_self = this.$._client.username == item.username;
+                var text = is_self ? `Me` : item.username;
+                toggle_class(elem, "is-self", is_self);
+                if (item.type === "owner") {
+                    elem.append($(`<i class="fas fa-user-tie"></i>`)[0]);
+                    add_class(elem, "is-owner");
+                } else {
+                    elem.append($(`<i class="fas fa-user"></i>`)[0]);
+                    if (item.number > 1) text += ` (${item.number})`;
+                }
+                elem.append($(`<span>${text}</span>`)[0]);
+                set_attribute(elem, "title", `${item.username} (${utils.capitalize(item.type)})`);
+                return elem;
+            }
+        });
     }
 
     get sessions_ordered() {
@@ -10631,7 +10571,7 @@ export class App extends utils.EventEmitter {
         }
     }
 
-    async rebuild_sessions() {
+    async #rebuild_sessions() {
         await this.session_sortable.last_drag;
 
         var items = this.sessions_ordered;
@@ -10647,45 +10587,46 @@ export class App extends utils.EventEmitter {
                 var state = item.stream.state;
                 var hash = JSON.stringify([item.name, item.schedule_start_time, state, is_owner, is_active, has_access, requires_password]);
                 if (elem._hash == hash) return;
-                elem._hash = hash
+                elem._hash = hash;
 
                 var handle = elem.querySelector(".handle");
-                // dom_utils.toggle_class(handle, "d-none", !access_control.self_can_edit)
-                elem.setAttribute("href", `#${item.id}`);
+                // toggle_class(handle, "d-none", !access_control.self_can_edit)
+                set_attribute(elem, "href", `#${item.id}`);
                 elem.querySelector(".name").textContent = item.name;
-                elem.setAttribute("title", item.name);
-                // elem.classList.toggle("unmovable", !item.movable);
+                set_attribute(elem, "title", item.name);
+                // toggle_class(elem, "unmovable", !item.movable);
                 var icons = elem.querySelector(".icons");
-                icons.innerHTML = "";
+                var icons_html = "";
                 var option_data = {text: item.name, value:item.id};
                 if (is_owner) {
-                    icons.innerHTML += `<i class="fas fa-user-tie"></i>`;
+                    icons_html += `<i class="fas fa-user-tie"></i>`;
                     option_data.text += ` [Owner]`
                 } else if (!requires_password && !has_access) {
-                    icons.innerHTML += `<i class="fas fa-lock"></i>`;
+                    icons_html += `<i class="fas fa-lock"></i>`;
                     option_data.text += ` [Locked]`
                 }
                 if (requires_password) {
-                    icons.innerHTML += `<i class="fas fa-key"></i>`;
+                    icons_html += `<i class="fas fa-key"></i>`;
                     option_data.text += ` [Password]`;
                 }
                 elem.option_data = option_data;
-                elem.classList.toggle("locked", !has_access);
+                toggle_class(elem, "locked", !has_access);
                 var schedule_start_time = item.schedule_start_time ? +new Date(item.schedule_start_time) : 0;
                 if (["starting","stopping"].includes(state)) {
-                    icons.innerHTML += `<i class="fas fa-sync fa-spin"></i>`;
+                    icons_html += `<i class="fas fa-sync fa-spin"></i>`;
                 } else if (state === "started") {
-                    icons.innerHTML += `<i class="fas fa-circle blinking"></i>`;
+                    icons_html += `<i class="fas fa-circle blinking"></i>`;
                 } else if (schedule_start_time > Date.now()) {
-                    icons.innerHTML += `<i class="far fa-clock"></i>`;
+                    icons_html += `<i class="far fa-clock"></i>`;
                 }
-                elem.classList.toggle("active", is_active);
-                elem.classList.toggle("live", state !== "stopped");
+                set_inner_html(icons, icons_html);
+                toggle_class(elem, "active", is_active);
+                toggle_class(elem, "live", state !== "stopped");
                 return elem;
             },
         });
-        dom_utils.set_select_options(this.sessions_select, [["","-",{style:{"display":"none"}}], ...[...this.sessions_tabs_elem.children].map(e=>e.option_data)]);
-        dom_utils.set_value(this.sessions_select, this.$._client.session_id || "");
+        set_select_options(this.sessions_select, [["","-",{style:{"display":"none"}}], ...[...this.sessions_tabs_elem.children].map(e=>e.option_data)]);
+        set_value(this.sessions_select, this.$._client.session_id || "");
     }
 
     get_user(id) {
@@ -10738,10 +10679,10 @@ export class App extends utils.EventEmitter {
             var close_button = this.help_container.querySelector("button.close");
             close_button.onclick = ()=>this.toggle_help();
         }
-        dom_utils.toggle_class(this.body_elem, "show-side-panel");
+        toggle_class(this.body_elem, "show-side-panel");
     }
     chapter_to_string(c, show_time=false) {
-        var item = this.get_playlist_item(c.id);
+        var item = this.$._session.playlist[c.id];
         var title = c.title || (item ? item._get_pretty_name() : null);
         var parts = [`${String(c.index+1).padStart(2,"0")}.`];
         if (title) parts.push(title);

@@ -42,8 +42,7 @@ class SessionBase extends DataNode {
         app.$.sessions[this.id] = this.$;
         core.logger.info(`Initialized session [${this.id}]`);
 
-        core.emit("session.created", this.$);
-        // core.ipc_broadcast("session.created", this.$);
+        core.ipc.emit("main.session.created", this.$);
     }
 
     rename(new_name) {
@@ -76,11 +75,12 @@ class SessionBase extends DataNode {
 
         app.sessions_ordered.filter(s=>s!=this).forEach((s,i)=>s.$.index=i); // update indices
 
-        for (var c of clients) c.attach_to(null);
+        for (var c of clients) {
+            c.attach_to(null);
+        }
         this.logger.info(`${this.name} was destroyed.`);
 
-        // core.emit("session.destroyed", this.id);
-        // core.ipc_broadcast("session.destroyed", this.id);
+        core.ipc.emit("main.session.destroyed", this.id);
 
         this.logger.destroy();
         super.destroy();

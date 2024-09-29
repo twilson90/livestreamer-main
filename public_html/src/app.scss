@@ -1201,12 +1201,15 @@ button, input[type=button], input[type=submit] {
 		font-size:12px !important;
 		flex-direction: column;
 		font-family: monospace;
-		margin: 0 -1px -1px -1px;
 		td {
 			padding:4px;
 		}
+		&:not(:empty) {
+			margin: 0 -1px -1px -1px;
+		}
 		body:not([data-show_encoder_info]) & {
 			display:none;
+			margin: 0;
 		}
 	}
 }
@@ -2882,13 +2885,15 @@ table.keyboard-shortcuts {
 	padding-left: 10px;
 	padding-right: 10px;
 	padding-bottom: 10px;
+	padding-top: 48px !important;
 }
 .fancybox__content {
-	--min-width: 600px;
+	--min-width: 300px;
 	--max-width: 100%;
 	$fb-padding: 15px;
 	// white-space: normal;
 	width: 50%;
+	width: max(50%, 600px);
 	min-width: var(--min-width);
 	max-width: var(--max-width);
 	// max-width: 90%;

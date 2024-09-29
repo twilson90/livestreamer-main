@@ -73,43 +73,48 @@ class MainApp {
         
         var update_processes = ()=>{
             for (var m in core.modules) {
-                var p = {...core.processes[m]} || {status:"stopped"}
+                var p = core.ipc.get_process(m);
+                p = p ? {...p, status: "online"} : {status:"stopped"}
                 Object.assign(p, {
                     title: core.conf[`${m}.title`],
                     description: core.conf[`${m}.description`],
-                })
+                });
                 this.$.processes[m] = p;
             }
         }
         update_processes();
-        core.on("core.update-processes", ()=>update_processes());
 
-        core.on("file-manager.update-volumes", (data)=>{
+        core.ipc.respond("stream_targets", ()=>{
+            return this.streams.map(s=>Object.values(s.stream_targets)).flat().map(t=>t.$);
+        });
+
+        core.ipc.on("internal:processes", ()=>update_processes());
+
+        core.ipc.request("file-manager", "volumes", null, {}).then((data)=>{
             core.logger.info(`update-volumes [${Object.keys(data).length}]`,)
             this.$.volumes = data;
         });
-        core.on("main.save-sessions", (data)=>{
+        core.ipc.on("main.save-sessions", (data)=>{
             this.save_sessions();
         });
-        core.on("media-server.connected", async ()=>{
-            var nms_sessions = (await core.ipc_request("media-server", { call:["get_published_sessions"] }).catch((e)=>core.logger.error(e))) || [];
-            Object.assign(this.$.nms_sessions, Object.fromEntries(nms_sessions.map(s=>[s.id,s])));
-        });
-        core.on("media-server.post-publish", (nms_session)=>{
+        core.ipc.on("media-server.post-publish", (nms_session)=>{
             if (nms_session.rejected) return;
             this.$.nms_sessions[nms_session.id] = nms_session;
             if (nms_session.appname === "livestream") {
                 new ExternalSession(nms_session);
             }
         });
-        core.on("media-server.metadata-publish", (nms_session)=>{
+        core.ipc.on("media-server.metadata-publish", (nms_session)=>{
             this.$.nms_sessions[nms_session.id] = nms_session;
         });
-        core.on("media-server.done-publish", (nms_session)=>{
+        core.ipc.on("media-server.done-publish", (nms_session)=>{
             Object.values(this.sessions).filter(s=>s instanceof ExternalSession && s.nms_session && s.nms_session.id == nms_session.id).forEach(s=>s.destroy());
             delete this.$.nms_sessions[nms_session.id];
         });
-        core.on("core.update-conf", ()=>{
+        core.ipc.request("media-server", "published_sessions", null, []).then((nms_sessions)=>{
+            Object.assign(this.$.nms_sessions, Object.fromEntries(nms_sessions.map(s=>[s.id,s])));
+        })
+        core.ipc.on("update-conf", ()=>{
             core.logger.info("Config file updated.");
             update_conf();
         });
@@ -217,7 +222,7 @@ class MainApp {
             this.add_plugin(k, ...core.conf["main.plugins"][k]);
         }
 
-        core.on("input", async (c)=>{
+        core.ipc.on("input", async (c)=>{
             const log = (s)=>process.stdout.write(s+"\n", "utf8");
             let command = c[0];
             if (command.match(/^replace-filenames$/)) {
@@ -301,8 +306,6 @@ class MainApp {
 
         this.#scan_media_info();
 
-        
-        
         var exp = express();
 
         this.web = new WebServer(exp, {
@@ -317,9 +320,6 @@ class MainApp {
             extended: true,
             limit: '50mb',
         }));
-
-        // var tmp_uploads_dir = path.resolve(app.tmp_dir, "uploads");
-        // var get_hash = (size, mtime)=>utils.md5(JSON.stringify([size, mtime]));
 
         var get_playlist_item = (id)=>{
             for (var s of Object.values(this.sessions)) {
@@ -420,10 +420,6 @@ class MainApp {
 
         exp.use(compression({threshold:0}));
         exp.use("/", express.static(this.public_html_dir));
-        // exp.use("/conf", (req, res, next)=>{
-        //     res.header("content-type", "application/json");
-        //     res.send(JSON.stringify(core.conf));
-        // });
         exp.use("/plugins/:id/", (req, res, next)=>{
             var p = this.plugins[req.params.id];
             if (p) express.static(p.dir)(req, res, next);
@@ -493,10 +489,6 @@ class MainApp {
         for (var target of leftovers) {
             target.destroy();
         }
-    }
-
-    get_stream_targets() {
-        return this.streams.map(s=>Object.values(s.stream_targets)).flat().map(t=>t.$);
     }
 
     create_target(data) {
@@ -966,8 +958,7 @@ class MainApp {
         return this.updating_system_info;
     }
     async update_process_infos() {
-        // var pid = core.IS_MASTER ? core.pid : core.ppid; // ?? surely we are always not master
-        var pid = core.ppid; // ?? surely we are always not master
+        var pid = core.ppid;
         var results = await pidtree(pid, {root:true, advanced:true});
         var all_pids = [...Object.values(results).map(r=>r.pid).flat()];
         var tree = utils.tree(results, (p)=>[p.pid, p.ppid])[0];
