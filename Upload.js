@@ -76,7 +76,7 @@ class Upload extends DataNode {
                 var ts = Date.now();
                 let speed = Math.round((this.bytes - this.#last_bytes)/((ts - this.#last_ts)/1000)) || 0;
                 this.#speeds[(this.#speed_pointer++)%8] = speed;
-                this.$.speed = utils.average(this.#speeds);
+                this.$.speed = utils.average(...this.#speeds);
                 this.#last_ts = ts;
                 this.#last_bytes = this.bytes;
             }, 1000);
@@ -84,7 +84,7 @@ class Upload extends DataNode {
     }
 
     /** @param {import("stream").Readable} stream */
-    add_chunk(stream, start, oncomplete) {
+    add_chunk(stream, start) {
         var writestream = fs.createWriteStream(this.unique_dest_path, {start, flags: "r+"}); // stat?"r+":"w"
         var p = start;
         this.streams.add(writestream);
@@ -100,10 +100,6 @@ class Upload extends DataNode {
                 this.#last_log = ts;
                 core.logger.info(`Uploading ['${this.unique_dest_path}', ${this.bytes}/${this.$.total}, ${(percent*100).toFixed(2)}%`);
             }
-            /* if (this.first_last_parts_uploaded && !this.#first_last_parts_uploaded) {
-                this.#first_last_parts_uploaded = true;
-                this.emit("first_last_parts");
-            } */
             p += chunk.length;
         });
         /* stream.on("error", err => {
@@ -156,16 +152,15 @@ class Upload extends DataNode {
         this.$.status = Upload.Status.CANCELED;
         for (var s of this.streams) {
             s.close();
-            // await new Promise(resolve=>s.destroy(resolve));
         }
-        setTimeout(()=>{
-            this.destroy();
-        }, 60*1000);
+        core.logger.info(`Upload cancelled by user: ${this.unique_dest_path}`);
+        this.destroy();
     }
     destroy() {
-        delete app.uploads[this.id];
-        this.#speed_check_interval.destroy();
         super.destroy();
+        delete app.uploads[this.id];
+        delete app.$.uploads[this.id];
+        this.#speed_check_interval.destroy();
     }
 }
 

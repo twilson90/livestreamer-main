@@ -10,7 +10,6 @@ import express from "express";
 import bodyParser from "body-parser";
 import multer from "multer";
 import pidusage from "pidusage";
-import pidtree from "pidtree";
 import checkDiskSpace from "check-disk-space";
 import readline from "node:readline";
 import child_process from "node:child_process";
@@ -22,7 +21,7 @@ const MAX_CONCURRENT_MEDIA_INFO_PROMISES = 8;
 const TICK_INTERVAL = 1 * 1000;
 
 /** @typedef {string} Domain */
-/** @typedef {Record<string,{access:string, password:string, suspended:boolean}>} AccessControl */
+/** @typedef {Record<PropertyKey,{access:string, password:string, suspended:boolean}>} AccessControl */
 
 class MainApp {
     /** @type {Object.<string,Download>} */
@@ -42,8 +41,8 @@ class MainApp {
     #media_info_cache;
     /** @type {utils.PromisePool} */
     #media_info_promise_pool;
-    /** @type {utils.PromisePool} */
-    #prepare_promise_pool;
+    // /** @type {utils.PromisePool} */
+    // #prepare_promise_pool;
     null_stream_duration = 60
     netstats = [];
 
@@ -52,7 +51,7 @@ class MainApp {
 
     get sessions_ordered() { return utils.sort(Object.values(this.sessions), s=>s.index); }
     
-    /** @type {Record<string,Client>} */
+    /** @type {Record<PropertyKey,Client>} */
     get clients() { return this.wss.clients; }
 
     async init() {
@@ -81,18 +80,13 @@ class MainApp {
                 });
                 this.$.processes[m] = p;
             }
-        }
+            this.check_volumes();
+        };
         update_processes();
 
+        core.ipc.on("internal:processes", ()=>update_processes());
         core.ipc.respond("stream_targets", ()=>{
             return this.streams.map(s=>Object.values(s.stream_targets)).flat().map(t=>t.$);
-        });
-
-        core.ipc.on("internal:processes", ()=>update_processes());
-
-        core.ipc.request("file-manager", "volumes", null, {}).then((data)=>{
-            core.logger.info(`update-volumes [${Object.keys(data).length}]`,)
-            this.$.volumes = data;
         });
         core.ipc.on("main.save-sessions", (data)=>{
             this.save_sessions();
@@ -111,51 +105,14 @@ class MainApp {
             Object.values(this.sessions).filter(s=>s instanceof ExternalSession && s.nms_session && s.nms_session.id == nms_session.id).forEach(s=>s.destroy());
             delete this.$.nms_sessions[nms_session.id];
         });
-        core.ipc.request("media-server", "published_sessions", null, []).then((nms_sessions)=>{
+        core.ipc.request("media-server", "published_sessions").catch(()=>{}).then((nms_sessions)=>{
+            if (!nms_sessions) return;
             Object.assign(this.$.nms_sessions, Object.fromEntries(nms_sessions.map(s=>[s.id,s])));
         })
-        core.ipc.on("update-conf", ()=>{
+        core.ipc.on("core:update-conf", ()=>{
             core.logger.info("Config file updated.");
             update_conf();
         });
-
-        this.files_dir = path.resolve(core.appdata_dir, "files");
-        this.save_dir = path.resolve(core.appdata_dir, "saves");
-        this.curr_save_dir = path.resolve(this.save_dir, "curr");
-        this.old_save_dir = path.resolve(this.save_dir, "old");
-        this.targets_dir = path.resolve(core.appdata_dir, "targets");
-        // this.fonts_dir = path.resolve(core.root_dir, ".fonts");
-        this.screenshots_dir = path.resolve(core.appdata_dir, "screenshots");
-        this.change_log_path = path.resolve(core.cwd, "changes.md");
-        this.sockets_dir = path.resolve(core.tmp_dir, "sockets");
-        this.public_html_dir = path.resolve(__dirname, "public_html");
-        this.mpv_lua_dir = path.resolve(__dirname, "mpv_lua");
-        this.null_video_path = path.resolve(core.tmp_dir, `nv`);
-        this.null_audio_path = path.resolve(core.tmp_dir, `na`);
-        this.null_audio_video_path = path.resolve(core.tmp_dir, `nav`);
-        this.fixed_media_dir = path.resolve(core.cache_dir, "fixed");
-
-        setInterval(()=>this.cleanup_tmp_dirs(), 1000 * 60 * 60);
-        this.cleanup_tmp_dirs();
-        
-        this.#media_info_cache = new Cache("mediainfo");
-        this.#media_info_promise_pool = new utils.PromisePool(MAX_CONCURRENT_MEDIA_INFO_PROMISES);
-        this.#prepare_promise_pool = new utils.PromisePool(2);
-
-        this.debounced_update_media_refs = utils.debounce(()=>{
-            for (var filename of [...this.#dirty_media_refs]) {
-                var refs = this.#media_refs[filename]
-                if (!refs) {
-                    delete this.#media_refs[filename];
-                    delete this.$.media_info[filename];
-                } else if (!(filename in this.$.media_info)) {
-                    this.probe_media(filename);
-                }
-            }
-            this.#dirty_media_refs.clear();
-        }, 0);
-        
-        setInterval(()=>this.#tick(), TICK_INTERVAL);
 
         this.netstats = []
         let nethogs = child_process.spawn(`nethogs`, ["-t"]);
@@ -174,12 +131,43 @@ class MainApp {
         });
         nethogs.on("error", (e)=>{
             console.error(e.message);
-        })
+        });
+
+        this.curr_saves_dir = path.resolve(core.saves_dir, "curr");
+        this.old_saves_dir = path.resolve(core.saves_dir, "old");
+        // this.fonts_dir = path.resolve(core.root_dir, ".fonts");
+        this.public_html_dir = path.resolve(__dirname, "public_html");
+        this.change_log_path = path.resolve(__dirname, "changes.md");
+        this.mpv_lua_dir = path.resolve(__dirname, "mpv_lua");
+        this.null_video_path = path.resolve(core.tmp_dir, `nv`);
+        this.null_audio_path = path.resolve(core.tmp_dir, `na`);
+        this.null_audio_video_path = path.resolve(core.tmp_dir, `nav`);
+        // this.fixed_media_dir = path.resolve(core.cache_dir, "fixed");
+
+        // setInterval(()=>this.cleanup_tmp_dirs(), 1000 * 60 * 60);
+        // this.cleanup_tmp_dirs();
+        
+        this.#media_info_cache = new Cache("mediainfo");
+        this.#media_info_promise_pool = new utils.PromisePool(MAX_CONCURRENT_MEDIA_INFO_PROMISES);
+        // this.#prepare_promise_pool = new utils.PromisePool(2);
+
+        this.debounced_update_media_refs = utils.debounce(()=>{
+            for (var filename of [...this.#dirty_media_refs]) {
+                var refs = this.#media_refs[filename]
+                if (!refs) {
+                    delete this.#media_refs[filename];
+                    delete this.$.media_info[filename];
+                } else if (!(filename in this.$.media_info)) {
+                    this.probe_media(filename);
+                }
+            }
+            this.#dirty_media_refs.clear();
+        }, 0);
+        
+        setInterval(()=>this.#tick(), TICK_INTERVAL);
 
         var update_change_log = async ()=>{
-            var converter = new showdown.Converter();
             this.$.change_log = {
-                "html": converter.makeHtml(await fs.readFile(this.change_log_path, "utf8")),
                 "mtime": +(await fs.stat(this.change_log_path)).mtime
             };
         }
@@ -189,29 +177,17 @@ class MainApp {
         
         this.$.properties = new InternalSession.PROPS_CLASS();
         
-        await fs.mkdir(this.save_dir, { recursive: true });
-        await fs.mkdir(this.old_save_dir, { recursive: true });
-        await fs.mkdir(this.curr_save_dir, { recursive: true });
-        await fs.mkdir(this.files_dir, { recursive: true });
+        await fs.mkdir(this.old_saves_dir, { recursive: true });
+        await fs.mkdir(this.curr_saves_dir, { recursive: true });
         // await fs.mkdir(this.fonts_dir, { recursive: true });
-        await fs.mkdir(this.targets_dir, { recursive: true });
-        await fs.mkdir(this.fixed_media_dir, { recursive: true });
-
-        await fs.emptyDir(this.screenshots_dir);
-
-        if (process.platform !== 'win32') {
-            await fs.mkdir(this.sockets_dir, { recursive: true });
-            await fs.emptyDir(this.sockets_dir);
-        }
+        // await fs.mkdir(this.fixed_media_dir, { recursive: true });
         
-        await this.generate_null_media_files();
-
-        // this.oauth2 = new OAuth2(exp, core.https_url+"/oauth");
-        // this.$.oauth2 = this.oauth2.$;
+        await this.#generate_null_media_files();
         
         var save_interval_id = new utils.Interval(()=>{
             this.save_sessions();
         }, ()=>core.conf["main.autosave_interval"] * 1000);
+
         var update_conf = ()=>{
             this.load_targets();
             save_interval_id.next();
@@ -222,7 +198,7 @@ class MainApp {
             this.add_plugin(k, ...core.conf["main.plugins"][k]);
         }
 
-        core.ipc.on("input", async (c)=>{
+        core.on("input", async (c)=>{
             const log = (s)=>process.stdout.write(s+"\n", "utf8");
             let command = c[0];
             if (command.match(/^replace-filenames$/)) {
@@ -245,7 +221,9 @@ class MainApp {
                     }
                 }
                 log(`Replaced ${i} filenames.`);
-            } else if (command.match(/^(replace-symlinks|remove-bad-symlinks|symlinks-to-copies)$/)) {
+                return;
+            }
+            if (command.match(/^(replace-symlinks|remove-bad-symlinks|symlinks-to-copies)$/)) {
                 let dir = c[1]
                 let remove = command == "remove-bad-symlinks";
                 let to_copy = command == "symlinks-to-copies";
@@ -299,13 +277,28 @@ class MainApp {
                 }
                 await scan(dir);
                 log(`${remove?"Removed":"Replaced"} ${i} symlinks.`);
+                return;
             }
-        })
+        });
         
         await this.load_sessions();
 
-        this.#scan_media_info();
+        this.#scan_all_media_info_loop();
 
+        await this.#setup_web();
+        
+    }
+
+    check_volumes() {
+        if (!core.ipc.get_process("file-manager")) return;
+        core.ipc.request("file-manager", "volumes").catch(()=>{}).then((data)=>{
+            if (!data) return;
+            core.logger.info(`update-volumes [${Object.keys(data).length}]`);
+            this.$.volumes = data;
+        });
+    }
+    
+    async #setup_web() {
         var exp = express();
 
         this.web = new WebServer(exp, {
@@ -320,14 +313,6 @@ class MainApp {
             extended: true,
             limit: '50mb',
         }));
-
-        var get_playlist_item = (id)=>{
-            for (var s of Object.values(this.sessions)) {
-                if (!s.$.playlist) continue;
-                var item = s.$.playlist[id];
-                if (item) return item;
-            }
-        }
         
         var upload = multer({
             // limits: {
@@ -348,14 +333,16 @@ class MainApp {
                     this.start = 0;
                     this.length = 0;
                     
-                    let {filename, start, filesize, mtime, id, session_id } = c;
+                    let {filename, start, filesize, mtime, id, session_id} = c;
                     // let hash = get_hash(filesize, mtime);
                     let rel_dir = req.path.slice(1);
-                    let dest_dir = this.files_dir;
+                    let dest_dir = core.files_dir;
                     /** @type {InternalSession} */
                     let session = this.sessions[session_id];
                     if (session) dest_dir = session.files_dir;
                     let dest_path = path.resolve(dest_dir, rel_dir, filename);
+                    let item = session ? session.$.playlist[id] : null;
+
                     if (path.relative(dest_dir, dest_path).startsWith("..")) {
                         cb(`dest_path is not descendent of ${dest_dir}.`);
                         return;
@@ -368,9 +355,8 @@ class MainApp {
                             var initial_scan = false;
                             upload.on("chunk", ()=>{
                                 if (initial_scan) return;
-                                if ((!upload.unique_dest_path.match(/\.mp4$/i) && upload.first_chunk_uploaded) || upload.first_and_last_chunks_uploaded) {
+                                if ((upload.unique_dest_path.match(/\.mp4$/i) && upload.first_and_last_chunks_uploaded) || upload.first_chunk_uploaded) {
                                     initial_scan = true;
-                                    var item = get_playlist_item(upload.id);
                                     if (item) {
                                         item.filename = upload.unique_dest_path;
                                         this.probe_media(item.filename, {force:true});
@@ -378,21 +364,22 @@ class MainApp {
                                 }
                             });
                             upload.on("complete", ()=>{
+                                delete item.upload;
                                 if (upload.chunks > 1) {
-                                    var item = get_playlist_item(upload.id);
                                     if (item) this.probe_media(item.filename, {force:true});
                                 }
                             });
                         }
                     }
-                    /* req.on("close", ()=>{
-                        if (req.readableAborted) {
+
+                    if (item) item.upload = upload.$;
+                    // same as "abort" apparently
+                    /* req.on('close', () => {
+                        if (!req.complete) {
+                            core.logger.info(`Upload chunk cancelled by user: ${upload.unique_dest_path}`);
                             upload.cancel();
                         }
-                    }) */
-                    req.on("aborted", ()=>{
-                        upload.cancel();
-                    });
+                    }); */
                     await upload.ready;
                     file.upload = upload;
                     let err = await upload.add_chunk(file.stream, start).catch((e)=>e);
@@ -417,28 +404,32 @@ class MainApp {
                 res.status(err ? 400 : 200).json(d);
             })
         });
-
+        var showdown_converter = new showdown.Converter();
         exp.use(compression({threshold:0}));
         exp.use("/", express.static(this.public_html_dir));
+        exp.use("/changes.md", async (req, res, next)=>{
+            var html = showdown_converter.makeHtml(await fs.readFile(this.change_log_path, "utf8"));
+            res.status(200).send(html);
+        });
         exp.use("/plugins/:id/", (req, res, next)=>{
             var p = this.plugins[req.params.id];
             if (p) express.static(p.dir)(req, res, next);
             else res.status(404).send("Plugin not found.");
         });
 
-        exp.use("/screenshots", express.static(this.screenshots_dir));
+        exp.use("/screenshots", express.static(core.screenshots_dir));
         
         await this.wss.init("main", this.web.wss, this.$, Client, true);
     }
 
-    async #scan_media_info() {
+    async #scan_all_media_info_loop() {
         for (var k in this.$.media_info) {
             await Promise.all([
                 utils.timeout(5 * 1000),
                 this.probe_media(k, {silent:true})
             ])
         }
-        setTimeout(()=>this.#scan_media_info(), 1000);
+        setTimeout(()=>this.#scan_all_media_info_loop(), 1000);
     }
     
     async load_targets() {
@@ -467,11 +458,11 @@ class MainApp {
             t.locked = true;
             target_defs.push(t);
         }
-        for (var id of await fs.readdir(this.targets_dir)) {
+        for (var id of await fs.readdir(core.targets_dir)) {
             /** @type {Target} */
             var t;
             try {
-                t = JSON.parse(await fs.readFile(path.resolve(this.targets_dir, id)));
+                t = JSON.parse(await fs.readFile(path.resolve(core.targets_dir, id)));
             } catch (e) {
                 core.logger.error(`Couldn't read or parse target '${id}'`);
             }
@@ -515,17 +506,17 @@ class MainApp {
         new Plugin(id, dir, options);
     }
 
-    async cleanup_tmp_dirs() {
-        // stupid
-        var files = await glob("*", {cwd:this.fixed_media_dir, withFileTypes:true});
-        for (var f of files) {
-            if (f.mtimeMs + (1000 * 60 * 60 * 24) > Date.now()) {
-                await fs.rm(path.join(this.fixed_media_dir, f.name)).catch(()=>{});
-            }
-        }
-    }
+    // async cleanup_tmp_dirs() {
+    //     // stupid
+    //     var files = await glob("*", {cwd:this.fixed_media_dir, withFileTypes:true});
+    //     for (var f of files) {
+    //         if (f.mtimeMs + (1000 * 60 * 60 * 24) > Date.now()) {
+    //             await fs.rm(path.join(this.fixed_media_dir, f.name)).catch(()=>{});
+    //         }
+    //     }
+    // }
 
-    async generate_null_media_files() {
+    async #generate_null_media_files() {
         var [w,h] = [1280,720];
         var t0 = Date.now();
         if (!(await fs.exists(this.null_video_path))) {
@@ -554,10 +545,10 @@ class MainApp {
 
     async load_sessions() {
         var sessions = [];
-        var session_ids = await fs.readdir(this.curr_save_dir);
+        var session_ids = await fs.readdir(this.curr_saves_dir);
         // new format...
         for (let uid of session_ids) {
-            var session_dir = path.resolve(this.curr_save_dir, uid);
+            var session_dir = path.resolve(this.curr_saves_dir, uid);
             let filenames = await utils.order_files_by_mtime_descending(await fs.readdir(session_dir), session_dir);
             for (let filename of filenames) {
                 let fullpath = path.resolve(session_dir, filename);
@@ -578,10 +569,10 @@ class MainApp {
         }
         /* if (!sessions.length) {
             // old format...
-            let filenames = (await fs.readdir(this.save_dir)).filter(filename=>filename.match(/^\d{4}-\d{2}-\d{2}-/));
-            filenames = await utils.order_files_by_mtime_descending(filenames, this.save_dir);
+            let filenames = (await fs.readdir(core.saves_dir)).filter(filename=>filename.match(/^\d{4}-\d{2}-\d{2}-/));
+            filenames = await utils.order_files_by_mtime_descending(filenames, core.saves_dir);
             for (let filename of filenames) {
-                let fullpath = path.resolve(this.save_dir, filename);
+                let fullpath = path.resolve(core.saves_dir, filename);
                 try {
                     core.logger.info(`Loading '${filename}'...`);
                     sessions = JSON.parse(await fs.readFile(fullpath, "utf8")).sessions;
@@ -627,54 +618,53 @@ class MainApp {
 
     async prepare(filename) {
         return filename;
-        // ---
-        if (filename) {
-            var mi = await this.probe_media(filename);
-            if (!this.#proxy_files[filename]) {
-                if (mi && mi.probe_method == "ffprobe") {
-                    var fix = false;
-                    var ffmpeg_args = [];
-                    var fix_format = !!String(mi.format).match(/^(mpeg|mpegts|avi)$/);
-                    var first_audio_track = mi.streams.filter(s=>s.type === "audio")[0];
-                    var fix_audio = !!(first_audio_track && first_audio_track.codec.match(/^(mp3|mp2)$/)); // is this necessary?
-                    fix_audio = false;
-                    if (fix_format || fix_audio) {
-                        fix = true;
-                        // fflags +genpts is necessary for some VOB files.
-                        ffmpeg_args.push("-fflags", "+genpts", "-i", filename, "-c", "copy");
-                        if (fix_audio) ffmpeg_args.push("-c:a", "aac", "-b:a", "160k");
-                        ffmpeg_args.push("-f", "matroska");
-                    }
-                    if (fix) {
-                        this.#proxy_files[filename] = this.#prepare_promise_pool.enqueue(async ()=>{
-                            var hash = utils.md5(filename);
-                            var output_filename = path.join(core.cache_dir, "fixed", hash + ".mkv");
-                            var proof_filename = output_filename + ".complete";
-                            var exists = (await Promise.all([fs.exists(output_filename), fs.exists(proof_filename)])).every(s=>s);
-                            core.logger.info(`Fixing '${filename}' => '${output_filename}'...`);
-                            if (!exists) {
-                                await new Promise((resolve)=>{
-                                    var ffmpeg = new FFMPEGWrapper();
-                                    ffmpeg.start([...ffmpeg_args, output_filename, "-y"]);
-                                    ffmpeg.on("info", (info)=>{
-                                        if (info.time > 5000) resolve();
-                                    });
-                                    ffmpeg.on("end", async()=>{
-                                        core.logger.info(`Fixed '${filename}' => '${output_filename}'.`);
-                                        await fs.writeFile(proof_filename, "");
-                                        resolve();
-                                    });
-                                    utils.timeout(10000).then(resolve);
-                                });
-                            }
-                            this.proxy_files[filename] = output_filename;
-                            return output_filename;
-                        });
-                    }
-                }
-            }
-        }
-        return this.#proxy_files[filename] || filename;
+        // if (filename) {
+        //     var mi = await this.probe_media(filename);
+        //     if (!this.#proxy_files[filename]) {
+        //         if (mi && mi.probe_method == "ffprobe") {
+        //             var fix = false;
+        //             var ffmpeg_args = [];
+        //             var fix_format = !!String(mi.format).match(/^(mpeg|mpegts|avi)$/);
+        //             var first_audio_track = mi.streams.filter(s=>s.type === "audio")[0];
+        //             var fix_audio = !!(first_audio_track && first_audio_track.codec.match(/^(mp3|mp2)$/)); // is this necessary?
+        //             fix_audio = false;
+        //             if (fix_format || fix_audio) {
+        //                 fix = true;
+        //                 // fflags +genpts is necessary for some VOB files.
+        //                 ffmpeg_args.push("-fflags", "+genpts", "-i", filename, "-c", "copy");
+        //                 if (fix_audio) ffmpeg_args.push("-c:a", "aac", "-b:a", "160k");
+        //                 ffmpeg_args.push("-f", "matroska");
+        //             }
+        //             if (fix) {
+        //                 this.#proxy_files[filename] = this.#prepare_promise_pool.enqueue(async ()=>{
+        //                     var hash = utils.md5(filename);
+        //                     var output_filename = path.join(core.cache_dir, "fixed", hash + ".mkv");
+        //                     var proof_filename = output_filename + ".complete";
+        //                     var exists = (await Promise.all([fs.exists(output_filename), fs.exists(proof_filename)])).every(s=>s);
+        //                     core.logger.info(`Fixing '${filename}' => '${output_filename}'...`);
+        //                     if (!exists) {
+        //                         await new Promise((resolve)=>{
+        //                             var ffmpeg = new FFMPEGWrapper();
+        //                             ffmpeg.start([...ffmpeg_args, output_filename, "-y"]);
+        //                             ffmpeg.on("info", (info)=>{
+        //                                 if (info.time > 5000) resolve();
+        //                             });
+        //                             ffmpeg.on("end", async()=>{
+        //                                 core.logger.info(`Fixed '${filename}' => '${output_filename}'.`);
+        //                                 await fs.writeFile(proof_filename, "");
+        //                                 resolve();
+        //                             });
+        //                             utils.timeout(10000).then(resolve);
+        //                         });
+        //                     }
+        //                     this.proxy_files[filename] = output_filename;
+        //                     return output_filename;
+        //                 });
+        //             }
+        //         }
+        //     }
+        // }
+        // return this.#proxy_files[filename] || filename;
     }
 
     mediainfo_version = 1.2;
@@ -863,12 +853,6 @@ class MainApp {
         });
     }
 
-    elfinder_volume_tree(id) {
-        if (this.ipc.clients["elfinder"].connected) {
-            return this.ipc.clients["elfinder"].request({ call:[["volume_tree", id]] });
-        }
-    }
-
     async evaluate_filename(dir,file) {
         file = file.replace(/%(.+)%/g, function(...m) {
             if (m[1].match(/^(date|now)$/)) return utils.date_to_string();
@@ -957,9 +941,9 @@ class MainApp {
         }
         return this.updating_system_info;
     }
+
     async update_process_infos() {
-        var pid = core.ppid;
-        var results = await pidtree(pid, {root:true, advanced:true});
+        var results = await utils.pidtree(core.ppid, {root:true, advanced:true});
         var all_pids = [...Object.values(results).map(r=>r.pid).flat()];
         var tree = utils.tree(results, (p)=>[p.pid, p.ppid])[0];
         var stats_lookup = all_pids.length ? await pidusage(all_pids) : {};
@@ -991,6 +975,7 @@ class MainApp {
         core.logger.info("Saving all sessions before exit...");
         await this.save_sessions();
         core.logger.info("Sessions saved.");
+        this.web.destroy();
     }
 }
 

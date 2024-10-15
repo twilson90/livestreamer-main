@@ -102,9 +102,32 @@ export var mime_ext_map = {
     "image": ["jpeg", "jpg", "png", "bmp", "webp", "tif", "tiff", "svg", "ico", "gif"],
     "video": ["mp4", "mkv", "mov", "m4v", "avi", "mpeg", "ogv", "ts", "webm", "3gp", "3g2", "gif"],
     "audio": ["mp3", "wav", "flac", "m4a", "aac", "oga", "opus", "weba", "3gp", "3g2"],
+    "text": ["idx", "sup", "srt", "ass", "txt", "sub"],
 }
 
-export var graph_colors = ['#e6194B', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#42d4f4', '#ffe119', '#f032e6', '#bfef45', '#fabed4', '#469990', '#dcbeff', '#9A6324', '#800000', '#aaffc3', '#808000', '#ffd8b1', '#000075', '#a9a9a9', '#ffffff', '#000000'];
+export var graph_colors = [
+    '#e6194B',
+    '#3cb44b',
+    '#4363d8',
+    '#f58231',
+    '#911eb4',
+    '#42d4f4',
+    '#ffe119',
+    '#f032e6',
+    '#bfef45',
+    '#fabed4',
+    '#469990',
+    '#dcbeff',
+    '#9A6324',
+    '#800000',
+    '#aaffc3',
+    '#808000',
+    '#ffd8b1',
+    '#000075',
+    '#a9a9a9',
+    // '#ffffff',
+    // '#000000'
+];
 
 export var item_colors = {
     "none":"",
@@ -309,10 +332,8 @@ export class FileDrop extends utils.EventEmitter{
             e.stopPropagation();
             remove_class(elem, "file-over");
             i--;
-            var entries = await get_entries_from_drag_event(e);
-            var files = await Promise.all(entries.map(e=>new Promise(resolve=>e.file(resolve))));
-            // /** @event FileDrop#drop @param {File[]} files  @param {FileSystemEntry[]} entries */
-            this.emit("drop", files, entries);
+            let entries = [...e.dataTransfer.items].map(i=>i.webkitGetAsEntry());
+            this.emit("drop", entries);
         });
         elem.addEventListener("dragover", (e) => {
             if (!is_files(e)) return;
@@ -334,33 +355,6 @@ export class FileDrop extends utils.EventEmitter{
             if (i == 0) remove_class(elem, "file-over")
         });
     }
-}
-
-/** @param {DragEvent} ev */
-async function get_entries_from_drag_event(ev) {
-    /** @type {FileSystemEntry[]} */
-    var entries = [];
-    /** @param {FileSystemEntry} entry */
-    var traverse = async (entry) => {
-        if (!entry) return;
-        if (!entry.isFile && !entry.isDirectory) return;
-        entries.push(entry);
-        if (entry.isDirectory) {
-            await new Promise((resolve) => {
-                var dirReader = entry.createReader();
-                dirReader.readEntries((entries) => {
-                    for (var e of entries) {
-                        traverse(e, entry.fullPath);
-                    }
-                    resolve();
-                });
-            });
-        }
-    };
-    for (var i of ev.dataTransfer.items) {
-        await traverse(i.webkitGetAsEntry());
-    }
-    return entries;
 }
 
 export function round_ms(num) {
@@ -542,8 +536,9 @@ export function create_background_properties(options, is_session) {
     var get_file_duration = ()=>app.$.media_info[background_file.value] ? app.$.media_info[background_file.value].duration : 0;
     var is_file_image = ()=>get_file_duration()<=IMAGE_DURATION;
 
-    var background_file = new FileProperty(`${name}_file`, is_session ? "Logo File" : "Replace Video with Image/Video File", {
+    var background_file = new FileProperty(`${name}_file`, is_session ? "Logo File" : "Replace Video File", {
         "file.options": { files: true, filter: ["image/*", "video/*"] },
+        "info": is_session ? "An image or video file." : "Select a video or an image file to loop and repeat for the duration of the base media item."
         // "hidden": ()=>background_mode.value !== "file",
     });
     background_file.add_validator(UI.VALIDATORS.media_video);
@@ -708,14 +703,25 @@ async function open_file_manager(options) {
             electron_options.filters = [];
             electron_options.filters.push({name:"All Files", extensions:["*"]});
             var custom_ext = [];
+            let mime_filters = [];
             for (var f of options.filter) {
                 var m;
                 if (m = f.match(/^(.+?)\/\*$/)) {
-                    electron_options.filters.push({ name: utils.capitalize(m[1])+"s", extensions: mime_ext_map[m[1]] || ["*"]})
+                    mime_filters.push({name:utils.capitalize(m[1]), extensions:mime_ext_map[m[1]]||["*"]});
                 } else if (m = f.match(/^\.(\w+)$/)) {
                     custom_ext.push(m[1]);
                 }
             }
+            if (mime_filters.length>1) {
+                let names = [];
+                let extensions = [];
+                for (var f of mime_filters) {
+                    names.push(f.name);
+                    extensions.push(...f.extensions);
+                }
+                electron_options.filters.push({name: names.join("/"), extensions:[...new Set(extensions)]})
+            }
+            electron_options.filters.push(...mime_filters);
             if (custom_ext.length) {
                 custom_ext = utils.array_unique(custom_ext);
                 electron_options.filters.push({ name: "Custom File Type", extensions: custom_ext});
@@ -932,13 +938,13 @@ export function fancybox_prompt(title, inputs, settings) {
                     resolve(result);
                 }
             })
-            modal.footer.append(ok_button)
+            modal.footer_elem.append(ok_button)
         }
         if (settings.cancel) {
             var cancel_button = new UI.Button(settings.cancel, {
                 click: ()=>resolve(null)
             })
-            modal.footer.append(cancel_button)
+            modal.footer_elem.append(cancel_button)
         }
         modal.on("hide", ()=>resolve(null))
     }).finally(()=>{
@@ -1378,64 +1384,65 @@ export class PlaylistCommand {
 /** @typedef {{username:string, access:string, suspended:boolean, password:string}} User */
 export class AccessControl {
     constructor(data) {
-        /** @type {Record<string,User>} */
-        this.data = data || {};
+        Object.assign(this, data);
     }
-    get users() {
-        var users = Object.entries(this.data).map(([username,data])=>{
+    get _users() {
+        var users = Object.entries(this).map(([username,data])=>{
             delete data.username; // incase username was accidentally saved
             return {username, ...data};
         });
         return utils.sort(users, v=>(v.username=="*")?0:1, v=>v.access=="owner"?0:1, v=>AccessControl.ACCESS_ORDER[v.access], v=>v.username.toLowerCase());
     }
-    get owners() { return this.users.filter(d=>d.access==="owner"); }
-    edit(username, data) {
-        var user = this.data[username];
+    get _owners() { return this._users.filter(d=>d.access==="owner"); }
+    _edit(username, data) {
+        var user = this[username];
         if (data == null) {
-            if (user && user.access === "owner" && username === app.$._client.username && this.owners.length > 1) {
+            if (user && user.access === "owner" && username === app.$._client.username && this._owners.length > 1) {
                 if (!confirm("Deleting your ownership may revoke your access. Are you sure?")) return false;
             }
-            delete this.data[username];
+            delete this[username];
         } else {
-            if (!this.data[username]) this.data[username] = {};
-            Object.assign(this.data[username], data);
+            if (!this[username]) this[username] = {};
+            Object.assign(this[username], data);
         }
-        if (this.owners.length == 0) {
-            utils.clear(this.data);
-            Object.assign(this.data, { "*": {"access":"allow"} });
+        if (this._owners.length == 0) {
+            utils.clear(this);
+            Object.assign(this, { "*": {"access":"allow"} });
         }
         return true;
     }
-    get self_can_edit() { return this.owners.length == 0 || this.self_is_owner_or_admin; }
-    get self_is_owner() { return this.has_ownership(app.$._client.username); }
-    get self_is_owner_or_admin() { return this.self_is_owner || app.$._client.is_admin; }
-    get self_requires_password() { return this.requires_password(app.$._client.username); }
-    self_has_access(password) { return app.$._client.is_admin || this.has_access(app.$._client.username, password); }
-    requires_password(username) { return this.has_ownership(username) || !!(this.data["*"] || EMPTY_OBJECT).password; }
-    has_ownership(username) { return (this.data[username] || EMPTY_OBJECT).access === "owner"; }
-    has_access(username, password) {
-        if (this.data[username] && (this.data[username].access === "allow" || this.has_ownership(username))) return true;
-        if (this.data["*"] && this.data["*"].access === "allow" && (!this.data["*"].password || this.data["*"].password == password)) return true;
+    get _self_can_edit() { return this._owners.length == 0 || this._self_is_owner_or_admin; }
+    get _self_is_owner() { return this._has_ownership(app.$._client.username); }
+    get _self_is_owner_or_admin() { return this._self_is_owner || app.$._client.is_admin; }
+    get _self_requires_password() { return this._requires_password(app.$._client.username); }
+    _self_has_access(password) { return app.$._client.is_admin || this._has_access(app.$._client.username, password); }
+    _requires_password(username) { return this._has_ownership(username) || !!(this["*"] || EMPTY_OBJECT).password; }
+    _has_ownership(username) { return (this[username] || EMPTY_OBJECT).access === "owner"; }
+    _has_access(username, password) {
+        if (this[username] && (this[username].access === "allow" || this._has_ownership(username))) return true;
+        if (this["*"] && this["*"].access === "allow" && (!this["*"].password || this["*"].password == password)) return true;
         return false;
     }
-    claim() {
-        this.data = AccessControl.DEFAULT_ACCESS_FOR_SELF
+    _claim() {
+        utils.clear(this);
+        Object.assign(this, AccessControl.DEFAULT_ACCESS_FOR_SELF);
     }
-}
-Object.defineProperty(AccessControl, "DEFAULT_ACCESS_FOR_SELF", {
-    get:()=>{
+    static get DEFAULT_ACCESS_FOR_SELF() {
         return {
             "*": { access: "allow" },
             [app.$._client.username] : { access: "owner" },
-        };
+        }
     }
-});
-AccessControl.ACCESS_ORDER = {"owner":1,"allow":2,"deny":3};
+    static ACCESS_ORDER = {"owner":1,"allow":2,"deny":3};
+}
+
+
+
 
 // --------------------------------------------
 
 
-/** @template T @param {new () => T} clazz @return {Record<string,T>} */
+/** @template T @param {new () => T} clazz @return {Record<PropertyKey,T>} */
 export function create_proxy(clazz) {
     return new Proxy({}, {
         set(target, prop, value) {
@@ -1444,6 +1451,56 @@ export function create_proxy(clazz) {
             return true;
         }
     });
+}
+
+const EMPTY_CHAPTERS = [];
+export class Media {
+    time = 0;
+    duration = 0;
+    chapters = [];
+    seekable = false;
+    seeking = false;
+    buffering = false;
+    loaded;
+    #cache = {};
+    constructor() {
+        this.update();
+    }
+    update() {
+        var item = app.$._session._current_playing_item;
+        var running = app.$._session._is_running;
+        var loaded = !running || !!app.$._stream.mpv.loaded;
+        var seeking = running ? (loaded && !!app.$._stream.mpv.seeking) : false;
+        var special_seeking = (running && app.$._stream.mpv.is_special && (seeking || !app.$._stream.mpv.playing));
+        // console.log("special_seeking", special_seeking)
+        var buffering = (seeking || !loaded || !!app.$._stream.mpv.props["paused-for-cache"]);
+        var seekable = !running || !!app.$._stream.mpv.seekable;
+        
+        this.buffering = buffering;
+        this.seeking = seeking;
+
+        if (special_seeking) return;
+
+        this.time = app.$._session._current_time;
+        this.duration = app.$._session._current_duration;
+        this.chapters = loaded ? app.$._session._current_chapters : EMPTY_CHAPTERS;
+        this.seekable = loaded ? this.duration != 0 && seekable && item.filename !== "livestreamer://empty" : false;
+        this.loaded = loaded;
+        this.status = running ? (loaded ? "Playing" : "Loading") : "Pending";
+        this.stats = {};
+        this.stats["V-FPS"] = (+app.$._stream.mpv.props["estimated-vf-fps"] || 0).toFixed(2);
+        if (!app.$._stream._is_encoding) this.stats["D-FPS"] = (+app.$._stream.mpv.props["estimated-display-fps"] || 0).toFixed(2);
+        this.stats["INTRP"] = app.$._stream.mpv.interpolation ? "On" : "Off";
+        this.stats["DEINT"] = app.$._stream.mpv.deinterlace ? "On" : "Off";
+        this.ranges = app.$._session._current_seekable_ranges;
+        // this.#last_seeks = app.$._stream.mpv.seeks;
+        this.#cache = {};
+    }
+    get curr_chapters() {
+        return this.#cache["curr_chapters"] = this.#cache["curr_chapters"] ?? app.$._session._get_current_chapters_at_time(this.time);
+    }
+    get time_left() { return Math.max(0, this.duration - this.time); }
+    get do_live_seek(){ return app.$._stream._is_running && !app.$._stream._is_encoding && !app.$._stream.mpv.is_special; }
 }
 
 export class Remote extends utils.EventEmitter {
@@ -1469,10 +1526,10 @@ export class Remote extends utils.EventEmitter {
         this.sysinfo = {};
         this.process_info = {};
         this.conf = {};
-        this.server_time_diff = 0;
         this._pending_requests = new Set();
         /** @type {Session} */
         this._last_session = null;
+        this.ts = this._ts = Date.now();
     }
 
     _debounced_update = dom_utils.debounce_next_frame(()=>this._update());
@@ -1501,6 +1558,7 @@ export class Remote extends utils.EventEmitter {
     get _client() { return this.clients[this.client_id] || NULL_CLIENT; }
     get _stream() { return this._session.stream; }
     get _streams() { return Object.values(this.sessions).map(s=>s.stream).filter(s=>s); }
+    _now() { return Date.now() - (this._ts - this.ts) }
 }
 
 export class DataNode {
@@ -1512,6 +1570,7 @@ export class DataNode {
 
 export class Client extends DataNode {
     [Observer.RESET_KEY]() {
+        this.id = "";
         this.session_id = undefined;
         this.is_admin = false;
         this.username = null;
@@ -1521,12 +1580,13 @@ export class Client extends DataNode {
 
 export class Target extends DataNode {
     [Observer.RESET_KEY]() {
+        this.id = "";
         this.name = ""
         this.description = ""
         this.rtmp_host = ""
         this.rtmp_key = ""
         this.url = ""
-        this.access_control = {};
+        this.access_control = new AccessControl();
         this.ts = 0
         this.limit = 0
         this.locked = false
@@ -1544,14 +1604,16 @@ export class Target extends DataNode {
 
 export class Stream extends DataNode {
     [Observer.RESET_KEY]() {
+        this.id = "";
         this.start_time = 0;
         this.state = "stopped";
-        this.speed_history = {};
+        this.graphs = {};
         this.session_id = 0;
         this.mpv = new MPV();
         /** @type {StreamTarget[]} */
         this.targets = [];
         this.test = false;
+        this.bitrate = 0;
     }
     get _session() {
         return app.$.sessions[this.session_id];
@@ -1562,12 +1624,17 @@ export class Stream extends DataNode {
     get _is_encoding() {
         return !!this.mpv.is_encoding && this._is_running;
     }
+    get _live_nms_session() {
+        return Object.values(app.$.nms_sessions).filter(s=>s.publishStreamPath.split("/").pop() === this.id)[0];
+    }
+    get _run_time() {
+        return app.$._now() - this.start_time;
+    }
 }
 export class MPV extends DataNode {
     [Observer.RESET_KEY]() {
         this.is_encoding = false;
         this.seeks = 0;
-        this.preloaded = false;
         this.loaded = false;
         this.seeking = false;
         this.is_special = false;
@@ -1578,6 +1645,7 @@ export class MPV extends DataNode {
         this.time = 0;
         this.seekable_ranges = [];
         this.props = {};
+        this.streams = [];
     }
 }
 export class Session extends DataNode {
@@ -1589,30 +1657,32 @@ export class Session extends DataNode {
         this.time = 0;
         this.logs = {};
         this.downloads = {};
-        this.access_control = {};
+        this.access_control = new AccessControl();
         this.detected_crops = {};
         this.player = {};
         this.player_default_override = {};
         this.stream_settings = {};
         this.stream = new Stream();
-        this.current_item_on_load = null;
-        this.current_descendents_on_load = null;
+        // this.current_item_on_load = null;
+        // this.current_descendents_on_load = null;
         this.target_configs = {};
         this.playlist_info = {};
         this.name = "";
-        /** @type {Record<string,PlaylistItem>} */
+        /** @type {Record<PropertyKey,PlaylistItem>} */
         this.playlist = new Proxy({}, {
-            /** @param {Record<string,PlaylistItem>} target */
+            /** @param {Record<PropertyKey,PlaylistItem>} target */
             get: (target, prop)=>{
                 if (prop == "0") return this._root_playlist_item;
                 return target[prop];
             },
-            /** @param {Record<string,PlaylistItem>} target */
+            /** @param {Record<PropertyKey,PlaylistItem>} target */
             set:(target, prop, value)=>{
+                // if (!(value instanceof PlaylistItem)) {
                 target[prop] = new PlaylistItem(value, this);
+                // }
                 return true;
             },
-            /** @param {Record<string,PlaylistItem>} target */
+            /** @param {Record<PropertyKey,PlaylistItem>} target */
             deleteProperty: (target, prop)=>{
                 if (prop == "0") return true;
                 if (prop in target) {
@@ -1623,12 +1693,13 @@ export class Session extends DataNode {
             }
         });
         this._root_playlist_item = new PlaylistItem({id:"0"}, this);
-        /** @type {Record<string,PlaylistItem>} */
+        /** @type {Record<PropertyKey,PlaylistItem>} */
         this._deleted_playlist_items = {};
     }
     get _connected_nms_sessions() {
         return Object.values(app.$.nms_sessions).filter(s=>s.publishStreamPath.split("/").pop() === this.id);
     }
+    /** @return {PlaylistItem} */
     get _current_playing_item() {
         return this.playlist[this.playlist_id] || NULL_PLAYLIST_ITEM;
     }
@@ -1641,7 +1712,7 @@ export class Session extends DataNode {
     }
     get _current_duration() {
         var d;
-        if (this.stream._is_running) {
+        if (this.stream._is_running && this.stream.mpv.playing) {
             d = this.stream.mpv.duration || 0;
         } else {
             d = 0;
@@ -1652,8 +1723,7 @@ export class Session extends DataNode {
         return round_ms(d || 0);
     }
     get _current_time() {
-        if (this.stream._is_running) return this.stream.mpv.time;
-        return this.time;
+        return (this.stream._is_running && this.stream.mpv.loaded) ? this.stream.mpv.time : this.time;
     }
     get _current_seekable_ranges() {
         if (this.stream._is_running) return this.stream.mpv.seekable_ranges;
@@ -1675,6 +1745,7 @@ export class Session extends DataNode {
 /** @typedef {{session:Session,num_updates:number,userdata:object,children:Set<PlaylistItem>,children_ordered:PlaylistItem[],parent:PlaylistItem}} PlaylistItemPrivate */
 
 export class PlaylistItem extends DataNode {
+    id = "";
     /** @param {Session} session */
     constructor(data, session) {
         super();
@@ -1693,6 +1764,7 @@ export class PlaylistItem extends DataNode {
             enumerable: false,
         });
         Object.assign(this, data);
+        // session.playlist[this.id] = this;
     }
     [Observer.RESET_KEY]() {
         this.id = "-1";
@@ -1700,6 +1772,7 @@ export class PlaylistItem extends DataNode {
         this.filename = "";
         this.index = 0;
         this.track_index = 0;
+        this.upload = undefined;
         this.props = {};
     }
     /** @return {Session} */
@@ -1940,13 +2013,13 @@ export class PlaylistItem extends DataNode {
     get _is_rtmp_live() {
         return !!(this._is_rtmp && this._session._get_connected_nms_session_with_appname("private"));
     }
-    get _media_infos() {
+    get _related_media_infos() {
         return this._info.filenames.map(f=>app.$.media_info[f]).filter(mi=>mi);
     }
     get _is_processing() {
         var info = this._info;
         if (!info) return false;
-        return info.filenames.some(f=>app.$.media_info[f] && app.$.media_info[f].processing) || this._children.some(i=>i._is_processing);
+        return this._related_media_infos.some(mi=>mi.processing) || this._children.some(i=>i._is_processing);
     }
     get _parents() {
         return [...this._get_parents()].filter(p=>p);
@@ -1995,11 +2068,7 @@ export class PlaylistItem extends DataNode {
         return app.$.downloads[this.id];
     }
     get _upload() {
-        return app.$.uploads[this.id];
-    }
-    get _active_upload() {
-        var upload = this._upload;
-        if (upload.status != UPLOAD_STATUS.CANCELED) return upload;
+        return this.upload && app.$.uploads[this.upload.id];
     }
     get _is_downloadable() {
         return !this._download && (this._media_info||EMPTY_OBJECT).downloadable && !this._is_playlist;
@@ -2510,13 +2579,13 @@ export class ModalPropertyContainer extends UI.PropertyContainer {
 
         super(settings);
         
-        this.header = new UI($(`<div class="modal-header"></div>`)[0]);
+        this.header_elem = $(`<div class="modal-header"></div>`)[0];
         this.content = new UI($(`<div class="modal-content"></div>`)[0]);
-        this.footer = new UI($(`<div class="modal-footer"></div>`)[0]);
+        this.footer_elem = $(`<div class="modal-footer"></div>`)[0];
 
-        this.elem.append(this.header);
+        this.elem.append(this.header_elem);
         this.elem.append(this.content);
-        this.elem.append(this.footer);
+        this.elem.append(this.footer_elem);
         
         update_style_properties(this.elem, {
             padding: "0",
@@ -2537,21 +2606,23 @@ export class ModalPropertyContainer extends UI.PropertyContainer {
                 "--min-width": typeof min_width === "number" ? `${min_width}px` : min_width,
                 "--max-width": typeof max_width === "number" ? `${max_width}px` : max_width,
             });
-            set_inner_html(this.header.elem, this.get_setting("modal.title"));
-            toggle_class(this.header.elem, "overflow", this.get_setting("modal.title-overflow"));
-            toggle_class(this.footer.elem, "d-none", !this.get_setting("modal.footer"));
-            toggle_class(this.header.elem, "d-none", !this.get_setting("modal.header"));
+            set_inner_html(this.header_elem, this.get_setting("modal.title"));
+            toggle_class(this.header_elem, "overflow", this.get_setting("modal.title-overflow"));
+            toggle_class(this.header_elem, "d-none", !this.get_setting("modal.header"));
+            toggle_class(this.footer_elem, "d-none", !this.get_setting("modal.footer"));
+            
         });
     }
-    
-    get_interactive_elements() {
-        return [...super.get_interactive_elements(), ...this.footer.elem.querySelectorAll("button")];
-    }
+    async load() {}
 
-    show(datas) {
+    async show(datas) {
         if (this.fb) return;
+        this.datas = datas;
+
         var close_button = this.elem.querySelector("button.carousel__button.is-close");
         if (close_button) close_button.remove();
+
+        await this.load();
 
         this.fb = new Fancybox([{
             src: this.elem,
@@ -2571,13 +2642,12 @@ export class ModalPropertyContainer extends UI.PropertyContainer {
             // this.items = [null];
             // this.update_properties_with_data();
         });
-        this.datas = datas;
         this.property_lookup_on_show = this.property_lookup;
         this.on("register", ()=>{
             this.property_lookup_on_show = this.property_lookup;
         });
         this.emit("show", [...this.datas]);
-        this.update_next_frame();
+        this.update();
     }
 
     hide() {
@@ -2704,7 +2774,7 @@ export class UserConfigurationSettings extends ModalPropertyContainer {
         var reset_button = new UI.Button(`Reset`, {
             click: ()=>this.reset()
         });
-        this.footer.append(reset_button);
+        this.footer_elem.append(reset_button);
         
         var reset_layout_button = new UI.Button(`Reset Layout`, {
             click: ()=>{
@@ -2712,7 +2782,7 @@ export class UserConfigurationSettings extends ModalPropertyContainer {
                 app.update_layout();
             }
         });
-        this.footer.append(reset_layout_button);
+        this.footer_elem.append(reset_layout_button);
 
         this.on("property-change", (e)=>{
             if (!e.name || !e.trigger) return;
@@ -2985,7 +3055,7 @@ export class FileSystemInfoMenu extends ModalPropertyContainer {
         var refresh_button = new UI.Button("Refresh", {
             click:()=>init()
         });
-        this.footer.append(refresh_button)
+        this.footer_elem.append(refresh_button)
         
         var inited;
         this.on("show", ()=>{
@@ -3061,7 +3131,7 @@ export class SystemManagerMenu extends ModalPropertyContainer {
                     hidden: ()=>is_running()
                 });
                 var buttons = [restart_button, stop_button, start_button];
-                if (name === "main") buttons = [restart_button]
+                if (name === "main" || name === "electron") buttons = [restart_button];
                 buttons_ui.append(...buttons);
 
                 this.on("update", ()=>{
@@ -3439,7 +3509,7 @@ export class SplitSettings extends ModalPropertyContainer {
                 this.hide();
             }
         });
-        this.footer.append(this.split_button)
+        this.footer_elem.append(this.split_button)
     }
 
     get_splits(){
@@ -3512,11 +3582,12 @@ export class ScheduleStreamSettings extends ModalPropertyContainer {
         var reset_button = new UI.Button(`Reset`, {
             click: ()=>this.reset()
         });
-        this.footer.append(reset_button);
+        this.footer_elem.append(reset_button);
         
         this.on("property-change", (e)=>{
             if (!e.name || !e.trigger) return;
             app.$._push([`sessions/${app.$._session.id}/${e.name}`, e._value]);
+            // app.$._session[e.name] = e._value;
             app.request({
                 call: ["session", "update_values"],
                 arguments: [[e.name, e._value]]
@@ -3552,7 +3623,7 @@ export class SessionConfigurationSettings extends ModalPropertyContainer {
         this.creation_time.output_modifiers.push(v=>new Date(v).toLocaleString());
 
         this.stream_host = new UI.Property(null, "Stream Host", `<input type="text" readonly>`, {
-            "default": app.get_rtmp_url(),
+            "default": ()=>app.get_rtmp_url(),
             "reset": false,
             "copy": true,
             "info": "Connect and stream to dynamic RTMP playlist items. Use this RTMP host and key in OBS or your streaming software of preference",
@@ -3595,7 +3666,6 @@ export class SessionConfigurationSettings extends ModalPropertyContainer {
                 return [["auto","Auto"], [false, "Off"], [true, "On"]];
             },
             "default": get_default,
-            "hidden": ()=>!IS_ELECTRON
         });
         this.auto_interpolation_rate = new UI.Property("auto_interpolate_rate", "Auto Interpolation Target FPS", `<select></select>`, {
             "options":()=>{
@@ -3603,7 +3673,6 @@ export class SessionConfigurationSettings extends ModalPropertyContainer {
             },
             "disabled":()=>this.interpolation_mode.value !== "auto",
             "default": get_default,
-            "hidden": ()=>!IS_ELECTRON
         });
 
         this.members = new AccessControlProperty("access_control", "Access Control", {
@@ -3613,6 +3682,7 @@ export class SessionConfigurationSettings extends ModalPropertyContainer {
         this.on("property-change", (e)=>{
             if (!e.name || !e.trigger) return;
             app.$._push([`sessions/${app.$._session.id}/${e.name}`, e._value]);
+            // app.$._session[e.name] = e._value;
             app.request({
                 call: ["session", "update_values"],
                 arguments: [[e.name, e._value]]
@@ -3631,11 +3701,12 @@ export class SessionConfigurationSettings extends ModalPropertyContainer {
                     [this.background_mode, this.background_color, this.background_file, this.background_file_start, this.background_file_end],
                     [this.files_dir],
                     [this.auto_reconnect, this.auto_reconnect_delay, this.auto_reconnect_max_attempts]
-                )
+                );
                 if (IS_ELECTRON) {
                     layout.push([this.interpolation_mode, this.auto_interpolation_rate]);
+                } else {
+                    layout.push([this.members]);
                 }
-                layout.push([this.members]);
             }
             this.content.update_layout(layout)
         });
@@ -3664,8 +3735,11 @@ export class ChangeLog extends ModalPropertyContainer {
                 "font-size": "1.2rem",
             });
             app.settings.set("last_change_log", app.$.change_log.mtime);
-            set_inner_html(this.content.elem, `<div>${app.$.change_log.html}</div>`);
         })
+    }
+    async load() {
+        var html = await (await (fetch("./changes.md"))).text();
+        set_inner_html(this.content.elem, `<div>${html}</div>`);
     }
 }
 
@@ -3739,10 +3813,10 @@ export class InfoSettings extends JSONViewer {
         var name;
         var data = items.map(d=>{
             var a = {...d};
-            a.media_info = d._media_info;
+            a._media_info = d._media_info;
+            a._info = d._info;
+            a._userdata = d._userdata;
             // if (app.debug) {
-            a.info = d._info;
-            a.userdata = d._userdata;
             // }
             return a;
         })
@@ -3796,7 +3870,7 @@ export class SetTimePosSettings extends ModalPropertyContainer {
         this.cancel = new UI.Button("Cancel", {
             click: ()=>this.hide()
         });
-        this.footer.append(this.ok, this.cancel);
+        this.footer_elem.append(this.ok, this.cancel);
 
         this.on("show",()=>{
             this.time_pos.settings.default = app.$._session._current_time;
@@ -3854,7 +3928,7 @@ export class SetVolumeSettings extends ModalPropertyContainer {
         this.cancel = new UI.Button("Cancel", {
             click: ()=>this.hide()
         });
-        this.footer.append(this.ok, this.cancel);
+        this.footer_elem.append(this.ok, this.cancel);
     }
 }
 
@@ -3944,7 +4018,9 @@ export class TargetEditMenu extends ModalPropertyContainer {
             default: AccessControl.DEFAULT_ACCESS_FOR_SELF,
             "access.allow_passwords": false,
         });
-        row.append(this.access_control);
+        if (!IS_ELECTRON) {
+            row.append(this.access_control);
+        }
 
         /* var row = this.append(new UI.FlexRow());
         this.custom = new UI.TextArea("custom", "Additional Properties (JSON)", {
@@ -3979,7 +4055,7 @@ export class TargetEditMenu extends ModalPropertyContainer {
                 }
             }
         });
-        this.footer.append(save_button, delete_button);
+        this.footer_elem.append(save_button, delete_button);
         
         this.on("property-change", (e)=>{
             if (!this.data || !e.name || !e.trigger) return;
@@ -3998,20 +4074,23 @@ export class TargetEditMenu extends ModalPropertyContainer {
 }
 
 export class TargetConfigurationMenu extends ModalPropertyContainer {
-    /** @type {Record<string,Target>} */
-    targets;
-    /** @type {Target[]} */
-    targets_selected;
+    /** @type {string[]} */
+    targets_selected_ids = [];
+
+    get targets_selected() {
+        return this.targets_selected_ids.map(id=>this.targets[id]).filter(t=>t);
+    }
+    /** @type {Record<PropertyKey,Target>} */
+    get targets() { return {...app.$.targets}; };
 
     /** @param {TargetsProperty} parent_prop */
     // get targets_selected() { return this.parent_prop ? this.parent_prop.value.map(id=>this.targets[id]) : []; }
     get targets_remaining() {
         var targets = Object.values(this.targets);
         if (this.parent_prop) {
-            var selected = new Set(this.targets_selected);
-            targets = targets.filter(t=>!selected.has(t));
+            targets = targets.filter(t=>!this.targets_selected_ids.includes(t.id));
         }
-        targets = targets.filter(t=>t.locked?true:new AccessControl(t.access_control).self_has_access());
+        targets = targets.filter(t=>t.locked?true:new AccessControl(t.access_control)._self_has_access());
         utils.sort(targets, t=>!t.locked, t=>t.ts);
         return targets;
     }
@@ -4033,6 +4112,7 @@ export class TargetConfigurationMenu extends ModalPropertyContainer {
             add_class(selected_el, "target-list");
             this.content.append(selected_el);
             this.content.append(new UI.Separator());
+            this.targets_selected_ids = this.parent_prop.value;
         }
 
         var list_el = new UI.Column().elem;
@@ -4057,49 +4137,17 @@ export class TargetConfigurationMenu extends ModalPropertyContainer {
             });
             this.content.append(apply_button);
         }
-
-        var onchange;
-        this.on("show", ()=>{
-            app.on("change", onchange = ($)=>{
-                if ($.targets) update_targets();
-            });
-            update_targets();
-        });
-        this.on("hide", ()=>{
-            app.off("change", onchange);
-        });
-        var update_targets = ()=>{
-            this.targets = {...app.$.targets};
-            this.targets_selected = this.parent_prop ? this.parent_prop.value.map(id=>{
-                if (!this.targets[id]) console.warn(`Target with ID '${id}' does not exist.`);
-                return this.targets[id];
-            }).filter(t=>t) : [];
-            rebuild();
-        };
-        var rebuild = ()=>{
-            if (parent_prop) {
-                dom_utils.rebuild(selected_el, this.targets_selected, { add });
-                if (this.targets_selected.length == 0) {
-                    set_inner_html(selected_el, `<span style="display: flex; justify-content: center; padding: 10px;">No Targets Selected.</span>`);
-                }
-            }
-            dom_utils.rebuild(list_el, this.targets_remaining, { add });
-            if (this.targets_remaining.length == 0) {
-                set_inner_html(list_el, `<span style="display: flex; justify-content: center; padding: 10px;">No Remaining Targets.</span>`);
-            }
-        }
         var update_value = (force)=>{
-            this.targets_selected = [...selected_el.children, ...list_el.children].filter(e=>e.dataset.id && e.querySelector("input").checked).map(e=>this.targets[e.dataset.id]);
-            rebuild();
-
+            this.targets_selected_ids = [...selected_el.children, ...list_el.children].filter(e=>e.dataset.id && e.querySelector("input").checked).map(e=>e.dataset.id);
             if (force || this.settings["auto_apply"]) {
                 if (parent_prop) {
-                    parent_prop.set_value(this.targets_selected.map(t=>t.id), {trigger:true});
+                    parent_prop.set_value(this.targets_selected_ids, {trigger:true});
                 }
             }
+            this.update();
         };
         var is_editable = (target)=>{
-            return !target.locked && new AccessControl(target.access_control).self_can_edit;
+            return !target.locked && new AccessControl(target.access_control)._self_can_edit;
         };
         /** @param {Target} target */
         var add = (target, elem, i)=>{
@@ -4120,8 +4168,8 @@ export class TargetConfigurationMenu extends ModalPropertyContainer {
                     dom_utils.move(elem, -1);
                     update_value();
                 },
-                "hidden":()=>this.targets_selected.length<2 || !this.targets_selected.includes(target),
-                "disabled":()=>this.targets_selected.indexOf(target)==0,
+                "hidden":()=>this.targets_selected_ids.length<2 || !this.targets_selected_ids.includes(target.id),
+                "disabled":()=>this.targets_selected_ids.indexOf(target.id)==0,
                 "title": "Move Up",
             });
 
@@ -4130,8 +4178,8 @@ export class TargetConfigurationMenu extends ModalPropertyContainer {
                     dom_utils.move(elem, 1);
                     update_value();
                 },
-                "hidden":()=>this.targets_selected.length<2 || !this.targets_selected.includes(target),
-                "disabled":()=>this.targets_selected.indexOf(target) == this.targets_selected.length-1,
+                "hidden":()=>this.targets_selected_ids.length<2 || !this.targets_selected_ids.includes(target.id),
+                "disabled":()=>this.targets_selected_ids.indexOf(target.id) == this.targets_selected_ids.length-1,
                 "title": "Move Down",
             });
 
@@ -4184,12 +4232,34 @@ export class TargetConfigurationMenu extends ModalPropertyContainer {
             if (target.url) parts.push(`<a href="${target.url}" target="_blank"><i class="fas fa-arrow-up-right-from-square"></i></a>`);
             set_inner_html(name_elem, parts.join(" "));
             set_inner_html(description_elem, utils.convert_links_to_html(target.description || ""));
-            checkbox_input.checked = this.targets_selected.includes(target)
+            checkbox_input.checked = this.targets_selected_ids.includes(target.id)
             checkbox_input.style.display = parent_prop ? "" : "none";
             checkbox_input.disabled = !parent_prop;
 
             return elem;
         };
+
+        var old_hash;
+        this.on("update", ()=>{
+            if (this.parent_prop && this.settings["auto_apply"]) {
+                this.targets_selected_ids = this.parent_prop.value;
+            }
+        });
+        this.on("render", ()=>{
+            var hash = JSON.stringify([this.targets, this.targets_selected_ids]);
+            if (hash === old_hash) return;
+            old_hash = hash;
+            if (parent_prop) {
+                dom_utils.rebuild(selected_el, this.targets_selected, { add });
+                if (this.targets_selected.length == 0) {
+                    set_inner_html(selected_el, `<span style="display: flex; justify-content: center; padding: 10px;">No Targets Selected.</span>`);
+                }
+            }
+            dom_utils.rebuild(list_el, this.targets_remaining, { add });
+            if (this.targets_remaining.length == 0) {
+                set_inner_html(list_el, `<span style="display: flex; justify-content: center; padding: 10px;">No Remaining Targets.</span>`);
+            }
+        });
     }
 }
 
@@ -4220,6 +4290,18 @@ export class TargetsProperty extends UI.Property {
     }
 }
 export class SeekBar extends UI {
+    
+    get _time() { return this.get_setting("seek.time"); }
+    get _duration() { return this.get_setting("seek.duration"); }
+    get _ranges() { return this.get_setting("seek.ranges"); }
+    get _markers() { return this.get_setting("seek.markers"); }
+    get _chapters() { return this.get_setting("seek.chapters"); }
+    get _buffering() { return this.get_setting("seek.buffering"); }
+    get _seekable() { return this.get_setting("seek.seekable"); }
+    get _show_times() { return this.get_setting("seek.show_times"); }
+    get _show_markers() { return this.get_setting("seek.add_markers"); }
+    get _time_left_mode() { return this.get_setting("seek.time_left_mode"); }
+
     constructor(settings) {
         var input = $(
 `<div class="seek-wrapper">
@@ -4247,11 +4329,9 @@ export class SeekBar extends UI {
             "seek.chapters": [],
             "seek.ranges": [],
             "seek.markers": [],
-            "seek.seek_pause": false,
             "seek.buffering": false,
             "seek.show_times": true,
             "seek.add_markers": false,
-            "seek.stagger": 100,
             "seek.time_left_mode": TimeLeftMode.TIME_LEFT,
         }, settings));
         
@@ -4310,39 +4390,24 @@ export class SeekBar extends UI {
                 set_hover_chapters([]);
             }
         });
-        var seek_interval, seeking, seek_time;
-        var update = ()=>{
-            this.update_settings({
-                "seek.seeking": seeking,
-                "seek.seek_time": seek_time,
-            });
-        };
+        var seek_interval, seek_end_timeout, t;
         var seek_listener = new dom_utils.TouchListener(this.seek_elem, {
             start: (e)=>{
+                t = this.ticks_bar.parse_event(e).time;
+                clearTimeout(seek_end_timeout);
                 this.seek_elem.focus();
-                seek_time = this.ticks_bar.parse_event(e).time;
-                seeking = true;
-                this.emit("seek-start", {time:seek_time});
-
-                var last_seek_time;
-                seek_interval = setInterval(()=>{
-                    if (last_seek_time == seek_time) return;
-                    last_seek_time = seek_time
-                    this.emit("seeking", {time:seek_time});
-                    update();
-                }, this.get_setting("seek.stagger"));
+                this.update_settings({ "seek.time": t });
+                this.emit("seek-start", {time:t});
             },
             move: (e)=>{
-                seek_time = this.ticks_bar.parse_event(e).time;
-                update();
+                t = this.ticks_bar.parse_event(e).time;
+                this.update_settings({ "seek.time": t });
+                this.emit("seeking", {time:t});
             },
             end: (e)=>{
-                clearInterval(seek_interval);
-                if (seeking) {
-                    this.emit("seek-end", {time:seek_time});
-                }
-                seeking = false;
-                update();
+                t = this.ticks_bar.parse_event(e).time;
+                this.update_settings({ "seek.time": t });
+                this.emit("seek-end", {time:t});
             }
         });
 
@@ -4356,7 +4421,7 @@ export class SeekBar extends UI {
                 moving_curr_marker = false;
                 var marker_elem = e.target.closest(".marker");
                 if (marker_elem) {
-                    curr_marker = this.get_setting("seek.markers").find(m=>m.id == marker_elem.dataset.id);
+                    curr_marker = this._markers.find(m=>m.id == marker_elem.dataset.id);
                 }
                 if (!curr_marker) {
                     curr_marker = this.add_marker(data.time);
@@ -4375,7 +4440,7 @@ export class SeekBar extends UI {
                 if (moving_curr_marker) {
                     curr_marker.time = m.time;
                     this.emit("markers-change");
-                    this.update_next_frame();
+                    this.update();
                 }
             },
             end: (e)=>{
@@ -4394,38 +4459,31 @@ export class SeekBar extends UI {
             this.emit("time_left_mode", time_left_mode);
         });
 
-        this.on("update", ()=>{
-            var time_left_mode = this.get_setting("seek.time_left_mode");
+        this.on("render", ()=>{
+            var duration = this._duration;
+            var ranges = this._ranges;
+            var markers = this._markers;
+            var chapters = this._chapters;
+            var show_times = this._show_times;
+            var show_markers = this._show_markers;
+            var time_left_mode = this._time_left_mode;
+            
             set_attribute(this.time_left_elem, "title", time_left_mode == 0 ? "Time Left" : "Duration");
 
-            var _time = this.get_setting("seek.time");
-            var duration = this.get_setting("seek.duration");
-            var ranges = this.get_setting("seek.ranges");
-            var markers = this.get_setting("seek.markers");
-            var chapters = this.get_setting("seek.chapters");
-            var buffering = this.get_setting("seek.buffering");
-            var seekable = this.get_setting("seek.seekable");
-            var seeking = this.get_setting("seek.seeking");
-            var seek_pause = this.get_setting("seek.seek_pause");
-            var seek_time = this.get_setting("seek.seek_time");
-            var show_times = this.get_setting("seek.show_times");
-            var show_markers = this.get_setting("seek.add_markers");
-
-            var time = (seeking || seek_pause) ? seek_time : _time;
+            var time = this._time;
             var time_left = duration ? (duration - time) : 0;
-            var time_percent = time / duration;
+            var time_percent = (time / duration) || 0;
             if (!Number.isFinite(time_percent)) time_percent = 0;
             this.bar_elem.style.width = `${time_percent*100}%`;
 
             this.time_elem.style.display = show_times ? "" : "none";
             this.time_left_elem.style.display = show_times ? "" : "none";
 
-            var add_markers = show_markers;
-            toggle_attribute(this.seek_elem, "disabled", !seekable)
-            this.elem.style.cursor = add_markers ? "copy" : "";
-            toggle_class(this.bar_elem, "d-none", add_markers);
-            this.markers_elem.style.display = add_markers ? "" : "none";
-            // toggle_class(this.input, "d-none", add_markers);
+            toggle_attribute(this.seek_elem, "disabled", !this._seekable)
+            this.elem.style.cursor = show_markers ? "copy" : "";
+            toggle_class(this.bar_elem, "d-none", show_markers);
+            this.markers_elem.style.display = show_markers ? "" : "none";
+            // toggle_class(this.input, "d-none", _show_markers);
 
             var ranges_hash = JSON.stringify([duration, ranges]);
             if (this._ranges_hash != ranges_hash) {
@@ -4441,7 +4499,7 @@ export class SeekBar extends UI {
                 }
             }
 
-            toggle_class(this.seek_elem, "buffering", buffering);
+            toggle_class(this.seek_elem, "buffering", this._buffering);
 
             var markers_hash = JSON.stringify([markers, duration]);
             if (this._markers_hash != markers_hash) {
@@ -4477,24 +4535,16 @@ export class SeekBar extends UI {
             this.ticks_bar.update(0, duration);
 
             set_text(this.time_elem, `${utils.seconds_to_timespan_str(time, app.user_time_format)}`);
-            var tl = "";
-            var tlm = this.get_setting("seek.time_left_mode");
-            if (tlm === TimeLeftMode.TIME_LEFT) tl = `-${utils.seconds_to_timespan_str(Math.max(0, time_left), app.user_time_format)}`;
-            else if (tlm === TimeLeftMode.DURATION) tl = utils.seconds_to_timespan_str(Math.max(0, duration), app.user_time_format)
-            set_text(this.time_left_elem, tl);
+            var time_left_str = "";
+            if (time_left_mode === TimeLeftMode.TIME_LEFT) time_left_str = `-${utils.seconds_to_timespan_str(Math.max(0, time_left), app.user_time_format)}`;
+            else if (time_left_mode === TimeLeftMode.DURATION) time_left_str = utils.seconds_to_timespan_str(Math.max(0, duration), app.user_time_format)
+            set_text(this.time_left_elem, time_left_str);
         });
 
         this.on("destroy", ()=>{
             hover_listener.destroy();
             seek_listener.destroy();
         })
-    }
-    seek(t) {
-        if (t === undefined) t = this.get_setting("seek.time");
-        this.update_settings({
-            "seek.seek_time": t,
-            "seek.seek_pause": true,
-        });
     }
     clear_markers() {
         this.update_settings({"seek.markers": []});
@@ -4518,13 +4568,30 @@ export class MediaSeekBar extends SeekBar {
     constructor() {
         super();
     
-        var last_time;
-        this.on("seek-end", (e)=>{
-            if (!app.media.do_live_seek || last_time != e.time) app.seek(e.time);
+        var seeking = false, seek_time = 0, last_seek_time, seek_end_timeout, seeking_interval;
+        this.on("seek-start", (e)=>{
+            seek_time = e.time;
+            clearTimeout(seek_end_timeout);
+            seeking = true;
+            seeking_interval = setInterval(()=>{
+                if (seek_time != last_seek_time && app.media.do_live_seek) {
+                    app.seek(seek_time);
+                    last_seek_time = seek_time;
+                }
+            }, 100);
         });
         this.on("seeking", (e)=>{
-            if (app.media.do_live_seek) app.seek(e.time);
-            last_time = e.time;
+            seek_time = e.time;
+        });
+        this.on("seek-end", (e)=>{
+            seek_time = e.time;
+            clearInterval(seeking_interval);
+            seek_end_timeout = setTimeout(()=>{
+                seeking = false;
+            }, 500);
+            if (seek_time != last_seek_time) {
+                app.seek(seek_time)
+            }
         });
         this.on("time_left_mode", (v)=>{
             app.settings.set("time_left_mode", v);
@@ -4533,28 +4600,19 @@ export class MediaSeekBar extends SeekBar {
             this.update_settings({
                 "seek.time_left_mode": app.settings.get("time_left_mode")
             });
-        }
+        };
         app.settings.on("change", (e)=>{
             if (e.name === "time_left_mode") update_time_left_mode();
         });
         update_time_left_mode();
         this.on("pre_update", ()=>{
-            var running = app.$._stream._is_running;
-            var seek_pause = this.get_setting("seek.seek_pause");
-            if (app.$._stream.mpv.seeks != this._last_seeks || !running) {
-                seek_pause = false;
-            }
-            this._last_seeks = app.$._stream.mpv.seeks;
-            var buffering = running && (app.media.buffering || seek_pause || !app.$._stream.mpv.preloaded);
-
             Object.assign(this.settings, {
-                "seek.time": app.media.time,
+                "seek.time": seeking ? seek_time : app.media.time,
                 "seek.seekable": app.media.seekable,
                 "seek.duration": app.media.duration,
                 "seek.chapters": app.media.chapters,
-                "seek.ranges": app.$._session._current_seekable_ranges,
-                "seek.seek_pause": seek_pause,
-                "seek.buffering": buffering,
+                "seek.ranges": app.media.ranges,
+                "seek.buffering": app.media.buffering,
             });
         });
     }
@@ -4680,7 +4738,7 @@ export class HandoverSessionMenu extends ModalPropertyContainer {
             "info":"To seamlessly hand off to another session, select the session in the dropdown and click OK. Without interruption, the livestream will immediately start playing from the current playlist position in the selected stream."
         })
         row.append(handover_stream_property);
-        this.footer.append(new UI.Button("OK", {
+        this.footer_elem.append(new UI.Button("OK", {
             disabled: ()=>!handover_stream_property.value,
             click: ()=>{
                 this.hide();
@@ -4746,7 +4804,7 @@ export class SavePlaylistSettings extends ModalPropertyContainer {
         
         var save_remote_button = new UI.Button(`Save (Remote)`, {
             flex: 0,
-            disabled:()=>!this.valid_visible,
+            disabled:()=>!this.valid,
             click: ()=>{
                 app.request({
                     call: ["save_file"],
@@ -4796,7 +4854,7 @@ export class SavePlaylistSettings extends ModalPropertyContainer {
         this.cancel = new UI.Button("Cancel", {
             click: ()=>this.hide()
         });
-        this.footer.append(save_local_button, this.cancel)
+        this.footer_elem.append(save_local_button, this.cancel)
 
         this.on("show", ()=>{
             playlist_name = app.playlist.current._get_pretty_name() || app.$._session.name;
@@ -4966,14 +5024,14 @@ export class PlaylistAddURLMenu extends ModalPropertyContainer {
                 this.hide();
             }
         })
-        this.footer.append(ok_button)
+        this.footer_elem.append(ok_button)
         var cancel_button = new UI.Button("Cancel", {
             click: ()=>{
                 this.resolve(null);
                 this.hide();
             }
         })
-        this.footer.append(cancel_button)
+        this.footer_elem.append(cancel_button)
         this.on("hide", ()=>this.resolve(null));
     }
     show(resolve) {
@@ -5003,7 +5061,9 @@ export class PlaylistModifySettings extends ModalPropertyContainer {
         this.data === NULL_PLAYLIST_ITEM;
     }
 
-    get changes() { return super.changes.filter(k=>k!=this.interface.label.id&&k!=this.interface.color.id); }
+    get changes() {
+        return super.changes.filter(k=>k!=this.interface.label.id&&k!=this.interface.color.id);
+    }
 
     constructor() {
         super({
@@ -5025,10 +5085,10 @@ export class PlaylistModifySettings extends ModalPropertyContainer {
         
         this.datas = [NULL_PLAYLIST_ITEM];
 
-        this.footer.append(
+        this.footer_elem.append(
             this.save_button = new UI.Button("Save", {
                 hidden:()=>!!this.data,
-                disabled:()=>!this.valid_visible,
+                disabled:()=>!this.valid,
                 click:()=>{
                     app.playlist_add({
                         filename: `livestreamer://${this._new_type}`,
@@ -5044,13 +5104,14 @@ export class PlaylistModifySettings extends ModalPropertyContainer {
                     if (this.is_new) {
                         this.reset();
                     } else {
+                        app.$._push(...this.datas.map(data=>[`sessions/${app.$._session.id}/playlist/${data.id}/props`,{[Observer.RESET_KEY]:"Object"}]));
+                        // this.datas.forEach(data=>app.$._session.playlist[data.id].props = {});
                         app.request({
                             // call: ["session", "clear_playlist_props"],
                             // arguments: this.datas.map(data=>data.id)
                             call: ["session", "update_values"],
                             arguments: this.datas.map(data=>[`playlist/${data.id}/props`, {}])
                         });
-                        app.$._push(...this.datas.map(data=>[`sessions/${app.$._session.id}/playlist/${data.id}/props`,{[Observer.RESET_KEY]:"Object"}]));
                     }
                 }
             })
@@ -5084,36 +5145,59 @@ export class MediaSettingsInterface {
     constructor(parent) {
         this.parent = parent;
         var _this = this;
-        
-        let get_default_stream_id = (streams, type)=>{
-            streams = streams.filter(s=>s.type === type);
-            return streams.indexOf(utils.get_default_stream(streams,type))+1;
-        };
 
-        let get_stream_options = (streams, type)=>{
-            streams = streams.filter(s=>s.type === type);
+        let stream_to_text = (s,i,d)=>{
+            if (!s) return "None";
+            var parts = [];
+            var prefix = (i === undefined) ? "" : `${i+1}. `;
+            parts.push(`${prefix}${s.title||"Untitled"}`);
+            if (s.language) parts.push(s.language);
+            if (d) parts.push("default")
+            return parts.join(" | ")
+        }
 
+        let is_item_playing = (item)=>{
+            item = item ?? app.$._session._current_playing_item;
+            return app.$._session._is_running && item.id == app.$._session._current_playing_item.id;
+        }
+
+        /** @param {PlaylistItem} item @param {string} type */
+        let get_stream_options = (item, type)=>{
+            item = item ?? app.$._session._current_playing_item;
+            var is_playing = is_item_playing(item);
+            var streams = get_streams(item, type);
             let stream_to_option = (s,i)=>{
-                var parts = [];
-                parts.push(`${i+1}. ${s.title||"Untitled"}`);
-                if (s.language) parts.push(s.language);
-                return {value: i+1, text: parts.join(" | ")};
+                return {value: i+1, text: stream_to_text(s,i,s==default_stream) };
             };
-            var options = streams.map(stream_to_option);
-            options.unshift({value:0, text:"0. None"});
-
-            // var default_stream = get_default_stream(streams, type);
-            // var default_index = streams.indexOf(default_stream);
-            // var default_text = `Auto | ${options[default_index+1].text}`
-
-            // return [["auto", default_text], ...options];
-            return [[0, "None"], ...streams.map(stream_to_option)];
+            let default_stream = utils.get_default_stream(streams, type);
+            let indeterminate_option = {value:"", text:"-", hidden:true};
+            var options = []
+            options.push(indeterminate_option);
+            var id_key = type.slice(0,1)+"id_auto";
+            /* if (is_playing && app.$._stream.mpv.props[id_key] === "generated") {
+                indeterminate_option.text = "Generated";
+            } else { */
+            if (is_playing) {
+                default_stream = streams[app.$._stream.mpv.props[id_key]-1] || default_stream;
+            }
+            var auto_text = "Auto";
+            if (!this.is_parent_modify) auto_text = `${auto_text} [${stream_to_text(default_stream)}]`;
+            options.push({value:null, text:auto_text});
+            options.push({value:false, text:"None"}, ...streams.map(stream_to_option));
+            // }
+            if (options.length == 1 && options[0] === indeterminate_option) {
+                indeterminate_option.hidden = false;
+            }
+            return options;
         };
         let get_streams = (item, type)=>{
             var streams;
-            if (this.is_parent_modify) streams = utils.try(()=>item.media_info.streams);
-            else streams = utils.try(()=>app.$._session._current_playing_item._media_info.streams);
-            // else streams = app.$.stream.mpv.streams;
+            item = item ?? app.$._session._current_playing_item;
+            let mi = item._media_info;
+            streams = mi ? mi.streams : null;
+            if (is_item_playing(item)) {
+                streams = app.$._stream.mpv.streams;
+            }
             if (!streams) streams = [];
             if (type) streams = streams.filter(s=>s.type == type);
             return streams;
@@ -5189,32 +5273,14 @@ export class MediaSettingsInterface {
             "default": get_default,
         });
 
-        
-
-        this.audio_track = new UI.Property(prop_name("audio_track"), "Audio Track", `<select></select>`, {
-            "nullify_defaults": true,
+        this.aid_override = new UI.Property(prop_name("aid_override"), "Audio Track", `<select></select>`, {
+            // "nullify_defaults": ()=>!app.$._session._is_running,
             "options": (item)=>{
-                return get_stream_options(get_streams(item), "audio")
+                return get_stream_options(item, "audio")
             },
-            // "default": "auto",
-            "default": (item)=>{
-                return get_default_stream_id(get_streams(item), "audio");
-            },
+            "default": get_default,
             "disabled": ()=>parent._mode === MediaSettingsMode.all,
         });
-        /* if (this.is_parent_modify) {
-        } else {
-            this.audio_track = new UI.Property(prop_name("aid"), "Audio Track", `<select></select>`, {
-                "options": ()=>{
-                    var streams = get_current_streams("audio");
-                    return [[false, "None"], ...streams.map(stream_to_option)]
-                },
-                "default": ()=>{
-                    return get_default_stream_id(get_current_streams("audio"));
-                },
-                "disabled": ()=>parent._mode === MediaSettingsMode.all,
-            });
-        } */
        
         this.audio_delay = new UI.TimeSpanProperty(prop_name("audio_delay"), "Audio Delay (Seconds)", {
             "step":0.05,
@@ -5227,33 +5293,15 @@ export class MediaSettingsInterface {
             "options":()=>[["left", "Left → Mono"],["right", "Right → Mono"],["mix", "L + R → Mono"],["stereo", "Stereo"]],
         });
         
-        this.subtitle_track = new UI.Property(prop_name("subtitle_track"), "Subtitle Track", `<select></select>`, {
-            "nullify_defaults": true,
+        this.sid_override = new UI.Property(prop_name("sid_override"), "Subtitle Track", `<select></select>`, {
+            // "nullify_defaults": ()=>!app.$._session._is_running,
             "options": (item)=>{
-                return get_stream_options(get_streams(item), "subtitle")
+                return get_stream_options(item, "subtitle")
             },
-            // "default": "auto",
-            "default": (item)=>{
-                return get_default_stream_id(get_streams(item), "subtitle");
-            },
+            "default": get_default,
             "disabled": ()=>parent._mode === MediaSettingsMode.all,
         });
-        /* this.subtitle_track.output_modifiers.push((v)=>{
-            return (v == null) ? get_default_stream_id(get_streams(item), "subtitle") : v;
-        }) */
-        /* if (this.is_parent_modify) {
-        } else {
-            this.subtitle_track = new UI.Property(prop_name("sid"), "Subtitle Track", `<select></select>`, {
-                "options": ()=>{
-                    var streams = get_current_streams("subtitle");
-                    return [[false, "None"], ...streams.map(stream_to_option)]
-                },
-                "default": ()=>{
-                    return get_default_stream_id(get_current_streams("subtitle"));
-                },
-                "disabled": ()=>parent._mode === MediaSettingsMode.all,
-            });
-        } */
+
         this.subtitle_delay = new UI.Property(prop_name("sub_delay"), "Subtitle Delay", `<div class="input-wrapper suffix number secs"><input type="number" step="0.05"></div>`, {
             "precision":3,
             "default": get_default,
@@ -5276,13 +5324,13 @@ export class MediaSettingsInterface {
         this.playback_speed = new UI.Property(prop_name("speed"), "Playback Speed", `<input type="number" step="0.05">`, {
             "precision":2,
             "default": get_default,
-            "hidden": ()=>!app.dev_mode
+            "hidden": ()=>!app.$._stream.method != "gui"
         });
         this.playback_speed.output_modifiers.push((v)=>Number(v).toFixed(2));
         this.pitch_correction = new UI.Property(prop_name("audio_pitch_correction"), "Audio Pitch Correction", `<select></select>`, {
             "options": [[false, "Off"],[true, "On"]],
             "default": get_default,
-            "hidden": ()=>!app.dev_mode
+            "hidden": ()=>!app.$._stream.method != "gui"
         });
         
         this.volume_normalization = new UI.Property(prop_name("volume_normalization"), "Volume Normalization", `<select></select>`, {
@@ -5527,12 +5575,12 @@ export class MediaSettingsInterface {
             });
 
             this.audio_file = new FileProperty(prop_name("audio_file"), "Add Audio", {
-                "file.options": { files: true, filter: ["audio/*"] },
+                "file.options": { files: true, filter: ["audio/*", "video/*"] },
             });
             this.audio_file.add_validator(UI.VALIDATORS.media_audio);
 
             this.subtitle_file = new FileProperty(prop_name("subtitle_file"), "Add Subtitles", {
-                "file.options": { files: true, filter: [".idx", ".sup", ".srt", ".ass", ".txt"] },
+                "file.options": { files: true, filter: ["text/*"] },
             })
             this.subtitle_file.add_validator(UI.VALIDATORS.media_subtitle);
             
@@ -5652,7 +5700,7 @@ export class MediaSettingsInterface {
 
             parent.on("show", ()=>{
                 old_hash = null;
-                this.crop_detection_images.update_next_frame(); // otherwise fancybox fucks up.
+                this.crop_detection_images.update(); // otherwise fancybox fucks up.
                 // really?
             });
 
@@ -5986,8 +6034,8 @@ export class MediaSettingsInterface {
     get_default_layout(is_empty) {
         var rows = [[this.loop, this.aspect_ratio, this.deinterlace]];
         if (is_empty) rows.push([this.audio_delay, this.audio_channels])
-        else rows.push([this.audio_track, this.audio_delay, this.audio_channels]);
-        if (!is_empty) rows.push([this.subtitle_track, this.subtitle_delay, this.subtitle_scale, this.subtitle_pos]);
+        else rows.push([this.aid_override, this.audio_delay, this.audio_channels]);
+        if (!is_empty) rows.push([this.sid_override, this.subtitle_delay, this.subtitle_scale, this.subtitle_pos]);
         // if (IS_ELECTRON)
         rows.push([this.playback_speed, this.pitch_correction]);
         rows.push([this.volume_normalization, this.volume_multiplier, this.audio_visualization]);
@@ -6008,8 +6056,9 @@ export class MediaSettingsInterface {
             [this.clip_offset, this.clip_loops, this.clip_duration],
         ];
         var types = {};
+        /** @param {PlaylistItem} item */
         var get_type = (item)=>{
-            if (item.is_playlist) return "playlist";
+            if (item._is_playlist) return "playlist";
             if (item.filename === "livestreamer://empty") return "empty";
             if (item.filename === "livestreamer://macro") return "macro";
             if (item.filename === "livestreamer://exit") return "exit";
@@ -6029,9 +6078,9 @@ export class MediaSettingsInterface {
         var is_2_track_playlist = items.every(i=>i.num_tracks == 2);
         var is_merged_playlist = items.every(i=>i.is_merged_playlist);
         var is_parent_merged = items.every(i=>i.root_merged_playlist);
-        var is_youtube = items.every(i=>utils.try(()=>i.media_info.probe_method === "youtube-dl"));
-        var is_image = items.every(i=>utils.try(()=>i.media_info.duration <= IMAGE_DURATION));
-        var exists = items.every(i=>utils.try(()=>i.media_info.exists));
+        var is_youtube = items.every(i=>utils.try(()=>i._media_info.probe_method === "youtube-dl"));
+        var is_image = items.every(i=>utils.try(()=>i._media_info.duration <= IMAGE_DURATION));
+        var exists = items.every(i=>utils.try(()=>i._media_info.exists));
 
         var crop_layout = [
             [this.crop_l, this.crop_t, this.crop_r, this.crop_b]
@@ -6143,7 +6192,7 @@ export class EditAccessControlMemberMenu extends ModalPropertyContainer {
             "reset": false,
         });
         this.username.add_validator(UI.VALIDATORS.not_empty);
-        this.username.add_validator((v)=>(is_new() && prop.access_control.data[v]) ? "Username already registered" : true);
+        this.username.add_validator((v)=>(is_new() && prop.access_control[v]) ? "Username already registered" : true);
         this.access = new UI.Property("access", "Access", `<select>`, {
             "default": "allow",
             "options": ()=>{
@@ -6171,7 +6220,7 @@ export class EditAccessControlMemberMenu extends ModalPropertyContainer {
             hidden: ()=>!is_new(),
             click: ()=>{
                 if (!this.valid) return; // insurance
-                prop.access_control.edit(this.username.value, {access:this.access.value, password:this.password.value, suspended:this.suspended.value});
+                prop.access_control._edit(this.username.value, {access:this.access.value, password:this.password.value, suspended:this.suspended.value});
                 prop.debounced_update_value();
                 this.hide();
             },
@@ -6180,18 +6229,18 @@ export class EditAccessControlMemberMenu extends ModalPropertyContainer {
             hidden: ()=>is_new() || this.data.username == "*",
             disabled: ()=>this.data.username == "*",
             click: ()=>{
-                if (prop.access_control.edit(this.data.username, null)) {
+                if (prop.access_control._edit(this.data.username, null)) {
                     prop.debounced_update_value();
                     this.hide();
                 }
             },
         });
-        this.footer.append(this.save_button, delete_button)
+        this.footer_elem.append(this.save_button, delete_button)
 
         this.on("property-change", (e)=>{
             if (is_new() || !e.name || !e.trigger) return;
             if (e.name == "username") return;
-            if (prop.access_control.edit(this.data.username, {[e.name]:e.value})) {
+            if (prop.access_control._edit(this.data.username, {[e.name]:e.value})) {
                 prop.debounced_update_value();
             }
         });
@@ -6206,7 +6255,7 @@ export class AccessControlProperty extends UI.Property {
                 "*": { access: "allow" }
             },
             "reset": false,
-            "hidden": ()=>!this.access_control.self_can_edit,
+            "hidden": ()=>!this.access_control._self_can_edit,
             "access.allow_passwords": true,
             ...settings
         });
@@ -6220,24 +6269,24 @@ export class AccessControlProperty extends UI.Property {
             // "Password": (data)=>data.password ? ("*".repeat(data.password ? data.password.length : 0)) : "-",
             "Controls": (data)=>{
                 var edit_button, delete_button, suspend_button;
-                if (this.access_control.owners.length == 0) return;
-                if (this.access_control.self_is_owner_or_admin) {
+                if (this.access_control._owners.length == 0) return;
+                if (this.access_control._self_is_owner_or_admin) {
                     edit_button = $(`<button title="Edit"><i class="fas fa-wrench"></i></button>`)[0];
                     edit_button.onclick = ()=>{
                         new EditAccessControlMemberMenu(this).show(data);
                     };
-                    edit_button.disabled = data.access == "owner" && this.access_control.owners.length < 2;
+                    edit_button.disabled = data.access == "owner" && this.access_control._owners.length < 2;
                     if (data.username !== "*" && data.access !== "owner") {
                         suspend_button = $(`<button title="${data.suspended ? "Unsuspend" : "Suspend"}"><i style="opacity:${data.suspended?0.5:1.0};"class="far fa-pause-circle"></i></button>`)[0];
                         suspend_button.onclick = ()=>{
-                            this.access_control.edit(data.username, {suspended: !data.suspended});
+                            this.access_control._edit(data.username, {suspended: !data.suspended});
                             this.debounced_update_value();
                         };
                     }
                     if (data.username !== "*") {
                         delete_button = $(`<button title="Delete"><i class="fas fa-trash-alt"></i></button>`)[0];
                         delete_button.onclick = ()=>{
-                            this.access_control.edit(data.username, null);
+                            this.access_control._edit(data.username, null);
                             this.debounced_update_value();
                         };
                     }
@@ -6261,19 +6310,24 @@ export class AccessControlProperty extends UI.Property {
         footer_cell.style.padding = 0;
         footer_cell.append(add_button);
         add_button.addEventListener("click", async ()=>{
-            if (this.access_control.owners.length == 0) {
-                this.access_control.claim();
+            if (this.access_control._owners.length == 0) {
+                this.access_control._claim();
                 this.debounced_update_value();
             } else {
                 new EditAccessControlMemberMenu(this).show({});
             }
         });
         thead_elem.append($(`<tr>${Object.keys(columns).map(c=>`<th>${c}</th>`)}</tr>`)[0]);
-        var render = ()=>{
+        var old_hash;
+        this.on("render", ()=>{
+            var hash = JSON.stringify(this.value)
+            if (hash === old_hash) return;
+            old_hash = hash;
+
             dom_utils.empty(tbody_elem);
-            add_button.innerText = add_button.title = this.access_control.owners.length == 0 ? "Claim Ownership" : "Add User";
-            toggle_attribute(add_button, "disabled", !this.access_control.self_can_edit);
-            for (let user of this.access_control.users) {
+            add_button.innerText = add_button.title = this.access_control._owners.length == 0 ? "Claim Ownership" : "Add User";
+            toggle_attribute(add_button, "disabled", !this.access_control._self_can_edit);
+            for (let user of this.access_control._users) {
                 var tr = $(`<tr></tr>`)[0];
                 if (user.suspended) tr.style.color = "rgba(0,0,0,0.4)";
                 tbody_elem.append(tr);
@@ -6283,16 +6337,15 @@ export class AccessControlProperty extends UI.Property {
                     tr.append(td);
                 });
             }
-        }
-        this.on("change", (e)=>{
-            this.access_control.data = utils.deep_copy(e._value);
-            render();
         });
-        render();
+        this.on("change", (e)=>{
+            utils.clear(this.access_control);
+            Object.assign(this.access_control, utils.deep_copy(e._value));
+        });
     }
 
     update_value() {
-        this.set_values(utils.deep_copy(this.access_control.data), {trigger:true});
+        this.set_values(utils.deep_copy(this.access_control), {trigger:true});
     }
 }
 
@@ -6463,7 +6516,7 @@ export class StreamSettings extends Panel {
         });
         left.append(this.properties_ui, this.info_ui);
         
-        this.button_group_ui = new UI.FlexRow({gap:0});
+        this.button_group_ui = new UI.FlexRow({gap:0, class:"border"});
         right.append(this.button_group_ui);
 
         this.toggle_streaming_button = new UI.Button(null, {
@@ -6476,7 +6529,12 @@ export class StreamSettings extends Panel {
                 else if (state === "starting") state = `Starting...`;
                 return state;
             },
-            disabled: ()=>!app.$._session._is_running && !this.valid_visible,
+            disabled: ()=>{
+                return !app.$._session._is_running && !this.valid;
+            },
+            // update:()=>{
+            //     this.toggle_streaming_button.update_settings({"disabled": !app.$._session._is_running && !this.valid_visible})
+            // },
             click: (e)=>{
                 if (app.$._session._is_running) {
                     app.request({
@@ -6526,12 +6584,15 @@ export class StreamSettings extends Panel {
         this.button_group_ui.append(this.toggle_streaming_button, row);
 
         function get_default() { return utils.try(()=>app.$.properties.stream_settings.props[this.name].default); }
-        function get_options() { return utils.try(()=>app.$.properties.stream_settings.props[this.name].options, []); }
+        function get_options() {
+            return utils.try(()=>app.$.properties.stream_settings.props[this.name].options) ?? (utils.try(()=>typeof app.$.properties.stream_settings.props[this.name].default) === "boolean" ? YES_OR_NO : []);
+        }
 
         this.stream_method = new UI.Property("method", "Stream Method", `<select></select>`, {
             "options":function() {
                 var options = get_options.apply(this);
-                if (!app.dev_mode) options = options.filter(o=>!o[1].match(/\[dev\]/i));
+                if (!app.$._client.is_admin) options = options.filter(o=>o[0] === "rtmp");
+                if (!app.dev_mode) options = options.filter(o=>o[0] !== "ffplay");
                 return options;
             },
             // "hidden": !app.dev_mode,
@@ -6597,13 +6658,14 @@ export class StreamSettings extends Panel {
         this.frame_rate = new UI.Property("frame_rate", "Frame Rate", `<select></select>`, {
             "options": get_options,
             "default": get_default,
-            "hidden": ()=>this.stream_method.value == "gui" // || this.legacy_mode.value
+            "hidden": ()=>this.stream_method.value == "gui"
         });
         this.properties_ui.append(this.frame_rate)
 
         this.legacy_mode = new UI.Property("legacy_mode", "Legacy Mode", `<select></select>`, {
             "options": get_options,
             "default": get_default,
+            "hidden": ()=>this.stream_method.value == "gui"
         });
         this.properties_ui.append(this.legacy_mode)
 
@@ -6626,15 +6688,24 @@ export class StreamSettings extends Panel {
         })
         this.properties_ui.append(this.test_button)
 
+        this.osc = new UI.Property("osc", "Show OSC", `<select></select>`, {
+            "options": get_options,
+            "default": get_default,
+            "hidden": ()=>this.stream_method.value != "gui",
+            "info":()=>"Show On-Screen-Controller"
+        });
+        this.properties_ui.append(this.osc)
+
         this.on("property-change", (e)=>{
             if (!e.name || !e.trigger) return;
+            app.$._push([`sessions/${app.$._session.id}/stream_settings/${e.name}`, e._value]);
             app.request({
                 call: ["session", "update_values"],
                 arguments: [[`stream_settings/${e.name}`, e._value]]
             });
-            app.$._push([`sessions/${app.$._session.id}/stream_settings/${e.name}`, e._value]);
         });
 
+        var last_stream_info_hash;
         this.on("post_update", ()=>{
             var session = app.$._session || EMPTY_OBJECT;
             var stream = session.stream;
@@ -6686,9 +6757,35 @@ export class StreamSettings extends Panel {
                     stream_info["Stream Title"] = stream.title;
                 }
             }
-            stream_info["Run Time"] = utils.ms_to_timespan_str(app.server_now - session.stream.start_time);
+            var live_nms_session = stream._live_nms_session;
+            if (live_nms_session) {
+                var {live} = live_nms_session;
+                if (live && live.url) {
+                    stream_info["Video URL"] = `<a href="${live.url}" target="_blank">${live.url}</a>`;
+                }
+                /* if (live.thumbnail_url) {
+                    stream_info["Thumbnail"] = `<a href="${live.thumbnail_url}" target="_blank">${new URL(live.thumbnail_url).pathname}</a>`;
+                } */
+            }
+            stream_info["Bit Rate"] = utils.format_bitrate(session.stream.bitrate, "k");
+            stream_info["Run Time"] = session._is_running ? utils.ms_to_timespan_str(session.stream._run_time) : 0;
 
-            set_inner_html(this.info_ui.elem, Object.entries(stream_info).map(([k,v])=>`${k}: ${v}`).join(" | "));
+            var hash = JSON.stringify(stream_info);
+            if (hash !== last_stream_info_hash) {
+                last_stream_info_hash = hash;
+                dom_utils.rebuild(this.info_ui.elem, Object.keys(stream_info), {
+                    id_callback: (k)=>utils.sanitize_filename(k),
+                    add: (k, elem, index)=>{
+                        if (!elem) elem = $(`<span></span>`)[0];
+                        var v = stream_info[k];
+                        if (elem.__hash !== v) {
+                            elem.__hash = v;
+                            elem.innerHTML = `${k}: ${v}`;
+                        }
+                        return elem;
+                    }
+                });
+            }
         })
     }
 }
@@ -6786,7 +6883,7 @@ video {
         })
         
         this.status_elem = $(`<div class="player-status"><div class="currently-playing"><span class="prefix"></span><span class="path"></span></div></div>`)[0];
-        this.additional_file_info_elem = $(`<div>-</div>`)[0];
+        this.additional_file_info_elem = $(`<div class="player-chapters"></div>`)[0];
         this.status_prefix_elem = this.status_elem.querySelector(".prefix");
         this.status_path_elem = this.status_elem.querySelector(".path");
         this.body_elem.append(this.status_elem, this.additional_file_info_elem);
@@ -6823,11 +6920,11 @@ video {
                 content: ()=>app.$._stream.mpv.props.pause ? `<i class="fas fa-play"></i>` : `<i class="fas fa-pause"></i>`,
                 click: (e)=>{
                     var new_pause = !app.$._stream.mpv.props.pause;
+                    app.$._push([`streams/${app.$._stream.id}/mpv/props/pause`, new_pause]);
                     app.request({
                         call: ["session", "mpv", "set_property"],
                         arguments: ["pause", new_pause]
                     });
-                    app.$._push([`streams/${app.$._stream.id}/mpv/props/pause`, new_pause]);
                 },
                 disabled:()=>!app.$._session._is_running,
             }),
@@ -6874,7 +6971,6 @@ video {
             this.reload_button = new UI.Button(`<i class="fas fa-sync"></i>`, {
                 title:"Reload",
                 click: (e)=>{
-                    app.media_player.seek.seek();
                     app.request({
                         call: ["session", "reload"]
                     });
@@ -6905,11 +7001,11 @@ video {
 
         this.volume.on("change", (e)=>{
             if (e.trigger) {
+                app.$._push([`sessions/${app.$._session.id}/volume_target`, +e._value]);
                 app.request({
                     call: ["session", "update_values"],
                     arguments: [["volume_target", +e._value]]
                 });
-                app.$._push([`sessions/${app.$._session.id}/volume_target`, +e._value]);
             }
         });
         
@@ -6968,11 +7064,11 @@ video {
         });
         this.vol_speed.on("change",(e)=>{
             if (e.trigger) {
+                app.$._push([`sessions/${app.$._session.id}/volume_speed`, e._value]);
                 app.request({
                     call:["session", "update_values"],
                     arguments: [["volume_speed", e.value]]
                 });
-                app.$._push([`sessions/${app.$._session.id}/volume_speed`, e._value]);
             }
         })
         this.volume_wrapper.append(this.vol_input, this.vol_down_button, this.volume, this.vol_up_button /*,this.mute_button */, this.vol_speed);
@@ -6994,7 +7090,7 @@ video {
         this.on("update", ()=>{
             var started = app.$._session._is_running;
             set_inner_html(this.status_prefix_elem, `${app.media.status}: `);
-            app.build_playlist_breadcrumbs(this.status_path_elem, app.media.item, true, true);
+            app.build_playlist_breadcrumbs(this.status_path_elem, app.$._session._current_playing_item, true, true);
             
             var stats_html = Object.entries(app.media.stats).map(([k,v])=>`<span>${k}: ${v}</span>`).join(" | ");
             set_inner_html(this.stats_elem, stats_html);
@@ -7002,7 +7098,7 @@ video {
             
             if (app.media.curr_chapters.length) {
                 this.additional_file_info_elem.style.display = "";
-                let html = `Chapter(s): `+app.media.curr_chapters.map(c=>app.chapter_to_string(c)).join(" | ");
+                let html = `Chapter: `+app.media.curr_chapters.map(c=>app.chapter_to_string(c)).join(" | ");
                 set_inner_html(this.additional_file_info_elem, html);
             } else {
                 this.additional_file_info_elem.style.display = "none";
@@ -7087,11 +7183,12 @@ export class MediaSettingsPanel extends Panel {
     toggle_mode(v) {
         this._mode = v;
         this.body.update_layout(this.interface.get_layout());
+        this.update();
     }
     constructor() {
         super("Media Settings", {
-            // nullify_defaults: true,
-            data: ()=>(this._mode === MediaSettingsMode.current) ? app.$._session.stream.mpv.props : app.$._session.player_default_override,
+            nullify_defaults: ()=>!app.$._session._is_running,
+            data: ()=>(this._mode === MediaSettingsMode.current) ? (app.$._session._is_running ? app.$._session.stream.mpv.props : app.$._session._current_playing_item.props) : app.$._session.player_default_override,
             disabled: ()=>this._mode === MediaSettingsMode.current && !app.$._session._is_running,
         });
 
@@ -7144,7 +7241,6 @@ export class LogViewerPanel extends Panel {
         this.body_elem.append(this.logs_wrapper);
         this.logs_wrapper.append(this.logs_container)
         
-        this._new_log_elems = [];
         this._logs = {};
         this._num_logs = 0;
         this._default_logger_settings = {
@@ -7204,15 +7300,12 @@ export class LogViewerPanel extends Panel {
         this.on("update", ()=>{
             toggle_class(this.show_dates_button, "toggled", this._logger_settings.show_dates);
             toggle_class(this.show_times_button, "toggled", this._logger_settings.show_times);
-            for (var k in this.level_buttons) {
+            for (var k in this._logger_settings.level_filters) {
                 toggle_class(this.level_buttons[k], "toggled", this._logger_settings.level_filters[k]);
+                toggle_attribute(this.logs_wrapper, `data-show-${k}`, this._logger_settings.level_filters[k]);
             }
-            for (var log_elem of this._new_log_elems) {
-                var level = log_elem.dataset.level;
-                toggle_class(log_elem, "d-none", this._logger_settings.level_filters[level] === false);
-                toggle_class(log_elem.querySelector(".date"), "d-none", !this._logger_settings.show_dates);
-                toggle_class(log_elem.querySelector(".time"), "d-none", !this._logger_settings.show_times);
-            }
+            toggle_attribute(this.logs_wrapper, "data-show-times", this._logger_settings.show_times)
+            toggle_attribute(this.logs_wrapper, "data-show-dates", this._logger_settings.show_dates)
         });
     }
 
@@ -7261,21 +7354,20 @@ export class LogViewerPanel extends Panel {
             if (this._logs[log.level].length > logs_max_length) {
                 this._logs[log.level].shift().remove();
             }
-            this._new_log_elems.push(log_elem);
         }
         if (scroll_bottom) dom_utils.scroll_y_percent(this.logs_container, 1);
-        this.update_next_frame();
+        this.update();
     }
 
     save() {
         app.settings.set(this.storage_name, this._logger_settings);
-        this.update_next_frame();
+        this.update();
     }
 
     load() {
         this._logger_settings = utils.deep_copy(Object.assign({}, this._default_logger_settings, app.settings.get(this.storage_name)));
         // console.log(this.storage_name, this._logger_settings);
-        this.update_next_frame();
+        this.update();
     }
 
     empty() {
@@ -7283,13 +7375,19 @@ export class LogViewerPanel extends Panel {
         utils.clear(this._logs);
         this.last_log_elem = null;
         this._num_logs = 0;
-        this.update_next_frame();
+        this.update();
     }
 }
 
-export class EncoderPanel extends Panel {
+export class StreamMetricsPanel extends Panel {
+    #modes = [];
+    #mode = "";
+    #zooming = false;
+    #panning = false;
+    #init_view_len = 60*1000
+    #last_data_max = 0;
     constructor() {
-        super("Encoder");
+        super("Stream Metrics");
 
         var button_group = $(`<div class="buttons border-group">`)[0];
         button_group.append($(`<button class="show_encoder_info" title="Toggle Encoder Info"><i class="fas fa-info-circle"></i></button>`)[0]);
@@ -7297,174 +7395,320 @@ export class EncoderPanel extends Panel {
         
         this.header_elem.append(button_group);
 
-        add_class(this.body_elem, "chart-wrapper");
-        add_class(this.body_elem, "no-padding");
-        var chart_wrapper =
-        $(`<div class="chart-wrapper">
-            <div class="chart-inner">
-                <canvas id="chart"></canvas>
-            </div>
-            <div class="chart-info thin-scrollbar"></div>
-        </div>`)[0]
-        this.body_elem.append(chart_wrapper);
+        this.body_elem.classList.add("chart-wrapper", "no-padding");
+        this.body_elem.style.gap = 0;
+
+        this.#modes = ["speed", "bitrate"];
+        this.tabs_elem = $(`<div class="tabs buttons" data-toggle="0">`)[0];
         
-        this.chart_elem = this.elem.querySelector("#chart");
+        this.#modes.forEach(t=>{
+            var n = utils.capitalize(t);
+            this.tabs_elem.append($(`<button title="${n}" data-value="${t}">${n}</button>`)[0]);
+        })
+        this.#mode = this.#modes[0];
+
+        this.body_elem.append(this.tabs_elem);
+        this.tabs_elem.addEventListener("click", (e)=>{
+            var b = e.target.closest("[data-value]");
+            this.#set_mode(b.dataset.value);
+        })
+        
+        this.body_elem.append(
+            ...$(`
+                <div class="chart-inner">
+                    <canvas id="chart"></canvas>
+                </div>
+                <div class="chart-info thin-scrollbar"></div>
+            `)
+        );
+        
+        /** @type {HTMLCanvasElement} */
+        this.canvas = this.elem.querySelector("#chart");
         this.chart_info_elem = this.elem.querySelector(".chart-info");
+
+        this.on("update", ()=>{
+            this.#update_chart();
+            if (!this.#panning && !this.#zooming) {
+                this.#update_info();
+            }
+        });
+        this.canvas.ondblclick = ()=>{
+            this.#update_pan(true);
+        };
         var ms_to_timespan = (value)=>{
             value = +value;
             return utils.ms_to_timespan_str(value, "hh:mm:ss")
         }
-        
-        this.chart = new Chart(this.chart_elem, {
+        this.chart = new Chart(this.canvas, {
             type: "line",
             data: {},
             options: {
+                normalized: true,
+                parsing: false,
+                spanGaps: true,
+                onHover: (e)=>{
+                    this.canvas.style.cursor = "crosshair"
+                },
                 animation: false,
                 maintainAspectRatio: false,
                 responsive:true,
-                /* legend: {
-                    labels: {
-                        generateLabels:()=>{
-                            return 
-                        }
-                    }
-                }, */
-                // resizeDelay: 100,
                 scales: {
                     x: {
+                        // display: 'auto',
                         type: "linear",
+                        min: 0,
+                        max: this.#init_view_len,
                         ticks: {
-                            callback: function(value, index, values) {
+                            // count: 6,
+                            // stepSize: 5*1000,
+                            autoSkip: false,
+                            includeBounds: true,
+                            // autoSkipPadding
+                            // autoSkip: true,
+                            // maxRotation: 0,
+                            callback: (value, index, values)=>{
                                 if (index == 0 || index == values.length - 1) return null;
                                 return ms_to_timespan(value);
                             }
                         },
-                        /* afterTickToLabelConversion: function(scaleInstance) {
-                            scaleInstance.ticks[0] = null;
-                            scaleInstance.ticks[scaleInstance.ticks.length - 1] = null;
-                            scaleInstance.ticksAsNumbers[0] = null;
-                            scaleInstance.ticksAsNumbers[scaleInstance.ticksAsNumbers.length - 1] = null;
-                        }, */
                     },
                     y: {
+                        // display: 'auto',
                         type: "linear",
                         ticks: {
+                            callback: (value, index, values)=>{
+                                return this.#format_value(value)
+                            }
+                        },
+                        /* ticks: {
                             suggestedMin: 0.99,
                             suggestedMax: 1.01,
                             maxTicksLimit: 5,
-                        }
+                        } */
                     }
                 },
                 plugins: {
+                    zoom: {
+                        limits: {
+                            x: {
+                                minRange: 10*1000
+                            },
+                        },
+                        pan: {
+                            enabled: true,
+                            mode: 'x',
+                            threshold: 1,
+                            onPanStart:(c, ...args)=>{
+                                this.#panning = true;
+                                this.update();
+                            },
+                            onPanComplete:(c)=>{
+                                this.#panning = false;
+                                this.update();
+                            }
+                        },
+                        zoom: {
+                            wheel: {
+                                enabled: false,
+                            },
+                            pinch: {
+                                enabled: false
+                            },
+                            mode: 'x',
+                            onZoomStart:()=>{
+                                this.#zooming = true;
+                                this.update();
+                            },
+                            onZoomComplete:(c)=>{
+                                this.#zooming = false;
+                                this.update();
+                            }
+                        }
+                    },
                     tooltip: {
                         callbacks: {
                             title: (ctxs)=>{
                                 return ctxs.map(ctx=>ms_to_timespan(ctx.raw.x)).join(", ");
                             },
                             label: (ctx)=>{
-                                return `${ctx.dataset.label} speed: ${ctx.raw.y.toFixed(3)}`;
+                                return `${this.#parse_key(ctx.dataset.label)[0]}: ${this.#format_value(ctx.raw.y)}`;
                             }
                         }
                     },
                     legend: {
                         labels: {
-                            boxWidth: Chart.defaults.font.size
+                            boxWidth: Chart.defaults.font.size,
+                            generateLabels: (c)=>{
+                                var items = Chart.defaults.plugins.legend.labels.generateLabels(c);
+                                for (var i of items) {
+                                    i.text = this.#parse_key(i.text)[0];
+                                }
+                                return items;
+                            }
+                        },
+                        onHover: ()=>{
+                            this.canvas.style.cursor = "pointer";
+                        },
+                        onLeave: ()=>{
+                            this.canvas.style.cursor = "";
+                        },
+                        onClick: (e, legendItem, legend)=>{
+                            Chart.defaults.plugins.legend.onClick(e, legendItem, legend);
+                            this.update();
                         }
-                    }
-                },
-            },
-            /* plugins: [{
-                afterLayout: function(chart) {
-                    chart.legend.legendItems.forEach((label) => {
-                        var dataset = chart.data.datasets.find(ds=>ds.label===label.text);
-                        var avg = utils.sum(dataset.data.map(p=>p.y)) / dataset.data.length;
-                        label.text += ` [avg=${avg.toFixed(3)}]`;
-                    return label;
-                })
+                    },
+                    decimation: {
+                        enabled: true,
+                        algorithm: 'lttb',
+                        samples: 128,
+                        threshold: 128
+                    },
                 }
-            }] */
+            }
         });
+        this.#update_chart();
+    }
 
-        this.on("update", ()=>{
-            this.#update_chart();
-        });
+    get data_range() {
+        return {
+            min: this.chart.data.datasets.length ? Math.min(...this.chart.data.datasets.map(dataset=>{
+                var data = dataset._data ?? dataset.data;
+                return data.length ? data[0].x : 0;
+            })) : 0,
+            max: Math.max(0, ...this.chart.data.datasets.map(dataset=>{
+                var data = dataset._data ?? dataset.data;
+                return data.length ? data[data.length-1].x : 0;
+            }))
+        }
+    }
+
+    #set_mode(mode) {
+        if (this.#mode === mode) return;
+        this.tabs_elem.dataset.toggle = this.#modes.indexOf(mode);
+        this.#mode = mode;
+        this.update();
+    }
+    #parse_key(key) {
+        var o = key.split(":")
+        var last = o.pop();
+        return [o.join(":"), last];
     }
 
     #update_chart() {
-        if (app.settings.get("pause_encoder") && this.chart.data.datasets.length) return;
+        var pause = app.settings.get("pause_encoder");
+        if (pause) return;
 
-        var raw_data = app.$._session.stream.speed_history;
-        var _hash = JSON.stringify(raw_data);
+        var reset = false;
+        var mode_hash = JSON.stringify([this.#mode]);
+        if (this._mode_hash != mode_hash) {
+            this._mode_hash = mode_hash;
+            this.chart.data.datasets = [];
+        }
+        var reinit_hash = JSON.stringify([app.$._stream.id, app.$._session.id]);
+        if (this._reinit_hash != reinit_hash) {
+            this._reinit_hash = reinit_hash;
+            this.chart.data.datasets = [];
+            this.#last_data_max = 0;
+            reset = true;
+        }
 
-        if (this._hash === _hash) return;
-        this._hash = _hash;
-        
-        var max_window = 60*1000;
-        var datasets = this.chart.data.datasets;
-        var info_rows = [];
-        const annotations = {};
-
-        for (var [g,values] of Object.entries(raw_data)) {
-            var dataset = datasets.find(d=>d.label==g);
-            if (!dataset) {
-                dataset = {
-                    label: g,
-                    borderColor: graph_colors[datasets.length],
+        let graphs = app.$._session.stream.graphs;
+        let raw_data = Object.fromEntries(Object.entries(graphs).filter(([k,v])=>k.split(":").pop()===this.#mode));
+        var _hash = JSON.stringify([mode_hash, reinit_hash, Object.entries(graphs).map(([k,v])=>[k, v.data])]);
+        if (this._hash !== _hash) {
+            this._hash = _hash;
+            this.chart.data.datasets = Object.entries(raw_data).map(([key,{min,max,data}], i)=>{
+                let dataset = this.chart.data.datasets.find(d=>d.label==key);
+                dataset = dataset ?? {
+                    label: key,
                     borderWidth: 1.0,
                     pointRadius: 1.5,
                     pointHitRadius: 2,
                     pointStyle: "rect",
                     fill: false,
+                    // tension: 0,
                     tension: 0.5,
-                    borderJoinStyle: "round"
+                    borderJoinStyle: "round",
+                    data: []
+                };
+                dataset.borderColor = graph_colors[i%graph_colors.length];
+                if (data && max>0) {
+                    let dataset_data = dataset._data ?? dataset.data;
+                    for (var i = dataset_data.length; i<max; i++) {
+                        let [x,y] = data[i];
+                        let d = {x:x??0,y: y??0};
+                        dataset.data.push(d);
+                        if (dataset._data) dataset._data.push(d);
+                    }
                 }
-                datasets.push(dataset);
-            }
-            var data = Object.values(values).map(([x,y])=>({x,y}));
-            dataset.data = data;
-            var y_values = data.map(d=>d.y);
-            
-            var avg = utils.average(y_values);
+                return dataset;
+            });
+        }
+        
+        this.#update_pan(reset);
+        
+        this.chart.update();
+    }
+    #format_value(value) {
+        var type = this.#mode;
+        // var type = ds.label.split(":").pop();
+        if (type == "speed") return `${value.toFixed(3)}x`;
+        if (type == "bitrate") return utils.format_bitrate(value, "k");
+    }
+    #update_pan(reset=false) {
+        if (!this.chart.scales.x) return;
+        if (reset) this.chart.resetZoom();
+
+        var pan_min = this.chart.scales.x._range.min;
+        var pan_max = this.chart.scales.x._range.max;
+        var pan_len = pan_max - pan_min;
+        var {min, max} = this.data_range;
+        var limits_min = min;
+        var limits_max = Math.max(min+this.#init_view_len, max);
+        var follow = (max > this.#last_data_max && pan_max >= this.#last_data_max && pan_max < max);
+        if (this.#last_data_max == 0 && max > 0) reset = true;
+        
+        this.chart.options.plugins.zoom.limits.x.min = limits_min;
+        this.chart.options.plugins.zoom.limits.x.max = limits_max;
+
+        if (reset) this.chart.zoomScale("x", {min: Math.max(min, limits_max - pan_len), max: Math.max(limits_max,max)});
+        else if (follow) this.chart.zoomScale("x", {min: Math.max(min, max - pan_len), max: max});
+        
+        var enabled = max>0;
+        this.chart.options.plugins.zoom.pan.enabled = enabled;
+        this.chart.options.plugins.zoom.zoom.wheel.enabled = enabled;
+        this.chart.options.plugins.zoom.zoom.pinch.enabled = enabled;
+        
+        this.#last_data_max = max;
+    }
+    
+    #update_info() {
+        this.chart.update("zoom"); // not sure why this is necessary. segments is balls.
+        var info_rows = [];
+        for (var i=0; i<this.chart.data.datasets.length; i++) {
+            let dataset = this.chart.data.datasets[i];
+            if (!dataset.data.length) continue;
+            var meta = this.chart.getDatasetMeta(i);
+            var {start,end} = meta.dataset.segments[0];
+            var visible_data = dataset.data.slice(start, end+1);
+            var y_values = visible_data.map(d=>d.y);
+            var avg = utils.average(...y_values);
             var min = Math.min(...y_values);
             var max = Math.max(...y_values);
-
             var info = {
-                "": g,
-                avg: avg.toFixed(3)+"x",
-                min: min.toFixed(3)+"x",
-                max: max.toFixed(3)+"x",
+                "": dataset.label,
+                "avg": this.#format_value(avg),
+                "min": this.#format_value(min),
+                "max": this.#format_value(max),
             };
             info_rows.push(info);
-            
-            annotations[g] = {
-                type: 'line',
-                borderColor: dataset.borderColor,
-                borderDash: [6, 6],
-                borderDashOffset: 0,
-                borderWidth: 2,
-                scaleID: "y",
-                value: (ctx) => avg
-            };
         }
-
-        datasets = datasets.filter(d=>raw_data[d.label]);
-        this.chart.data.datasets = datasets;
-        this.chart.options.plugins.annotation = { annotations };
-
-        // if (speed_history)
-        // this.chart.options.plugins.annotation = { annotations: { annotation } };
-        
-        var table = dom_utils.build_table(info_rows);
-        set_children(this.chart_info_elem, table ? [table] : []);
-        var min_x = Math.max(...datasets.map(ds=>Math.min(...ds.data.map(d=>d.x))));
-        var max_x = Math.max(...datasets.map(ds=>Math.max(...ds.data.map(d=>d.x))));
-        /* datasets.forEach(ds=>{
-            ds.data = ds.data.filter((d,i)=>d.x > min_x);
-        }); */
-        // min = Math.min(...this.chart.data.datasets.map(ds=>ds.data[0].x));
-        this.chart.config.options.scales.x.min = min_x;
-        this.chart.config.options.scales.x.max = Math.max(max_x, max_window);
-        this.chart.update();
+        var hash = JSON.stringify(info_rows);
+        if (this.__info_rows_hash != hash) {
+            this.__info_rows_hash = hash;
+            var table = dom_utils.build_table(info_rows);
+            set_children(this.chart_info_elem, table ? [table] : []);
+        }
     }
 }
 
@@ -7472,135 +7716,33 @@ export const PLAYLIST_ZOOM_MIN = 0.01;
 export const PLAYLIST_ZOOM_MAX = 100;
 export const PLAYLIST_ZOOM_BASE = 1.3333;
 export class PlaylistPanel extends Panel {
+    
+    /** @type {any[]} */
+    #tracks;
+    /** @type {PlaylistItem} */
+    #current;
+    #tracks_hash;
     get active_sortable() { return this.sortables.find(s=>s.is_active_sortable_in_group()) || this.sortables[0]; }
     get active_track_index() { return this.sortables.indexOf(this.active_sortable); }
     get timeline_width() { return Math.max(...[...this.tracks_elem.children].map(t=>t.lastElementChild ? t.lastElementChild.offsetLeft+t.lastElementChild.offsetWidth : 0)); }
-    get tracks() { return this._tracks; }
+    get tracks() { return this.#tracks; }
     get orientation() { return this.timeline_mode ? Orientation.HORIZONTAL : Orientation.VERTICAL; }
     get timeline_mode() { return this.timeline_mode_select.value == 1; }
     set timeline_mode(value) {
         this.timeline_mode_select.value = value;
         this.sortables.forEach(s=>s.orientation = this.orientation);
-        this.update_next_frame();
+        this.update();
     }
     get selection() { return this.active_sortable.get_selection(); }
-
-    set_tracks(num_tracks, is_2_track) {
-        var tracks = (is_2_track) ? [{
-            title:"Video Track",
-            header: `<i class="fas fa-film"></i>`,
-        }, {
-            title:"Audio Track",
-            header: `<i class="fas fa-music"></i>`,
-        }] : [];
-        num_tracks = Math.max(1,num_tracks);
-        for (var i = 0; i < num_tracks; i++) {
-            if (!tracks[i]) tracks[i] = { header:`Track ${i+1}` };
-        }
-        var tracks_hash = JSON.stringify(tracks);
-        if (tracks_hash == this._tracks_hash) return;
-
-        console.debug("refreshing sortables")
-        this._tracks_hash = tracks_hash;
-        this._tracks = tracks;
-        dom_utils.empty(this.tracks_elem);
-        dom_utils.empty(this.headers_elem);
-        dom_utils.empty(this.highlights_elem);
-        this.sortables.forEach(s=>s.destroy());
-
-        toggle_class(this.timeline_container_elem, "single-track", num_tracks == 1);
-
-        this.sortables = tracks.map((t,i)=>{
-            // var playlist_top = $(`<div class="playlist-top" title="${utils.capitalize(t.name)}">${t.icon}</div>`)[0];
-            // playlist_track.append(playlist_top);
-            var playlist_elem = $(`<ul class="playlist"></ul>`)[0];
-            this.tracks_elem.append(playlist_elem);
-
-            var playlist_header = $(`<div>${t.header}</div>`)[0];
-            set_attribute(playlist_header, "title", t.title || t.header);
-            playlist_header.onclick = ()=>sortable.set_active_sortable_in_group();
-            this.headers_elem.append(playlist_header);
-
-            var playlist_highlight = $(`<div></div>`)[0];
-            this.highlights_elem.append(playlist_highlight);
-
-            var sortable = new ResponsiveSortable(playlist_elem, {
-                group: 'playlist-tracks',
-                // handle: ".handle",
-                filter: ".item-dropdown",
-                multiDrag: true, // Enable multi-drag
-                fallbackTolerance: 3, // So that we can select items on mobile
-                animation: 150,
-                avoidImplicitDeselect: true, // true - if you don't want to deselect items on outside click
-            });
-            sortable.orientation = this.orientation;
-            sortable.el.addEventListener("select", (evt)=>{
-                this.update_next_frame();
-            });
-            sortable.el.addEventListener("unchoose", (e)=>{
-                this.scroll_into_view(e.item)
-            });
-            sortable.el.addEventListener("deselect", (evt)=>{
-                this.update_next_frame();
-            });
-            sortable.el.addEventListener("active-change", (e)=>{
-                toggle_class(playlist_header, "active", e.active);
-                toggle_class(playlist_highlight, "active", e.active);
-            });
-            sortable.el.addEventListener("end", (evt)=>{
-                this.sync();
-            });
-            return sortable;
-        });
-        if (this.sortables[0]) this.sortables[0].set_active_sortable_in_group();
-    }
-
-    /** @param {Element} elem */
-    scroll_into_view(elem, opts) {
-        if (!elem) return;
-        /* var parent = elem.parentElement;
-        while (parent) {
-            if (opts.nearest) {
-                if ((elem.offsetTop < parent.scrollTop) || ((elem.offsetTop+elem.offsetHeight) > (parent.scrollTop + parent.offsetHeight))) {
-                    if ((elem.offsetTop + elem.offsetHeight/2) < (parent.scrollTop + parent.offsetHeight/2)) {
-                        parent.scrollTop = elem.offsetTop;
-                    } else {
-                        parent.scrollTop = elem.offsetTop - parent.offsetHeight + elem.offsetHeight;
-                    }
-                }
-                if ((elem.offsetLeft+elem.offsetWidth) > (parent.scrollLeft + parent.offsetWidth) && (elem.offsetWidth < parent.offsetWidth)) {
-                    parent.scrollLeft = elem.offsetLeft - parent.offsetWidth + elem.offsetWidth;
-                } else if (elem.offsetLeft <= parent.scrollLeft || elem.offsetWidth > parent.offsetWidth) {
-                    parent.scrollLeft = elem.offsetLeft;
-                }
-            } else {
-                parent.scrollTop = elem.offsetTop;
-                parent.scrollLeft = elem.offsetLeft;
-            }
-            parent = parent.parentElement;
-        } */
-        elem.scrollIntoView({block:"nearest", inline:"nearest"});
-        if (this.orientation === Orientation.VERTICAL) {
-            var r = elem.getBoundingClientRect();
-            var bottom = app.main_elem.offsetHeight-40;
-            if (r.bottom > bottom) {
-                app.main_elem.scrollBy(0, r.bottom-bottom);
-            }
-        }
-    }
-
-    set current(value) { this._current = value; }
+    set current(value) { this.#current = value; }
     /** @return {PlaylistItem} */
-    get current() { return this._current || app.$._session.playlist["0"] || NULL_PLAYLIST_ITEM; }
+    get current() { return this.#current || app.$._session.playlist["0"] || NULL_PLAYLIST_ITEM; }
 
     /** @param {Element} elem */
     constructor() {
         super("Playlist");
 
         this.collapsible = false;
-        /** @type {PlaylistItem} */
-        this._current;
-        this._queued_selection_ids = [];
         this.clipping = null;
         // this.debounced_update_info = dom_utils.debounce_next_frame(()=>this.update_info());
         // this.debounced_update_view = dom_utils.debounce_next_frame(()=>this.update_view());
@@ -7665,8 +7807,8 @@ export class PlaylistPanel extends Panel {
                     </div>
                 </div>
                 <div class="playlist-buttons">
-                    <button id="pl-add-file-remote" title="Add Files...">Add Files...</button>
-                    <button id="pl-add-file-local" title="Upload Files...">Upload Files...</button>
+                    <button id="pl-add-file" title="Add Files...">Add Files...</button>
+                    <button id="pl-upload-file" title="Upload Files...">Upload Files...</button>
                     <button id="pl-add-url" title="Add URLs...">Add URLs...</button>
                     <button id="pl-add-other" title="Other..."><i class="fas fa-ellipsis-h"></i></button>
                 </div>
@@ -7679,7 +7821,6 @@ export class PlaylistPanel extends Panel {
         this.sortables = [];
         this.duration = 0;
         this.time = null;
-        this._tracks = [];
 
         this.timeline_container_elem = this.elem.querySelector(".timeline-container");
         this.wrapper_elem = this.elem.querySelector(".timeline-and-ticks-wrapper");
@@ -7716,8 +7857,8 @@ export class PlaylistPanel extends Panel {
         this.pl_toggle_line_wrap_button = this.elem.querySelector("button.wrap_playlist_items");
         this.toggle_milliseconds_button = this.elem.querySelector("button.time_display_ms");
 
-        this.pl_add_file_remote_button = this.elem.querySelector("#pl-add-file-remote");
-        this.pl_add_file_local_button = this.elem.querySelector("#pl-add-file-local");
+        this.pl_add_file_button = this.elem.querySelector("#pl-add-file");
+        this.pl_upload_file_button = this.elem.querySelector("#pl-upload-file");
         this.pl_add_url_button = this.elem.querySelector("#pl-add-url");
         this.pl_add_other_button = this.elem.querySelector("#pl-add-other");
 
@@ -7767,11 +7908,7 @@ export class PlaylistPanel extends Panel {
             app.settings.set("playlist_mode", +this.timeline_mode_select.value);
             this.scroll_to_playhead();
         });
-
-        if (IS_ELECTRON) {
-            this.pl_add_file_remote_button.style.display = "none";
-        }
-        this.pl_add_file_remote_button.addEventListener("click", async (e)=>{
+        this.pl_add_file_button.addEventListener("click", async (e)=>{
             var paths = await open_file_manager({
                 id: "load-file",
                 files: true,
@@ -7779,7 +7916,8 @@ export class PlaylistPanel extends Panel {
             }, true);
             if (paths) app.playlist_add(paths);
         });
-        this.pl_add_file_local_button.addEventListener("click", async (e)=>{
+        if (IS_ELECTRON) this.pl_upload_file_button.style.display = "none";
+        this.pl_upload_file_button.addEventListener("click", async (e)=>{
             var files = await dom_utils.open_file_dialog({multiple:true}) // directories:true
             app.playlist_add(files);
         });
@@ -7909,7 +8047,7 @@ export class PlaylistPanel extends Panel {
             cancel_upload: new PlaylistCommand({
                 name: "Cancel Upload",
                 icon: `<i class="fas fa-ban"></i>`,
-                visible: (items)=>items.some(i=>i._upload),
+                visible: (items)=>items.some(i=>i.upload && i.upload.status == UPLOAD_STATUS.STARTED),
                 click: (items)=>{
                     app.playlist_cancel_upload(items);
                 }
@@ -8211,11 +8349,11 @@ export class PlaylistPanel extends Panel {
                 click: (items)=>{
                     var v = color_key === "none" ? null : color_key;
                     items.map(i=>i.props.color = v);
+                    app.$._push(...items.map(i=>[`sessions/${app.$._session.id}/playlist/${i.id}/props/color`, v]));
                     app.request({
                         call: ["session", "update_values"],
                         arguments: items.map(i=>[`playlist/${i.id}/props/color`, v])
                     });
-                    app.$._push([`sessions/${app.$._session.id}/playlist/${i.id}/props/color`, v]);
                 },
                 render:(items, elem)=>{
                     add_class(elem, "color");
@@ -8342,6 +8480,110 @@ export class PlaylistPanel extends Panel {
         this.set_tracks(1);
     }
 
+    set_tracks(num_tracks, is_2_track) {
+        var tracks = (is_2_track) ? [{
+            title:"Video Track",
+            header: `<i class="fas fa-film"></i>`,
+        }, {
+            title:"Audio Track",
+            header: `<i class="fas fa-music"></i>`,
+        }] : [];
+        num_tracks = Math.max(1,num_tracks);
+        for (var i = 0; i < num_tracks; i++) {
+            if (!tracks[i]) tracks[i] = { header:`Track ${i+1}` };
+        }
+        var tracks_hash = JSON.stringify(tracks);
+        if (tracks_hash == this.#tracks_hash) return;
+
+        console.debug("refreshing sortables")
+        this.#tracks_hash = tracks_hash;
+        this.#tracks = tracks;
+        dom_utils.empty(this.tracks_elem);
+        dom_utils.empty(this.headers_elem);
+        dom_utils.empty(this.highlights_elem);
+        this.sortables.forEach(s=>s.destroy());
+
+        toggle_class(this.timeline_container_elem, "single-track", num_tracks == 1);
+
+        this.sortables = tracks.map((t,i)=>{
+            // var playlist_top = $(`<div class="playlist-top" title="${utils.capitalize(t.name)}">${t.icon}</div>`)[0];
+            // playlist_track.append(playlist_top);
+            var playlist_elem = $(`<ul class="playlist"></ul>`)[0];
+            this.tracks_elem.append(playlist_elem);
+
+            var playlist_header = $(`<div>${t.header}</div>`)[0];
+            set_attribute(playlist_header, "title", t.title || t.header);
+            playlist_header.onclick = ()=>sortable.set_active_sortable_in_group();
+            this.headers_elem.append(playlist_header);
+
+            var playlist_highlight = $(`<div></div>`)[0];
+            this.highlights_elem.append(playlist_highlight);
+
+            var sortable = new ResponsiveSortable(playlist_elem, {
+                group: 'playlist-tracks',
+                // handle: ".handle",
+                filter: ".item-dropdown",
+                multiDrag: true, // Enable multi-drag
+                fallbackTolerance: 3, // So that we can select items on mobile
+                animation: 150,
+                avoidImplicitDeselect: true, // true - if you don't want to deselect items on outside click
+            });
+            sortable.orientation = this.orientation;
+            sortable.el.addEventListener("select", (evt)=>{
+                this.update();
+            });
+            sortable.el.addEventListener("unchoose", (e)=>{
+                this.scroll_into_view(e.item)
+            });
+            sortable.el.addEventListener("deselect", (evt)=>{
+                this.update();
+            });
+            sortable.el.addEventListener("active-change", (e)=>{
+                toggle_class(playlist_header, "active", e.active);
+                toggle_class(playlist_highlight, "active", e.active);
+            });
+            sortable.el.addEventListener("end", (evt)=>{
+                this.sync();
+            });
+            return sortable;
+        });
+        if (this.sortables[0]) this.sortables[0].set_active_sortable_in_group();
+    }
+
+    /** @param {Element} elem */
+    scroll_into_view(elem, opts) {
+        if (!elem) return;
+        /* var parent = elem.parentElement;
+        while (parent) {
+            if (opts.nearest) {
+                if ((elem.offsetTop < parent.scrollTop) || ((elem.offsetTop+elem.offsetHeight) > (parent.scrollTop + parent.offsetHeight))) {
+                    if ((elem.offsetTop + elem.offsetHeight/2) < (parent.scrollTop + parent.offsetHeight/2)) {
+                        parent.scrollTop = elem.offsetTop;
+                    } else {
+                        parent.scrollTop = elem.offsetTop - parent.offsetHeight + elem.offsetHeight;
+                    }
+                }
+                if ((elem.offsetLeft+elem.offsetWidth) > (parent.scrollLeft + parent.offsetWidth) && (elem.offsetWidth < parent.offsetWidth)) {
+                    parent.scrollLeft = elem.offsetLeft - parent.offsetWidth + elem.offsetWidth;
+                } else if (elem.offsetLeft <= parent.scrollLeft || elem.offsetWidth > parent.offsetWidth) {
+                    parent.scrollLeft = elem.offsetLeft;
+                }
+            } else {
+                parent.scrollTop = elem.offsetTop;
+                parent.scrollLeft = elem.offsetLeft;
+            }
+            parent = parent.parentElement;
+        } */
+        elem.scrollIntoView({block:"nearest", inline:"nearest"});
+        if (this.orientation === Orientation.VERTICAL) {
+            var r = elem.getBoundingClientRect();
+            var bottom = app.main_elem.offsetHeight-40;
+            if (r.bottom > bottom) {
+                app.main_elem.scrollBy(0, r.bottom-bottom);
+            }
+        }
+    }
+
     async #rebuild_items() {
         await Promise.all(this.sortables.map(s=>s.last_drag));
 
@@ -8373,6 +8615,8 @@ export class PlaylistPanel extends Panel {
         this.set_tracks(current_playlist_tracks.length, current_playlist && current_playlist.props.playlist_mode == PLAYLIST_MODE.DUAL_TRACK);
         var new_items = [];
 
+        var emit_change = dom_utils.debounce_next_frame(()=>this.emit("change"));
+
         this.sortables.forEach((sortable,i)=>{
             /** @type {PlaylistItem[]} */
             var items = current_playlist_tracks[i] || EMPTY_ARRAY;
@@ -8395,6 +8639,7 @@ export class PlaylistPanel extends Panel {
                     
                     let media_info = item._media_info || EMPTY_OBJECT;
                     let children = item._children;
+                    // let num_descendents = item._descendents.length;
                     let root_merged_playlist = item._root_merged_playlist;
                     var is_playlist = item._is_playlist;
                     var problems = [];
@@ -8408,7 +8653,7 @@ export class PlaylistPanel extends Panel {
                     let badges = {};
     
                     toggle_class(elem, "cutting", is_cutting);
-                    var is_upload_dummy = item.filename.startsWith("upload://");
+                    var is_upload_dummy = item.filename == "livestreamer://upload"
                     
                     var play_icons_elem = elem.querySelector(".play-icons");
                     var icons_elem = elem.querySelector(".icons");
@@ -8461,9 +8706,7 @@ export class PlaylistPanel extends Panel {
                         play_icons.push(`<span class="numbering">${String(index+1).padStart(2,"0")}</span>`);
                     }
                     
-                    if (is_upload_dummy) {
-                        icons.push(`<i class="fas fa-upload"></i>`);
-                    } else {
+                    if (!is_upload_dummy) {
                         if (media_info.exists === false) {
                             problems.push({level:3, text:"Media does not exist."});
                         } else if (!utils.is_empty(media_info) && !media_info.streams && media_info.protocol !== "livestreamer:" && !item._is_playlist && !ud.is_processing) {
@@ -8554,33 +8797,35 @@ export class PlaylistPanel extends Panel {
                         }
                     }
                     {
-                        let d, t, extra_elem_children = [];
-                        if (ud.upload || item.filename.startsWith("upload://")) {
-                            d = ud.upload || { bytes:0, total:0, speed:0 };
+                        let upload = item.upload;
+                        let download = item._download;
+                        let d = null, t = null;
+                        if (download) {
+                            d = download
+                            t = "download";
+                        } else if (upload || item.filename === "livestreamer://upload") {
+                            d = upload || { bytes:0, total:0, speed:0 };
                             t = "upload";
                         }
-                        if (ud.download) {
-                            d = ud.download
-                            t = "download";
-                        }
+                        
                         if (d) {
-                            let bar = extra_elem.querySelector(`.progress`) || $(`<div class="progress"><span class="percent"></span><span class="speed"></span></div>`)[0];
-                            let icon = extra_elem.querySelector(`.fas`) || $(`<i class="fas"></i>`)[0];
-                            
+                            let bar_el = extra_elem.querySelector(`.progress`) || $(`<div class="progress"><span class="percent"></span><span class="speed"></span></div>`)[0];
+                            let percent_el = bar_el.querySelector(".percent");
+                            let speed_el = bar_el.querySelector(".speed");
+                            let canceled = d.status == UPLOAD_STATUS.CANCELED;
                             let p = d.total ? ( d.bytes / d.total) : 0;
-                            set_attribute(bar, "title", `${utils.capitalize(t)}ing [${utils.format_bytes(d.bytes || 0)} / ${utils.format_bytes(d.total || 0)}]`);
-
+                            bar_el.title = canceled ? "Canceled" : `${utils.capitalize(t)}ing [${utils.format_bytes(d.bytes || 0)} / ${utils.format_bytes(d.total || 0)}]`;
+                            set_style_property(bar_el, "--progress",`${p*100}%`);
                             let percent_text = [];
-                            if (d.num_stages) percent_text.push(`${d.stage+1}/${d.num_stages}`);
+                            if (d.stages) percent_text.push(`${d.stage+1}/${d.stages}`);
                             percent_text.push(`${(p * 100).toFixed(2)}%`);
-
-                            set_style_property(bar, "--progress",`${p*100}%`);
-                            set_inner_html(bar.querySelector(".percent"), percent_text.join(" | "));
-                            set_inner_html(bar.querySelector(".speed"), `${utils.format_bytes(d.speed || 0)}ps`);
-                            icon.className = `fas fa-${t}`;
-                            extra_elem_children = [icon, bar];
+                            set_inner_html(percent_el, canceled ? "Canceled" : percent_text.join(" | "));
+                            set_inner_html(speed_el, canceled ? "Canceled" : `${utils.format_bytes(d.speed || 0)}ps`);
+                            icons.push(`<i class="fas fa-${t}"></i>`);
+                            set_children(extra_elem, [bar_el]);
+                        } else {
+                            set_children(extra_elem, []);
                         }
-                        set_children(extra_elem, extra_elem_children);
                     }
 
                     set_inner_html(badges_elem, Object.entries(badges).map(([k,v])=>{
@@ -8641,6 +8886,8 @@ export class PlaylistPanel extends Panel {
                     set_style_property(elem, "--outline-color", outline_color || "");
                     set_attribute(elem, "title", title_parts.join(" "));
                     toggle_class(elem, "current", is_current_item);
+
+                    emit_change();
     
                     return elem;
                 },
@@ -8650,6 +8897,8 @@ export class PlaylistPanel extends Panel {
                     var sortable = Sortable.utils.get(elem);
                     if (sortable) sortable.deselect(elem);
                     elem.remove();
+
+                    emit_change();
                 }
             });
         });
@@ -8779,7 +9028,7 @@ export class PlaylistPanel extends Panel {
         var all_items = items.map(i=>[i, ...i._descendents]).flat().map(i=>i._copy());
         var items_set = new Set(items);
         this.clipboard = { items, items_set, all_items, cutting };
-        this.update_next_frame();
+        this.update();
     }
 
     async clipboard_paste() {
@@ -8830,11 +9079,11 @@ export class PlaylistPanel extends Panel {
             set_inner_html(filename, `<span>${new_name || default_name}</span>`);
 
             if (old_name != new_name) {
+                app.$._push([`sessions/${app.$._session.id}/playlist/${item.id}/props/label`,new_name]);
                 app.request({
                     call: ["session", "update_values"],
                     arguments: [[`playlist/${item.id}/props/label`, new_name]]
                 });
-                app.$._push([`sessions/${app.$._session.id}/playlist/${item.id}/props/label`,new_name]);
             }
             this.timeline_container_elem.focus({preventScroll: true});
         });
@@ -8858,18 +9107,15 @@ export class PlaylistPanel extends Panel {
     }
 
     /** @param {PlaylistItem[]} items */
-    set_selection(items) {
+    set_selection(items, focus=true) {
         if (!Array.isArray(items)) items = [items];
         this.sortables.forEach(s=>s.deselect_all());
         var elems = new Set(items.map(item=>this.get_element(item)).filter(e=>e));
         elems.forEach((elem,i)=>{
             Sortable.utils.get(elem).click(elem, false, i!=0);
         });
+        if (focus) this.focus();
     }
-
-    /* queue_selection(ids) {
-        this._queued_selection_ids.push(ids);
-    } */
 
     /** @param {PlaylistItem} item */
     get_element(item) {
@@ -8908,11 +9154,13 @@ export class PlaylistPanel extends Panel {
         this.sortables.forEach(s=>s.forget_last_active());
         this.current = item;
         this.cursor_position = null;
-        this.update_next_frame();
+        this.update();
         item.__private.hash_on_open = item._calculate_contents_hash()
         this.once("update", ()=>{
             if (this.timeline_mode && this.clipping) this.set_timeline_view([this.clipping.start, this.clipping.end], this.time);
             else this.scroll_into_view(this.get_elements()[0]);
+        })
+        this.once("change",()=>{
             if (selection) this.set_selection(selection);
         })
     }
@@ -8965,7 +9213,7 @@ export class PlaylistPanel extends Panel {
             return {
                 position: "relative",
                 top: `${fixed_top-r.top}px`,
-                width: `${width}px`,
+                // width: `${width}px`,
                 height: `${height}px`,
                 flex: "none",
             }
@@ -8973,7 +9221,7 @@ export class PlaylistPanel extends Panel {
         Object.assign(this.elem.style, get_style() || {
             position: "",
             top: ``,
-            width: ``,
+            // width: ``,
             height: ``,
             flex: "",
         });
@@ -9055,7 +9303,7 @@ export class PlaylistPanel extends Panel {
             if (zoom != null) this.set_timeline_zoom(zoom);
             this.set_timeline_scroll_percent(scroll_x, ox);
         }
-        this.update_next_frame();
+        this.update();
     }
 }
 
@@ -9095,88 +9343,38 @@ export class Area extends UI.Column {
 }
 
 export class App extends utils.EventEmitter {
-    #initialized = false;
-    get server_now() { return Date.now() + this.$.server_time_diff; }
     get playlist_item_props_class() { return utils.try(()=>this.$.properties.playlist.enumerable_props.props.props); }
     get focused_element() { return this.root_elem.activeElement; }
     get dev_mode() { return this.$.conf["debug"] || new URLSearchParams(window.location.search.slice(1)).has("dev"); }
     
-    /** @type {Remote} */
-    $;
+    $ = new Remote();
 
-    constructor() {
-        super();
-        app = this;
-        jQuery(async ()=>{
-            this.loader = new Loader();
-            this.loader.update({visible:true, text:"Initializing..."});
+    async init() {
 
-            this.settings = new dom_utils.LocalStorageBucket("livestreamer-1.0", {
-                "playlist_mode": 0,
-                // "playlist_show_scheduled_times": false,
-                "playlist_sticky": true,
-                "show_extra_playlist_icons": true,
-                "wrap_playlist_items": false,
-                "time_display_ms": false,
-                "test_stream_info": true,
-                "show_chapters": true,
-                "show_encoder_info": true,
-                "pause_encoder": false,
-                "sessions_display": "tabs",
-                "open_file_manager_in_new_window": false,
-                "time_left_mode": TimeLeftMode.TIME_LEFT,
-                "layout":null,
-                "session_order": null,
-                "last_session_id": null
-            });
-            this.passwords = new dom_utils.LocalStorageBucket("livestreamer-passwords");
-
-            var messenger = new dom_utils.WindowCommunicator();
-            var key;
-            if (window.self == window.top) {
-                key = dom_utils.Cookie.get("ls_key") || new URLSearchParams(window.location.search).get("ls_key");
-            } else {
-                key = await messenger.request(window.parent, "key");
-            }
-            if (key) dom_utils.Cookie.set("ls_key", key, { expires: 365 });
-            messenger.destroy();
-    
-            var ws_url = window.location.origin.replace(/^https:/, "wss:").replace(/^http:/, "ws:")+"/main/";
-            var ws_params = new URLSearchParams();
-            if (key) ws_params.set("key", key);
-            var session_id = this.settings.get("last_session_id");
-            if (session_id) ws_params.set("session_id", session_id);
-            this.ws = new dom_utils.WebSocket(ws_url+"?"+ws_params.toString());
-            this.ws.on("open", ()=>{
-                this.$ = new Remote();
-                this.$.on("update", (changes)=>this.update(changes));
-            });
-            this.ws.on("data", (data)=>{
-                // if (this.dev_mode) console.debug("ws:", data);
-                if (data.init) {
-                    this.$._push(data.init);
-                    this.$._push({
-                        settings: {...this.settings.$, [Observer.RESET_KEY]:"Object"},
-                        passwords: {...this.passwords.$, [Observer.RESET_KEY]:"Object"}
-                    });
-                }
-                if (data.$) {
-                    this.$._push(data.$);
-                }
-            });
-            this.ws.on("close", ()=>{
-                this.loader.update({visible:true, text:"Lost connection..."});
-                this.remove_plugins();
-                Fancybox.close(true);
-            });
-        
-            this.loader.update({text:"Connecting..."});
+        this.settings = new dom_utils.LocalStorageBucket("livestreamer-1.0", {
+            "playlist_mode": 0,
+            // "playlist_show_scheduled_times": false,
+            "playlist_sticky": true,
+            "show_extra_playlist_icons": true,
+            "wrap_playlist_items": false,
+            "time_display_ms": false,
+            "test_stream_info": true,
+            "show_chapters": true,
+            "show_encoder_info": true,
+            "pause_encoder": false,
+            "sessions_display": "tabs",
+            "open_file_manager_in_new_window": false,
+            "time_left_mode": TimeLeftMode.TIME_LEFT,
+            "layout":null,
+            "session_order": null,
+            "last_session_id": null
         });
-    }
+        this.passwords = new dom_utils.LocalStorageBucket("livestreamer-passwords");
 
-    init() {
-        if (this.#initialized) return;
-        this.#initialized = true;
+        this.loader = new Loader();
+        this.loader.update({visible:true, text:"Initializing..."});
+
+        this.media = new Media();
 
         this.elem = document.querySelector("#livestreamer");
         this.body_elem = this.elem.parentElement;
@@ -9237,7 +9435,7 @@ export class App extends utils.EventEmitter {
         session_ui.append(row1, row2);
         this.session_ui_elem.append(session_ui);
 
-        /** @type {Record<string,Panel>} */
+        /** @type {Record<PropertyKey,Panel>} */
         this.panels = {};
         
         this.stream_settings = new StreamSettings();
@@ -9248,15 +9446,252 @@ export class App extends utils.EventEmitter {
         
         this.media_player = new MediaPlayerPanel();
         this.media_settings = new MediaSettingsPanel();
-        this.encoder = new EncoderPanel();
+        this.metrics = new StreamMetricsPanel();
         this.session_logger = new LogViewerPanel("Session Log", {ffmpeg: false});
 
-        this.areas[2].append(this.media_player,this.media_settings,this.encoder,this.session_logger);
+        this.areas[2].append(this.media_player,this.media_settings,this.metrics,this.session_logger);
         this.default_layout = this.get_layout();
         
         this.app_log_section = this.elem.querySelector(".app-logs-section");
         this.app_logger = new LogViewerPanel("Application Log");
         this.app_log_section.append(this.app_logger);
+
+        this.playlist_modify_menu = new PlaylistModifySettings();
+        this.playlist_add_url_menu = new PlaylistAddURLMenu();
+        this.file_system_info_menu = new FileSystemInfoMenu();
+        this.session_config_menu = new SessionConfigurationSettings();
+        this.schedule_stream_menu = new ScheduleStreamSettings();
+        this.save_playlist_menu = new SavePlaylistSettings();
+        this.history_menu = new HistorySettings();
+        this.schedule_generator_menu = new ScheduleGenerator();
+        this.keyboard_shortcuts_menu = new KeyboardShortcuts();
+        // this.advanced_functions_menu = new AdvancedFunctionsMenu();
+        this.system_manager = new SystemManagerMenu();
+        this.file_manager_menu = new FileManagerMenu();
+        this.configure_targets_menu = new TargetConfigurationMenu();
+        this.configure_external_session_menu = new ExternalSessionConfigurationMenu();
+        this.user_config_menu = new UserConfigurationSettings();
+        this.admin_menu = new AdminSettings();
+        this.set_time_pos_menu = new SetTimePosSettings();
+        this.playlist_info_menu = new InfoSettings();
+        this.change_log_menu = new ChangeLog();
+        this.split_menu = new SplitSettings();
+        this.uploads_downloads_menu = new UploadsDownloadsMenu();
+        
+        // this.fonts_menu = new FontSettings();
+
+        this.target_config_menus["local"] = new LocalServerTargetConfigMenu();
+
+        this.session_password = new (class extends UI {
+            constructor(...a) {
+                super(...a);
+                let row = new UI.FlexRow();
+                this.password = new UI.Property(null, "Password", `<input type="text">`,{
+                    "default":"",
+                    "reset":false,
+                    "placeholder": "Enter password",
+                });
+                this.password.input.addEventListener("keydown", (e)=>{
+                    if (e.key === "Enter") button.click();
+                });
+                let button = $(`<button class="button" title="Sign in"><i class="fas fa-key"></i></button>`)[0];
+                button.addEventListener("click", ()=>{
+                    app.passwords.set(app.$._session.id, this.password.value);
+                    if (!app.$._session.access_control._self_has_access(this.password.value)) {
+                        window.alert("Incorrect Password")
+                    }
+                });
+                this.password.inner.append(button);
+                row.append(this.password);
+                this.elem.append(row);
+            }
+        })(this.session_password_elem);
+
+        this.sign_out_session_button.addEventListener("click", (e)=>{
+            this.passwords.unset(this.$._session.id);
+        });
+        
+        for (let area of this.areas) {
+            new Sortable(area.elem, {
+                group: "layout",
+                fallbackTolerance: 3, // So that we can select items on mobile
+                animation: 150,
+                handle: ".drawer>.header",
+                filter: (e)=>{
+                    if (e.target.closest(".drawer>.header")) {
+                        if (dom_utils.has_touch_screen() || e.target.closest("button,input,select")) return true;
+                    }
+                },
+                onEnd: ()=>this.save_layout(),
+                preventOnFilter: false,
+            });
+        }
+        
+        this.session_sortable = new ResponsiveSortable(this.sessions_tabs_elem, {
+            fallbackTolerance: 3, // So that we can select items on mobile
+            animation: 150,
+            // filter: ".unmovable",
+            handle: ".handle",
+            onEnd: (evt)=>{
+                if (this.$.conf["main.session-order-client"]) {
+                    this.settings.set("session_order", [...this.sessions_tabs_elem.children].map(e=>e.dataset.id));
+                } else {
+                    this.request({
+                        call: ["rearrange_sessions"],
+                        arguments: [evt.oldIndex, evt.newIndex]
+                    });
+                }
+            },
+        });
+
+        this.footer_buttons = new UI.Row().elem;
+        this.main_elem.append(this.footer_buttons);
+        set_style_property(this.footer_buttons, "justify-content", "end");
+
+        {
+            let row = new UI.Row({
+                gap: 0,
+                visible: ()=>app.$.processes["file-manager"] || IS_ELECTRON
+            });
+            
+            if (!IS_ELECTRON) {
+                row.append(
+                    new UI.Button(`<i class="fas fa-folder-tree"></i>`, {
+                        click: ()=>{
+                            app.file_system_info_menu.show();
+                        },
+                        title: ()=>app.file_system_info_menu.modal_title
+                    })
+                )
+                row.append(
+                    new UI.Link(`File Manager`, {
+                        class: "button",
+                        href: get_file_manager_url(),
+                        click: (e)=>{
+                            e.preventDefault();
+                            open_file_manager({ new_window:true, standalone:true, hidden_id:"file-manager-standalone" });
+                        }
+                    })
+                );
+            }
+            this.footer_buttons.append(row);
+        }
+        
+        /* this.footer_buttons.append(
+            new UI.Button(`Font Manager`, {
+                click: ()=>app.fonts_menu.show()
+            })
+        ) */
+        this.footer_buttons.append(
+            new UI.Button(`Configure Targets`, {
+                click: ()=>this.configure_targets_menu.show()
+            }),
+            new UI.Button(`System Manager`, {
+                click: ()=>this.system_manager.show()
+            }),
+            /* new UI.Button(`Advanced Functions`, {
+                click: ()=>this.advanced_functions_menu.show()
+            }), */
+            new UI.Button(`Uploads & Downloads`, {
+                click: ()=>this.uploads_downloads_menu.show()
+            }),
+            new UI.Button(`Controls`, {
+                click: ()=>this.keyboard_shortcuts_menu.show()
+            }),
+            new UI.Button(`Change Log`, {
+                click: ()=>this.change_log_menu.show(),
+                /** @this {UI} */
+                update: function() {
+                    var diff = (app.settings.get("last_change_log") != app.$.change_log.mtime);
+                    if (this.__last_diff != diff) {
+                        if (diff) {
+                            this.elem.animate([
+                                {
+                                    "boxShadow": "0px 0px 5px 0px rgba(0,153,255,1)"
+                                },
+                                {
+                                    "boxShadow": "0px 0px 0px 0px rgba(0,153,255,0)"
+                                },
+                                {
+                                    "boxShadow": "0px 0px 5px 0px rgba(0,153,255,1)"
+                                }
+                            ], {
+                                duration: 1500,
+                                easing: "ease-in-out",
+                                iterations: Infinity
+                            });
+                        } else {
+                            this.elem.getAnimations().forEach(a=>a.cancel());
+                        }
+                    }
+                    this.__last_diff = diff;
+                }
+            }),
+            new UI.Button(`Setup External Session`, {
+                click: ()=>this.configure_external_session_menu.show()
+            }),
+        );
+
+        var messenger = new dom_utils.WindowCommunicator();
+        var key;
+        if (window.self == window.top) {
+            key = dom_utils.Cookie.get("ls_key") || new URLSearchParams(window.location.search).get("ls_key");
+        } else {
+            key = await messenger.request(window.parent, "key");
+        }
+        if (key) dom_utils.Cookie.set("ls_key", key, { expires: 365 });
+        messenger.destroy();
+
+        var ws_url = `${(window.location.protocol === "https:") ? "wss:" : "ws:"}//${window.location.host}/main/`;
+        var ws_params = new URLSearchParams();
+        // if (key) ws_params.set("key", key);
+        var session_id = window.location.hash.slice(1) || this.settings.get("last_session_id");
+        if (session_id) ws_params.set("session_id", session_id);
+
+        this.ws = new dom_utils.WebSocket(ws_url+"?"+ws_params.toString());
+        this.ws.on("open", ()=>{
+            this.$ = new Remote();
+            this.$.on("update", (changes)=>this.#update(changes));
+        });
+        this.ws.on("data", (data)=>{
+            if (data.$) this.$._push(data.$);
+        });
+        this.ws.on("close", ()=>{
+            this.loader.update({visible:true, text:"Lost connection..."});
+            this.remove_plugins();
+            Fancybox.close(true);
+        });
+    
+        this.loader.update({text:"Connecting..."});
+
+        var on_setting_change = (k,v)=>{
+            if (k.startsWith("drawer:")) {
+                var panel = this.panels[k.slice(7)];
+                if (panel) panel.toggle(!v)
+            } else if (typeof v === "boolean") {
+                toggle_attribute(this.body_elem, `data-${k}`, v);
+                [...this.elem.querySelectorAll(`button.${k}`)].forEach(c=>{
+                    if (v) delete c.dataset.toggled; else c.dataset.toggled = 1;
+                });
+            } else {
+                var t = typeof v;
+                if (t != "object" && t != "function") {
+                    set_attribute(this.body_elem, `data-${k}`, v);
+                }
+            }
+            if (k === "playlist_mode") {
+                this.playlist.timeline_mode = v;
+            }
+            this.update();
+        };
+
+        this.settings.on("change", (e)=>{
+            on_setting_change(e.name, e.new_value);
+        });
+
+        this.passwords.on("change", (e)=>{
+            this.update();
+        });
 
         this.elem.addEventListener("click",(e)=>{
             var button = e.target.closest("button");
@@ -9280,16 +9715,6 @@ export class App extends utils.EventEmitter {
                 }
             }
         });
-
-        this.settings.on("change", (e)=>{
-            this.$._push([`settings/${e.name}`, e.new_value]);
-        });
-
-        this.passwords.on("change", (e)=>{
-            this.$._push([`passwords/${e.name}`, e.new_value]);
-        });
-
-        // -------------------------------
 
         this.sessions_select.addEventListener("change", ()=>{
             window.location.hash = `#${this.sessions_select.value}`;
@@ -9352,98 +9777,17 @@ export class App extends utils.EventEmitter {
 
         this.destroy_session_button.addEventListener("click", (e)=>{
             if (confirm(`Are you sure you want to delete '${this.$._session.name}'?`)) {
+                this.$._push([`clients/${this.$.client_id}/session_id`, null]);
+                // this.last_destroyed_session_id = this.$._session.id;
                 this.request({
                     call: ["session", "destroy"],
                     arguments: [true],
                 });
-                this.$._push([`clients/${this.$.client_id}/session_id`, null]);
-                // this.last_destroyed_session_id = this.$._session.id;
             }
         });
 
         this.minimize_session_button.addEventListener("click", (e)=>{
             this.try_attach_to(null);
-        });
-
-        this.playlist_modify_menu = new PlaylistModifySettings();
-        this.playlist_add_url_menu = new PlaylistAddURLMenu();
-        this.file_system_info_menu = new FileSystemInfoMenu();
-        this.session_config_menu = new SessionConfigurationSettings();
-        this.schedule_stream_menu = new ScheduleStreamSettings();
-        this.save_playlist_menu = new SavePlaylistSettings();
-        this.history_menu = new HistorySettings();
-        this.schedule_generator_menu = new ScheduleGenerator();
-        this.keyboard_shortcuts_menu = new KeyboardShortcuts();
-        // this.advanced_functions_menu = new AdvancedFunctionsMenu();
-        this.system_manager = new SystemManagerMenu();
-        this.file_manager_menu = new FileManagerMenu();
-        this.configure_targets_menu = new TargetConfigurationMenu();
-        this.configure_external_session_menu = new ExternalSessionConfigurationMenu();
-        this.user_config_menu = new UserConfigurationSettings();
-        this.admin_menu = new AdminSettings();
-        this.set_time_pos_menu = new SetTimePosSettings();
-        this.playlist_info_menu = new InfoSettings();
-        this.change_log_menu = new ChangeLog();
-        this.split_menu = new SplitSettings();
-        this.uploads_downloads_menu = new UploadsDownloadsMenu();
-        
-        // this.fonts_menu = new FontSettings();
-
-        this.target_config_menus["local"] = new LocalServerTargetConfigMenu();
-
-        {
-            let row = new UI(this.session_password_elem).append(new UI.FlexRow());
-            this.session_password = new UI.Property(null, "Password", `<input type="text">`,{
-                "default":"",
-                "reset":false,
-                "placeholder": "Enter password",
-            });
-            this.session_password.input.addEventListener("keydown", (e)=>{
-                if (e.key === "Enter") button.click();
-            });
-            let button = $(`<button class="button" title="Sign in"><i class="fas fa-key"></i></button>`)[0];
-            button.addEventListener("click", ()=>{
-                this.passwords.set(this.$._session.id, this.session_password.value);
-            });
-            this.session_password.inner.append(button);
-            row.append(this.session_password);
-        }
-
-        this.sign_out_session_button.addEventListener("click", (e)=>{
-            this.passwords.unset(this.$._session.id);
-        });
-        
-        for (let area of this.areas) {
-            new Sortable(area.elem, {
-                group: "layout",
-                fallbackTolerance: 3, // So that we can select items on mobile
-                animation: 150,
-                handle: ".drawer>.header",
-                filter: (e)=>{
-                    if (e.target.closest(".drawer>.header")) {
-                        if (dom_utils.has_touch_screen() || e.target.closest("button,input,select")) return true;
-                    }
-                },
-                onEnd: ()=>this.save_layout(),
-                preventOnFilter: false,
-            });
-        }
-        
-        this.session_sortable = new ResponsiveSortable(this.sessions_tabs_elem, {
-            fallbackTolerance: 3, // So that we can select items on mobile
-            animation: 150,
-            // filter: ".unmovable",
-            handle: ".handle",
-            onEnd: (evt)=>{
-                if (this.$.conf["main.session-order-client"]) {
-                    this.settings.set("session_order", [...this.sessions_tabs_elem.children].map(e=>e.dataset.id));
-                } else {
-                    this.request({
-                        call: ["rearrange_sessions"],
-                        arguments: [evt.oldIndex, evt.newIndex]
-                    });
-                }
-            },
         });
 
         this.sessions_tabs_elem.addEventListener("contextmenu", (e) => {
@@ -9490,115 +9834,66 @@ export class App extends utils.EventEmitter {
         });
 
         var fd = new FileDrop(this.playlist.elem);
-        fd.on("drop", async (files)=>{
-            if (files.length) app.playlist_add(files);
-        })
-
-        if (IS_ELECTRON) {
-            window.prompt = async (message, default_value)=>{
-                var result = await fancybox_prompt(message, default_value);
-                if (result) return result;
-                else return null;
-            };
-        }
-
-        this.footer_buttons = new UI.Row().elem;
-        this.main_elem.append(this.footer_buttons);
-        set_style_property(this.footer_buttons, "justify-content", "end");
-
-        var row = new UI.Row({
-            gap: 0,
-            visible: ()=>app.$.processes["file-manager"] || IS_ELECTRON
-        });
         
-        if (!IS_ELECTRON) {
-            row.append(
-                new UI.Button(`<i class="fas fa-folder-tree"></i>`, {
-                    click: ()=>{
-                        app.file_system_info_menu.show();
-                    },
-                    title: ()=>app.file_system_info_menu.modal_title
-                })
-            )
-        }
-        row.append(
-            new UI.Link(`File Manager`, {
-                class: "button",
-                href: get_file_manager_url(),
-                click: (e)=>{
-                    e.preventDefault();
-                    open_file_manager({ new_window:true, standalone:true, hidden_id:"file-manager-standalone" });
-                }
-            })
-        );
-        this.footer_buttons.append(row);
-        
-        /* this.footer_buttons.append(
-            new UI.Button(`Font Manager`, {
-                click: ()=>app.fonts_menu.show()
-            })
-        ) */
-        this.footer_buttons.append(
-            new UI.Button(`Configure Targets`, {
-                click: ()=>this.configure_targets_menu.show()
-            }),
-            new UI.Button(`System Manager`, {
-                click: ()=>this.system_manager.show()
-            }),
-            /* new UI.Button(`Advanced Functions`, {
-                click: ()=>this.advanced_functions_menu.show()
-            }), */
-            new UI.Button(`Uploads & Downloads`, {
-                click: ()=>this.uploads_downloads_menu.show()
-            }),
-            new UI.Button(`Controls`, {
-                click: ()=>this.keyboard_shortcuts_menu.show()
-            }),
-            new UI.Button(`Change Log`, {
-                click: ()=>this.change_log_menu.show(),
-                /** @this {UI} */
-                update: function() {
-                    var diff = (app.settings.get("last_change_log") != app.$.change_log.mtime);
-                    if (this.__last_diff != diff) {
-                        if (diff) {
-                            this.elem.animate([
-                                {
-                                    "boxShadow": "0px 0px 5px 0px rgba(0,153,255,1)"
-                                },
-                                {
-                                    "boxShadow": "0px 0px 0px 0px rgba(0,153,255,0)"
-                                },
-                                {
-                                    "boxShadow": "0px 0px 5px 0px rgba(0,153,255,1)"
-                                }
-                            ], {
-                                duration: 1500,
-                                easing: "ease-in-out",
-                                iterations: Infinity
-                            });
-                        } else {
-                            this.elem.getAnimations().forEach(a=>a.cancel());
+        fd.on("drop", /** @param {FileSystemEntry[]} entries */ async (entries)=>{
+            if (!entries.length) return;
+            var items = [];
+            /** @param {PlaylistItem} parent */ 
+            var traverse = async (entry, parent) => {
+                if (!entry) return;
+                if (entry.isFile) {
+                    /** @type {FileSystemFileEntry} */
+                    let file_entry = entry;
+                    let file = await new Promise(resolve=>file_entry.file(resolve));
+                    app.playlist_add({
+                        filename: file_entry.name,
+                        file,
+                    }, {
+                        parent
+                    });
+                } else if (entry.isDirectory) {
+                    /** @type {FileSystemDirectoryEntry} */
+                    let dir_entry = entry;
+                    let [item] = app.playlist_add({
+                        filename:"livestreamer://playlist",
+                        props: {
+                            label: dir_entry.name
                         }
-                    }
-                    this.__last_diff = diff;
+                    }, {
+                        parent
+                    });
+                    await new Promise((resolve)=>{
+                        var reader = dir_entry.createReader();
+                        reader.readEntries(async (entries) => {
+                            for (var e of entries) {
+                                await traverse(e, item);
+                            }
+                            resolve();
+                        });
+                    });
                 }
-            }),
-            new UI.Button(`Setup External Session`, {
-                click: ()=>this.configure_external_session_menu.show()
-            }),
-        );
+            };
+            for (var e of entries) {
+                await traverse(e, this.playlist.current);
+            }
+            this.playlist_add(items);
+        })
         
         this.tick_interval = setInterval(()=>this.tick(), 1000/10);
         this.tick();
         
         this.update_layout();
 
-        this.settings.load(true);
-        this.passwords.load(true);
+        for (var k of this.settings.keys) {
+            on_setting_change(k, this.settings.get(k))
+        }
+
+        this.root.update();
     }
 
-    update(changes) {
-        this.init();
+    update = utils.debounce(this.#update, 0);
+
+    #update(changes = {}) {
         this.media.update();
 
         this.loader.update({visible:false});
@@ -9609,15 +9904,12 @@ export class App extends utils.EventEmitter {
         var client_changes = changes.clients && changes.clients[client_id];
         var is_new_session = !!(client_changes && client_changes.session_id);
         var session_changes = is_new_session ? this.$._session : changes.sessions && changes.sessions[this.$._session.id];
-        // var is_new_stream = !!(changes.sessions && changes.sessions[this.$._session.id] && changes.sessions[this.$._session.id].stream);
-        // remove_empty_objects_from_tree(changes);
         var is_null_session = this.$._session === NULL_SESSION;
-        var access_control = new AccessControl(this.$._session.access_control);
-        var has_ownership = access_control.self_is_owner_or_admin || access_control.owners.length == 0;
-        var has_access = is_null_session || access_control.self_has_access(app.passwords.get(this.$._session.id)) || this.$._client.is_admin;
-        var requires_password = access_control.self_requires_password;
+        var access_control = this.$._session.access_control
+        var has_ownership = access_control._self_is_owner_or_admin || access_control._owners.length == 0;
+        var has_access = is_null_session || access_control._self_has_access(app.passwords.get(this.$._session.id)) || this.$._client.is_admin;
+        var requires_password = access_control._self_requires_password;
         var is_external_session = this.$._session.type === "ExternalSession";
-        var is_running = this.$._session._is_running;
 
         // if (this.$._last_session && !this.$.sessions[this.$._last_session.id]) {
         //     alert(`'${this.$._last_session.name}' was terminated internally or by another user.`);
@@ -9625,8 +9917,6 @@ export class App extends utils.EventEmitter {
         if (client_changes && "session_id" in client_changes && client_changes.session_id != last_session_id) {
             window.location.hash = client_changes.session_id || "";
         }
-        // var hash = this.$.session ? `#${this.$.session.id}` : "";
-        // if (window.location.hash !== hash) window.location.hash = hash;
 
         this.session_elem.dataset.type = this.$._session.type;
         toggle_class(this.session_elem, "d-none", is_null_session);
@@ -9636,8 +9926,8 @@ export class App extends utils.EventEmitter {
         toggle_class(this.no_sessions_elem.querySelector(".no-session"), "d-none", !has_access);
         toggle_class(this.no_sessions_elem.querySelector(".no-access"), "d-none", has_access);
         toggle_class(this.no_sessions_elem.querySelector(".owner"), "d-none", has_access);
-        set_inner_html(this.no_sessions_elem.querySelector(".owner"), `This session is owned by ${access_control.owners.map(u=>`[${u.username}]`).join(" | ")}`);
-        toggle_class(this.session_password_elem, "d-none", has_access || !requires_password);
+        set_inner_html(this.no_sessions_elem.querySelector(".owner"), `This session is owned by ${access_control._owners.map(u=>`[${u.username}]`).join(" | ")}`);
+        this.session_password.hidden = (has_access || !requires_password);
         
         this.session_load_save_elem.style.display = is_external_session ? "none": "";
 
@@ -9653,88 +9943,21 @@ export class App extends utils.EventEmitter {
         toggle_attribute(this.config_session_button, "disabled", !has_access || !has_ownership);
         toggle_attribute(this.destroy_session_button, "disabled", !has_ownership);
 
-        if (changes.settings) {
-            for (let k in changes.settings) {
-                let v = changes.settings[k];
-                if (k.startsWith("drawer:")) {
-                    var panel = this.panels[k.slice(7)];
-                    if (panel) panel.toggle(!v)
-                } else if (typeof v === "boolean") {
-                    toggle_attribute(this.body_elem, `data-${k}`, v);
-                    [...this.elem.querySelectorAll(`button.${k}`)].forEach(c=>{
-                        if (v) delete c.dataset.toggled; else c.dataset.toggled = 1;
-                    });
-                } else {
-                    var t = typeof v;
-                    if (t != "object" && t != "function") {
-                        set_attribute(this.body_elem, `data-${k}`, v);
-                    }
-                }
-                if (k === "playlist_mode") {
-                    this.playlist.timeline_mode = v;
-                }
-            }
-        }
-
-        // if (is_new_stream) this.encoder.reset_chart();
         if (is_new_session) {
             this.playlist.sortables.forEach(s=>s.deselect_all());
             this.session_logger.empty();
-            this.session_password.reset();
+            this.session_password.password.reset();
             this.playlist.open(null);
         }
-        // var ignore_vars = new Set(["output-frames","output-pts","estimated-display-fps", "estimated-vf-fps", "real-time-pos", "time-pos", "duration", "real-duration"]);
-        
-        /* for (var s of Object.values(changes.sessions)) {
-            for (var k of ["output-frames","output-pts","estimated-display-fps", "estimated-vf-fps", "real-time-pos", "time-pos", "duration", "real-duration"]) {
-                delete s.player[k];
-            }
-        } */
-        /* var rebuild_sessions = false;
-        if (changes.sessions) {
-            for (var s of Object.values(changes.sessions)) {
-                var paths = utils.deep_entries(s).map(e=>e[0]);
-                for (var k in s) {
-                    if (k != "time") rebuild_sessions = true;
-                }
-            }
-        } */
-
-        // if (changes.clients || changes.sessions) {
-        //     this.rebuild_sessions();
-        // }
-        // if (changes.clients || (session_changes && session_changes.access_control)) {
-        //     this.rebuild_clients();
-        // }
 
         this.#rebuild_sessions();
         this.#rebuild_clients();
         
-        /* if (changes.change_log && !this.seen_change_log) {
-            this.seen_change_log = true;
-            if (this.settings.get("last_change_log") != this.$.change_log.mtime) {
-                this.settings.set("last_change_log", this.$.change_log.mtime);
-                this.change_log_menu.show();
-            }
-        } */
-        
         if (changes.plugins) {
-            for (var k in changes.plugins) this.init_plugin(this.$.plugins[k]);
+            for (var k in changes.plugins) this.init_plugin(k);
         }
-        
-        /* if (stream_changes) {
-            console.debug("stream_changes", stream_changes);
-        } */
 
         if (session_changes) {
-            // this.stream_settings.update_next_frame();
-            // this.media_player.update_next_frame();
-            // this.media_settings.update_next_frame();
-
-            // if ((session_changes.stream && session_changes.stream.speed_history)) {
-            //     this.encoder.update_next_frame();
-            // }
-
             if (session_changes.playlist && !Object.isFrozen(this.$._session)) {
                 var ids = new Set([...Object.keys(this.$._session._deleted_playlist_items), ...Object.keys(session_changes.playlist)]);
                 for (var id of ids) {
@@ -9759,19 +9982,10 @@ export class App extends utils.EventEmitter {
             if (curr_playlist._is_deleted) {
                 this.playlist.open(null);
             }
-
-            /* if (session_changes.playlist !== undefined || session_changes.playlist_info !== undefined || session_changes.downloads !== undefined || session_changes.media_info !== undefined || session_changes.media_info_processing !== undefined || session_changes.media_info_processing || session_changes.is_connected_rtmp !== undefined) {
-                this.playlist.debounced_rebuild();
-            } */
             
             if (session_changes.logs) {
                 this.session_logger.append_logs(session_changes.logs);
             }
-
-            // this.playlist_modify_menu.update_next_frame();
-            // this.stream_settings.update_next_frame();
-            // this.session_config_menu.update_next_frame();
-            // this.schedule_stream_menu.update_next_frame();
         }
 
         {
@@ -9798,15 +10012,9 @@ export class App extends utils.EventEmitter {
                 utils.set_add(ids, this.playlist.current._children.filter(i=>i.filename==="livestreamer://rtmp").map(i=>i.id));
             }
             if (session_changes) {
-                /* if (session_changes.downloads) {
-                    utils.set_add(ids, Object.keys(session_changes.downloads));
-                } */
                 if (session_changes.playlist) {
                     utils.set_add(ids, Object.keys(session_changes.playlist));
                 }
-                /* if (session_changes.playlist_info) {
-                    utils.set_add(ids, Object.keys(session_changes.playlist_info));
-                } */
                 if (session_changes.playlist_id !== undefined) {
                     utils.set_add(ids, [this.playlist.current.id, this.$._session.playlist_id]);
                 }
@@ -9828,36 +10036,13 @@ export class App extends utils.EventEmitter {
                     }
                 }
                 items.forEach(item=>item.__private.userdata = null);
-                // rebuild_playlist = true;
             }
         }
-
-        // if (changes.processes || changes.sysinfo || changes.process_info) {
-        //     this.system_manager.update();
-        // }
-
-        // if (changes.settings) {
-        //     this.user_config_menu.update();
-        // }
-
-        // if ((changes.settings && (changes.settings["playlist_show_scheduled_times"] !== undefined || changes.settings["schedule_generator"])) ||
-        //     (session_changes && (session_changes.schedule_start_time || ("playlist_id" in session_changes))) ||
-        //     (session_changes && session_changes.stream && "state" in session_changes.stream)) {
-        //         rebuild_playlist = true;
-        // }
         
+        toggle_class(this.app_log_section, "d-none", !this.$._client.is_admin);
         if (changes.logs !== undefined) {
             if (this.app_logger) this.app_logger.append_logs(changes.logs);
         }
-
-        // this.media_player.update_video_player();
-
-        // this.playlist.update_next_frame();
-        // if (rebuild_playlist) {
-        //     this.playlist.rebuild();
-        // }
-        
-        toggle_class(this.app_log_section, "d-none", !this.$._client.is_admin);
 
         // we can forget old items now (I think)
         utils.clear(this.$._session._deleted_playlist_items);
@@ -9867,48 +10052,6 @@ export class App extends utils.EventEmitter {
         }
 
         this.root.update();
-    }
-    
-    media = new class {
-        time = 0;
-        duration = 0;
-        chapters = [];
-        seekable = false;
-        loaded;
-        update() {
-            this.item = app.$._session._current_playing_item;
-            var started = app.$._session._is_running;
-            var loaded = !started || !!app.$._stream.mpv.loaded;
-            var seeking = started && !!app.$._stream.mpv.seeking;
-            var special_seeking = started && !!app.$._stream.mpv.is_special && !!app.$._stream.mpv.seeking;
-            var buffering = !!(seeking || !loaded || app.$._stream.mpv.props["paused-for-cache"]);
-
-            if (special_seeking) return;
-            this.time = app.$._session._current_time;
-            this.duration = app.$._session._current_duration;
-            this.chapters = app.$._session._current_chapters;
-            this.seekable = this.duration != 0 && (!started || !!app.$._stream.mpv.seekable) && this.item.filename !== "livestreamer://empty";
-            this.loaded = loaded;
-            this.buffering = buffering;
-            
-            if (!loaded) {
-                this.time = 0;
-                this.duration = 0;
-                this.chapters = [];
-                this.seekable = false;
-            }
-
-            this.status = started ? (loaded ? "Playing" : "Loading") : "Pending";
-            this.stats = {};
-            this.stats["V-FPS"] = (+app.$._stream.mpv.props["estimated-vf-fps"] || 0).toFixed(2);
-            if (!app.$._stream._is_encoding) this.stats["D-FPS"] = (+app.$._stream.mpv.props["estimated-display-fps"] || 0).toFixed(2);
-            this.stats["INTRP"] = app.$._stream.mpv.interpolation ? "On" : "Off";
-            this.stats["DEINT"] = app.$._stream.mpv.deinterlace ? "On" : "Off";
-
-            this.curr_chapters = app.$._session._get_current_chapters_at_time(this.time);
-        }
-        get time_left() { return Math.max(0, this.duration - this.time); }
-        get do_live_seek(){ return app.$._stream._is_running && !app.$._stream._is_encoding && !app.$._stream.mpv.is_special; }
     }
 
     get_rtmp_url() {
@@ -10014,7 +10157,12 @@ export class App extends utils.EventEmitter {
             }
             remove_items.push(item);
         }
-        if (add_items.length) this.playlist_add(add_items, item.index+1, item.track_index);
+        if (add_items.length) {
+            this.playlist_add(add_items, {
+                insert_pos: item.index+1,
+                track_index: item.track_index
+            });
+        }
         if (remove_items.length) this.playlist_remove(remove_items);
         // await Promise.all(promises);
     }
@@ -10034,7 +10182,10 @@ export class App extends utils.EventEmitter {
         var new_item = this.playlist_add({
             filename: "livestreamer://playlist",
             props
-        }, index, track_index)[0];
+        }, {
+            insert_pos: index,
+            track_index: track_index
+        })[0];
         var changes = Object.fromEntries(items.map((item,i)=>[item.id, {parent_id: new_item.id, index: i, track_index: 0}]));
         this.playlist_update(changes);
 
@@ -10073,20 +10224,21 @@ export class App extends utils.EventEmitter {
         });
         items.forEach((item)=>changes[item.id] = null);
         this.playlist_update(changes);
-
-        this.playlist.once("update", ()=>{
-            this.playlist.set_selection(selection)
+        
+        this.playlist.once("change",()=>{
+            this.playlist.set_selection(selection);
         })
     }
 
-    /** @param {PlaylistItem[]} items */
-    playlist_move(items, pos=null, track_index=null) {
+    /** @typedef {{insert_pos:number, track_index:number, parent:PlaylistItem}} PlaylistInsertOptions */
+    /** @param {PlaylistItem[]} items @param {PlaylistInsertOptions} opts */
+    playlist_move(items, opts) {
         if (!Array.isArray(items)) items = [items];
         if (!items.length) return;
-        var new_parent = this.playlist.current;
-        var new_parent_session_id = new_parent._session.id;
+        let {track_index, insert_pos, parent} = this.get_playlist_insert_options(opts);
+        var new_parent_session_id = parent._session.id;
 
-        var all = items.map(i=>[{id:i.id, parent:new_parent.id}, ...i._descendents.map(d=>({id:d.id, parent:d.parent_id}))]).flat();
+        var all = items.map(i=>[{id:i.id, parent:parent.id}, ...i._descendents.map(d=>({id:d.id, parent:d.parent_id}))]).flat();
         var is_circular = utils.is_circular(all);
         if (is_circular) {
             alert("Detected circular parent-child loop. Aborting operation.");
@@ -10094,73 +10246,81 @@ export class App extends utils.EventEmitter {
         }
 
         var affected = new Set(items);
-        if (track_index == null) track_index = this.playlist.active_track_index;
-        pos = this.fix_insert_pos(pos, track_index);
-        var parent_items = new_parent._get_track(track_index);
+        var parent_items = parent._get_track(track_index);
         parent_items = parent_items.map(item=>affected.has(item)?null:item);
+        var i = insert_pos;
         for (var [session_id, group] of Object.entries(utils.group_by(items, i=>i._session.id))) {
             if (session_id == new_parent_session_id) {
-                parent_items.splice(pos, 0, ...group);
+                parent_items.splice(i, 0, ...group);
             } else {
                 this.playlist_remove(group);
-                this.playlist_add(group, pos-1, track_index);
+                this.playlist_add(group, {insert_pos:i, track_index});
             }
-            pos += group.length;
+            i += group.length;
         }
         parent_items = parent_items.filter(i=>i);
-        var data = Object.fromEntries(parent_items.map((item,i)=>[item.id, {index:i, track_index, parent_id:new_parent.id}]));
+        var data = Object.fromEntries(parent_items.map((item,i)=>[item.id, {index:i, track_index, parent_id:parent.id}]));
         this.playlist_update(data, new_parent_session_id);
-
-        this.playlist.once("update", ()=>{
-            this.playlist.set_selection(items)
-        })
+        this.playlist.once("change",()=>{
+            this.playlist.set_selection(items);
+        });
     }
 
-    /** @param {any[]} items */
-    playlist_add(items, insert_pos=null, track_index=null) {
+    /** @param {any[]} items @param {PlaylistInsertOptions} opts */
+    playlist_add(items, opts) {
         if (!Array.isArray(items)) items = [items];
         if (!items.length) return;
+        let {track_index, insert_pos, parent} = this.get_playlist_insert_options(opts);
 
-        if (track_index == null) track_index = this.playlist.active_track_index;
-        track_index = utils.clamp(track_index, 0, 1);
-        insert_pos = this.fix_insert_pos(insert_pos, track_index);
-        var parent = this.playlist.current;
+        /** @type {PlaylistItem[]} */
         var new_items = [];
-        var add_file = (d,i,parent_id,track_index)=>{
-            let filename = null;
-            var item = {};
-            var id = dom_utils.uuid4();
-            if (d instanceof File) {
-                if (IS_ELECTRON) {
-                    filename = d.path;
-                } else {
-                    filename = `upload://${d.name}`;
-                    d.id = id;
-                    this.upload_queue.add(d, {
-                        first_and_last_pieces_first: !!d.name.match(/\.mp4$/i),
-                        media: true,
-                        session: this.$._session.id,
-                    });
+        var add_file = async (data, index, parent_id, track_index)=>{
+            let id = dom_utils.uuid4();
+            let filename, props, children;
+            if (typeof data === "string") {
+                filename = data;
+                props = {};
+            } else if (typeof data === "object") {
+                filename = data.filename ?? null;
+                props = data.props ?? {};
+                if (data.file instanceof File) {
+                    /** @type {File} */
+                    let file = data.file;
+                    if (IS_ELECTRON) {
+                        filename = electron.getPathForFile(file);
+                    } else {
+                        filename = `livestreamer://upload`;
+                        file.id = id;
+                        this.upload_queue.add(file, {
+                            first_and_last_pieces_first: !!data.name.match(/\.mp4$/i),
+                            media: true,
+                            session: this.$._session.id,
+                        });
+                    }
                 }
-            } else if (typeof d === "string") {
-                filename = d;
-            } else {
-                filename = d.filename;
+                if (data instanceof PlaylistItem) children = data._children;
+                else if (data.children) children = data.children;
             }
-            item.filename = filename
-            item.id = id
-            item.index = i;
-            item.track_index = track_index;
-            item.parent_id = parent_id;
-            if (d.props) item.props = d.props;
-
+            var item = new PlaylistItem({filename, id, index, track_index, parent_id, props}, this.$._session);
             new_items.push(item);
-            if (d instanceof PlaylistItem) {
-                d._children.forEach((c,i)=>add_file(c, i, item.id, c.track_index||0));
+            if (children) {
+                children.forEach((c,i)=>add_file(c, i, item.id, c.track_index||0));
             }
             return item;
         }
-        items.forEach((f,i)=>add_file(f, insert_pos+i, parent.id, track_index));
+
+        items.forEach((c,i)=>{
+            add_file(c, insert_pos+i, parent.id, track_index)
+        });
+
+        /* 
+        #fix_2_track_playlist(id) {
+            for (var item of this.get_playlist_items(id)) {
+                var ext = path.extname(item.filename);
+                item.track_index = ext.match(/^\.(aa|aac|aax|act|aiff|alac|amr|ape|au|awb|dss|dvf|flac|gsm|iklax|ivs|m4a|m4b|m4p|mmf|movpkg|mp3|mpc|msv|nmf|ogg|oga|mogg|opus|ra|rm|raw|rf64|sln|tta|voc|vox|wav|wma|wv|8svx|cda)$/i) ? 1 : 0;
+            }
+            this.#playlist_update_indices();
+        } */
 
         var new_playlist = Object.fromEntries(new_items.map(f=>[f.id,f]));
         parent._get_track(track_index).slice(insert_pos).forEach((item,i)=>{
@@ -10168,16 +10328,14 @@ export class App extends utils.EventEmitter {
         });
 
         this.$._push([`sessions/${this.$._session.id}/playlist`, new_playlist]);
-        // no await...
         this.request({
             call: ["session","playlist_add"],
-            arguments: [new_items, insert_pos, this.playlist.current.id, track_index]
+            arguments: [new_items, {insert_pos, parent_id:parent.id, track_index}]
         });
-        this.playlist.once("update", ()=>{
-            this.playlist.set_selection(new_items)
-        });
-
-        this.playlist.focus();
+        
+        this.playlist.once("change",()=>{
+            this.playlist.set_selection(new_items);
+        })
 
         return new_items;
     }
@@ -10193,11 +10351,11 @@ export class App extends utils.EventEmitter {
         }
         for (var [session_id, group] of Object.entries(utils.group_by(items, i=>i._session.id))) {
             var all_deleted_items = new Set(group.map(i=>[i, ...i._descendents]).flat());
+            this.$._push(...[...all_deleted_items].map(item=>[`sessions/${session_id}/playlist/${item.id}`, null]));
             this.request({
                 call: ["sessions", session_id, "playlist_remove"],
                 arguments: [group.map(i=>i.id)]
             });
-            this.$._push(...[...all_deleted_items].map(item=>[`sessions/${session_id}/playlist/${item.id}`, null]));
             var next_item, current_item;
             next_item = current_item = this.$._session._current_playing_item;
             if (all_deleted_items.has(next_item)) {
@@ -10222,12 +10380,12 @@ export class App extends utils.EventEmitter {
         changes = cull(changes, this.$.sessions[session_id].playlist);
         if (changes) {
             this.$._push([`sessions/${session_id}/playlist`, changes]);
-            this.request({
+            await this.request({
                 call: ["sessions", session_id, "playlist_update"],
                 arguments: [changes]
             });
         } else {
-            this.playlist.update_next_frame();
+            await this.playlist.update();
         }
     }
     
@@ -10291,7 +10449,7 @@ export class App extends utils.EventEmitter {
         }
         options.start = start
         
-        this.media_player.seek.seek(options.start);
+        // this.media_player.seek.seek(options.start);
 
         this.$._push(
             [`sessions/${this.$._session.id}/playlist_id`, item.id],
@@ -10305,7 +10463,7 @@ export class App extends utils.EventEmitter {
     }
 
     /** @param {string[]} uris */
-    navigate_to(uris) {
+    async navigate_to(uris) {
         if (!Array.isArray(uris)) uris = [uris];
         var seen = new Set();
         for (var uri of uris) {
@@ -10313,8 +10471,8 @@ export class App extends utils.EventEmitter {
             seen.add(uri);
             var is_file = !utils.is_uri(uri) || uri.startsWith("file:");
             if (IS_ELECTRON) {
-                if (is_file) electron.shell.showItemInFolder(utils.try_file_uri_to_path(uri.replace(/\//g, "\\")));
-                else electron.shell.openExternal(uri);
+                if (is_file) await electron.shell.showItemInFolder(utils.try_file_uri_to_path(uri.replace(/\//g, "\\")));
+                else await electron.shell.openExternal(uri);
             } else {
                 if (is_file) open_file_manager({start: utils.try_file_uri_to_path(uri)});
                 else window.open(uri, "_blank");
@@ -10326,13 +10484,13 @@ export class App extends utils.EventEmitter {
     seek(t, relative=false) {
         if (relative) t += this.$._session._current_time;
         if (t < 0) t = 0;
-        this.media_player.seek.seek(t);
-        app.$._push([`sessions/${app.$._session.id}/time`, t]);
-        
+        app.$._push(
+            [`sessions/${app.$._session.id}/time`, t],
+        );
         return this.request({
             call: ["session", "seek"],
             arguments: [t]
-        });
+        })
     }
 
     seek_chapter(i, relative=false) {
@@ -10352,14 +10510,19 @@ export class App extends utils.EventEmitter {
         }
     }
 
-    fix_insert_pos(pos, track_index) {
-        var num_items = this.playlist.current._get_track(track_index).length;
-        if (pos == null) {
-            var last_active = this.playlist.sortables[track_index].get_last_active();
-            pos = (last_active) ? dom_utils.get_index(last_active) + 1 : num_items;
+    /** @param {PlaylistInsertOptions} opts */
+    get_playlist_insert_options(opts) {
+        let {parent, track_index, insert_pos} = opts ?? {};
+        parent = parent ?? this.playlist.current;
+        track_index = track_index ?? this.playlist.active_track_index;
+        let num_items = parent._get_track(track_index).length;
+        if (insert_pos === undefined) {
+            let last_active = this.playlist.sortables[track_index].get_last_active();
+            insert_pos = (last_active) ? dom_utils.get_index(last_active) + 1 : num_items;
         }
-        pos = utils.clamp(pos, 0, num_items);
-        return pos;
+        insert_pos = utils.clamp(insert_pos, 0, num_items);
+        track_index = utils.clamp(track_index, 0, 1);
+        return {parent, track_index, insert_pos};
     }
 
     // ---------------
@@ -10493,27 +10656,26 @@ export class App extends utils.EventEmitter {
     }
 
     remove_plugins() {
-        console.debug("remove_plugins");
-        for (var k in this.plugins) {
-            this.plugins[k].destroy();
-            delete this.plugins[k];
-        }
-        this.plugins = {};
+        for (var id of Object.keys(this.plugins)) this.remove_plugin(id);
     }
 
-    async init_plugin(d) {
-        console.debug("init_pugin", d.id);
-        if (this.plugins[d.id]) {
-            this.plugins[d.id].destroy();
-            delete this.plugins[d.id];
-        }
+    async remove_plugin(id) {
+        if (!this.plugins[id]) return;
+        console.debug("remove_plugin", id);
+        this.plugins[id].destroy();
+        delete this.plugins[id];
+    }
+
+    async init_plugin(id) {
+        var data = this.$.plugins[id];
+        console.debug("init_pugin", id);
+        this.remove_plugin(id);
         try {
-            var plugin_js = await (await fetch(d.front_url)).text();
-            // var plugin_js = d.front_js
-            this.plugins[d.id] = eval.apply(window, [plugin_js]);
-            this.plugins[d.id].init(d.options);
+            var plugin_js = await (await fetch(data.front_url)).text();
+            this.plugins[id] = eval.apply(window, [plugin_js]);
+            this.plugins[id].init(data.options);
         } catch (e) {
-            console.error(`Plugin '${d.id}' failed to load...`)
+            console.error(`Plugin '${id}' failed to load...`)
             console.error(e);
         }
     }
@@ -10525,13 +10687,13 @@ export class App extends utils.EventEmitter {
     #rebuild_clients() {
         var session_id = this.$._client.session_id;
         var clients = Object.values(this.$.clients).filter(c=>c.session_id == session_id);
-        /** @type {Record<string,Client[]>} */
+        /** @type {Record<PropertyKey,Client[]>} */
         var clients_stacked = {};
         for (var c of clients) {
             if (clients_stacked[c.username] === undefined) clients_stacked[c.username] = [];
             clients_stacked[c.username].push(c);
         }
-        var owners = new AccessControl(this.$._session.access_control).owners.map(u=>u.username);
+        var owners = new AccessControl(this.$._session.access_control)._owners.map(u=>u.username);
         var items = [
             ...owners.map(o=>({username:o, type:"owner"})),
             ...utils.sort(Object.values(clients_stacked), a=>a[0].username).map(c=>({username:c[0].username, type:"client", number:c.length}))
@@ -10579,11 +10741,11 @@ export class App extends utils.EventEmitter {
         dom_utils.rebuild(this.sessions_tabs_elem, items, {
             add: (item, elem, i)=>{
                 if (!elem) elem = $(`<a class="session-tab"><div class="handle"><i class="fas fa-grip-lines"></i></div><span class="name"></span><span class="icons"></span></a>`)[0];
-                var access_control = new AccessControl(item.access_control);
-                var has_access = access_control.self_has_access(app.passwords.get(item.id));
-                var requires_password = item.access_control.self_requires_password;
+                var access_control = item.access_control;
+                var has_access = access_control._self_has_access(app.passwords.get(item.id));
+                var requires_password = access_control._self_requires_password;
                 var is_active = item.id == session_id;
-                var is_owner = item.access_control.self_is_owner;
+                var is_owner = access_control._self_is_owner;
                 var state = item.stream.state;
                 var hash = JSON.stringify([item.name, item.schedule_start_time, state, is_owner, is_active, has_access, requires_password]);
                 if (elem._hash == hash) return;
@@ -10599,15 +10761,14 @@ export class App extends utils.EventEmitter {
                 var icons_html = "";
                 var option_data = {text: item.name, value:item.id};
                 if (is_owner) {
-                    icons_html += `<i class="fas fa-user-tie"></i>`;
+                    // icons_html += `<i class="fas fa-user-tie"></i>`;
                     option_data.text += ` [Owner]`
+                } else if (requires_password) {
+                    icons_html += `<i class="fas fa-key"></i>`;
+                    option_data.text += ` [Password Protected]`;
                 } else if (!requires_password && !has_access) {
                     icons_html += `<i class="fas fa-lock"></i>`;
                     option_data.text += ` [Locked]`
-                }
-                if (requires_password) {
-                    icons_html += `<i class="fas fa-key"></i>`;
-                    option_data.text += ` [Password]`;
                 }
                 elem.option_data = option_data;
                 toggle_class(elem, "locked", !has_access);
@@ -10621,6 +10782,7 @@ export class App extends utils.EventEmitter {
                 }
                 set_inner_html(icons, icons_html);
                 toggle_class(elem, "active", is_active);
+                toggle_class(elem, "owned", is_owner);
                 toggle_class(elem, "live", state !== "stopped");
                 return elem;
             },
@@ -10665,6 +10827,10 @@ export class App extends utils.EventEmitter {
     }
 
     async save_session() {
+        this.request({
+            call: ["session", "autosave"],
+            show_spinner: false
+        });
         var data = await this.request({
             call: ["session", "get_user_save_data"]
         });
@@ -10725,4 +10891,13 @@ export class App extends utils.EventEmitter {
     }
 }); */
 
+if (IS_ELECTRON) {
+    window.prompt = async (message, default_value)=>{
+        var result = await fancybox_prompt(message, default_value);
+        if (result) return result;
+        else return null;
+    };
+}
+
 export var app = new App();
+jQuery(()=>app.init());

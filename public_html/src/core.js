@@ -10,8 +10,13 @@ import "@fancyapps/ui/dist/fancybox.css";
 import noUiSlider from 'nouislider';
 import "nouislider/dist/nouislider.css";
 import flvjs from 'flv.js';
-import Chart from 'chart.js/auto';
+import {Chart} from 'chart.js/auto';
+import zoomPlugin from 'chartjs-plugin-zoom';
+// import annotationPlugin from 'chartjs-plugin-annotation';
 import Hammer from 'hammerjs';
 import {Sortable, MultiDrag} from 'sortablejs';
+
+Chart.register(zoomPlugin);
+// Chart.register(annotationPlugin);
 
 export { utils, dom_utils, jQuery, $, Fancybox, noUiSlider, flvjs, Chart, Hammer, Sortable, MultiDrag }

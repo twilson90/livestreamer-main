@@ -72,6 +72,7 @@ class SessionBase extends DataNode {
         var clients = this.clients;
         
         delete app.sessions[this.id];
+        delete app.$.sessions[this.id];
 
         app.sessions_ordered.filter(s=>s!=this).forEach((s,i)=>s.$.index=i); // update indices
 
@@ -111,12 +112,15 @@ const PROPS_CLASS = class extends PropertyCollection {
             props: new class extends PropertyCollection {
                 method = {
                     default: "rtmp",
-                    options: [["gui","MPV GUI [Dev]"], ["file","File [Dev]"], ["ffplay","MPV Piped [Dev]"], ["rtmp","RTMP"]]
+                    options: [["gui","External Player"], ["file","File"], ["rtmp","RTMP"], ["ffplay","FFPlay"]]
                 };
                 targets = {
                     default: [],
                 };
                 test = {
+                    default: false,
+                };
+                osc = {
                     default: false,
                 };
                 title = {

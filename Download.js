@@ -19,7 +19,7 @@ class Download extends DataNode {
         app.downloads[this.id] = this;
         app.$.downloads[this.id] = this.$;
 
-        this.dest_dir = dest_dir || app.files_dir;
+        this.dest_dir = dest_dir || core.files_dir;
         this.$.filename = filename;
     }
 
@@ -44,7 +44,7 @@ class Download extends DataNode {
                 } else {
                     core.logger.info(`Starting download '${this.filename}'...`);
                     this.$.stage = 0;
-                    this.$.num_stages = 1;
+                    this.$.stages = 1;
                     tmp_download_path = path.join(os.tmpdir(), name)
                     var proc = utils.execa(core.conf["main.youtube_dl"], [
                         this.filename,
@@ -65,7 +65,7 @@ class Download extends DataNode {
                         // console.log(line);
                         if (line.match(/^\[download\] Destination\:/i)) {
                             if (first) this.$.stage++;
-                            if (this.$.stage >= this.$.num_stages) this.$.num_stages = this.$.stage+1;
+                            if (this.$.stage >= this.$.stages) this.$.stages = this.$.stage+1;
                             first = true;
                         } else if (m = line.match(/^\[download\]\s+(\S+)\s+of\s+(\S+)\s+at\s+(\S+)\s+ETA\s+(\S+)/i)) {
                             var percent = parseFloat(m[1]) / 100;
@@ -115,6 +115,7 @@ class Download extends DataNode {
         this.cancel();
         super.destroy();
         delete app.downloads[this.id];
+        delete app.$.downloads[this.id];
         if (this.stdout_listener) this.stdout_listener.close();
         if (this.stderr_listener) this.stderr_listener.close();
         this.stdout_listener = null;

@@ -16,8 +16,8 @@ class InternalSession extends SessionBase {
     #playlist_info = {};
     #updating = false;
 
-    get save_dir() { return path.join(app.curr_save_dir, this.id); }
-    get files_dir() { return this.$.files_dir ? this.$.files_dir : app.files_dir; }
+    get saves_dir() { return path.join(app.curr_saves_dir, this.id); }
+    get files_dir() { return this.$.files_dir ? this.$.files_dir : core.files_dir; }
 
     get rtmp_key_without_args() { return this.$.rtmp_key.split("?")[0]; }
 
@@ -29,7 +29,7 @@ class InternalSession extends SessionBase {
 
         this.$.__version__ = VERSION;
         
-        fs.mkdirSync(this.save_dir, {recursive:true});
+        fs.mkdirSync(this.saves_dir, {recursive:true});
         fs.mkdirSync(this.files_dir, {recursive:true});
 
         var media_props = new Set(["background_file", "files_dir"])
@@ -51,12 +51,11 @@ class InternalSession extends SessionBase {
                     this.#handle_filename_add_or_change(c.path[1])
                 }
                 this.#debounced_update_playlist_info_after_changes();
-                if (this.#updating && c.path[2] === "props" && c.path[3] === "playlist_mode" && c.new_value == 2) {
-                    this.fix_2_track_playlist(c.path[1]);
-                }
             } else if (media_props.has(c.path[0])) {
                 app.unregister_media_ref(c.old_value);
                 app.register_media_ref(c.new_value);
+            } else if (c.path[0] === "volume_target") {
+                this.$.volume_target = utils.clamp(c.new_value, 0, 200);
             }
         });
 
@@ -118,14 +117,6 @@ class InternalSession extends SessionBase {
                 }
             }
         }
-    }
-
-    fix_2_track_playlist(id) {
-        for (var item of this.get_playlist_items(id)) {
-            var ext = path.extname(item.filename);
-            item.track_index = ext.match(/^\.(aa|aac|aax|act|aiff|alac|amr|ape|au|awb|dss|dvf|flac|gsm|iklax|ivs|m4a|m4b|m4p|mmf|movpkg|mp3|mpc|msv|nmf|ogg|oga|mogg|opus|ra|rm|raw|rf64|sln|tta|voc|vox|wav|wma|wv|8svx|cda)$/i) ? 1 : 0;
-        }
-        this.#playlist_update_indices()
     }
 
     async #update_playlist_info(id) {
@@ -205,7 +196,7 @@ class InternalSession extends SessionBase {
     }
     
     prepare_next_playlist_item() {
-        var next = this.playlist_get_next_item();
+        var next = this.get_playlist_next_item();
         if (next && next.filename) {
             return app.prepare(next.filename);
         }
@@ -214,7 +205,7 @@ class InternalSession extends SessionBase {
     async destroy(move_autosave_dir=false) {
         await this.stop_stream();
         if (move_autosave_dir) {
-            await fs.rename(this.save_dir, path.join(app.old_save_dir, this.id)).catch(()=>{});
+            await fs.rename(this.saves_dir, path.join(app.old_saves_dir, this.id)).catch(()=>{});
         }
         return super.destroy();
     }
@@ -311,7 +302,7 @@ class InternalSession extends SessionBase {
 
             var filepath = utils.try_file_uri_to_path(filename);
             var hash = `${utils.md5(filepath)}-${new Date().toISOString().replace(/[^\d]+/g,"")}`;
-            var dir = path.join(app.screenshots_dir, hash);
+            var dir = path.join(core.screenshots_dir, hash);
             fs.mkdirSync(dir, {recursive:true});
             var r = (n/duration).toFixed(5);
             var vfs = [
@@ -359,11 +350,19 @@ class InternalSession extends SessionBase {
         return this.$.playlist[this.$.playlist_id];
     }
 
-    get_adjacent_playlist_item(id, inc=1, skip_playlist=true) {
+    get_playlist_next_item(id) {
+        id = id ?? this.$.playlist_id;
         var curr = this.get_playlist_item(id);
-        var playlist = this.get_flat_playlist("0", skip_playlist);
-        var index = playlist.indexOf(curr) + inc; // , 0, playlist.length-1);
-        return playlist[index];
+        var playlist = this.get_flat_playlist("0");
+        var next = curr;
+        var i = playlist.indexOf(curr);
+        while (true) {
+            i++;
+            next = playlist[i];
+            if (!next) break;
+            if (!this.is_item_playlist(next.id) || next.props.playlist_mode) break;
+        }
+        return next;
     }
 
     get_playlist_info(id) {
@@ -430,18 +429,24 @@ class InternalSession extends SessionBase {
         return item;
     }
 
-    playlist_add(files, insert_pos=null, parent_id="0", track_index=0) {
+    /** @typedef {{insert_pos:number, parent_id:string, track_index:number}} PlaylistInsertOptions */
+    /** @param {PlaylistInsertOptions} opts */
+    playlist_add(files, opts) {
         if (!Array.isArray(files)) files = [files];
-        var results = [];
-        if (!(parent_id in this.$.playlist)) parent_id = "0";
+
+        let {insert_pos, parent_id, track_index} = opts ?? {};
+        parent_id = parent_id ?? "0";
+        track_index = track_index ?? 0;
+        if (!this.$.playlist[parent_id]) parent_id = "0";
         var playlist = this.get_playlist_items(parent_id, track_index);
-        if (insert_pos == null) insert_pos = playlist.length;
+        insert_pos = insert_pos ?? playlist.length;
         insert_pos = utils.clamp(insert_pos, 0, playlist.length);
         var playlist_after = playlist.slice(insert_pos);
 
         files = files.map(f=>(!f || typeof f == "string") ? {filename:f} : {...f})
         var playlist_map = utils.group_by(files, f=>f.parent_id || parent_id);
 
+        var results = [];
         var walk = (map_key, parent_id, index)=>{
             if (!playlist_map[map_key]) return;
             playlist_map[map_key].forEach((f,i)=>{
@@ -452,16 +457,14 @@ class InternalSession extends SessionBase {
                 walk(f.id, new_item.id, 0);
             });
             delete playlist_map[map_key];
-        }
-
+        };
         var num_added = (playlist_map[parent_id] || []).length;
-        walk(parent_id, parent_id, insert_pos);
-        insert_pos += num_added;
-        Object.keys(playlist_map).forEach(id=>walk(id, "0", insert_pos++));
-
-        playlist_after.forEach((item,i)=>item.index = insert_pos++);
+        var i = insert_pos;
+        walk(parent_id, parent_id, i);
+        i += num_added;
+        Object.keys(playlist_map).forEach(id=>walk(id, "0", i++));
+        playlist_after.forEach((item)=>item.index = i++);
         this.#playlist_update_indices(); // <-- shouldn't be necessary but calling it just in case...
-
         return results;
     }
     
@@ -478,12 +481,12 @@ class InternalSession extends SessionBase {
         this.#playlist_update_indices();
     }
     
-    get_flat_playlist(id, skip_playlist=true) {
+    get_flat_playlist(id="0") {
         var items = [];
         for (var c of this.get_playlist_items(id)) {
             items.push(c);
-            if (!skip_playlist || !c.props.playlist_mode) {
-                items.push(...this.get_flat_playlist(c.id, skip_playlist));
+            if (!c.props.playlist_mode) {
+                items.push(...this.get_flat_playlist(c.id));
             }
         }
         return items;
@@ -493,13 +496,9 @@ class InternalSession extends SessionBase {
         for (var k of Object.keys(data)) {
             if (!(k in this.$.playlist)) delete data[k];
         }
-        if (utils.is_circular(Object.values(data).map(({id, parent_id: parent})=>({id,parent})))) {
-            throw new Error(`Detected circular parent-child loop`);
-        }
-        this.#updating = true;
+        this.#fix_circular_playlist_items(data);
         utils.deep_merge(this.$.playlist, data, true);
         this.#playlist_update_indices();
-        this.#updating = false;
     }
 
     reset_playlist_props(ids) {
@@ -522,7 +521,7 @@ class InternalSession extends SessionBase {
 
     async client_load_autosave(filename) {
         // this.autosave();
-        var data = JSON.parse(await fs.readFile(path.join(this.save_dir,filename),"utf8"));
+        var data = JSON.parse(await fs.readFile(path.join(this.saves_dir,filename),"utf8"));
         await this.load(data);
     }
 
@@ -537,9 +536,9 @@ class InternalSession extends SessionBase {
             delete data.name;
             delete data.access_control;
         }
-        
         delete data.uploads;
         delete data.downloads;
+
         if (data.stream) {
             data.stream.state = "stopped";
         }
@@ -549,20 +548,19 @@ class InternalSession extends SessionBase {
             if (typeof this.$[k] === "object" && typeof data[k] === "object" && this.$[k] !== null && data[k] !== null) Object.assign(this.$[k], data[k]);
             else this.$[k] = data[k];
         }
-        this.#fix_circular();
         this.#playlist_update_indices();
 
         if (full) {
-            this.#autosaves = (await utils.readdir_stats(this.save_dir).catch(()=>[])).sort((a,b)=>a.stat.mtime-b.stat.mtime).map(f=>f.filename);
+            this.#autosaves = (await utils.readdir_stats(this.saves_dir).catch(()=>[])).sort((a,b)=>a.stat.mtime-b.stat.mtime).map(f=>f.filename);
         }
         // this.autosave();
     }
 
-    #fix_circular() {
-        var ids = utils.detect_circular_structure(Object.values(this.$.playlist).map(({id,parent_id:parent})=>({id,parent})));
+    #fix_circular_playlist_items(data) {
+        var ids = utils.detect_circular_structure(Object.values(data).filter(({parent_id})=>!!parent_id).map(({id,parent_id:parent})=>({id,parent})));
         if (ids.length) {
             this.logger.error(`Found circular parent-child loops in playlist, attempting to fix:`, ids.join(", "))
-            for (var id of ids) this.$.playlist[id].parent_id = "0";
+            for (var id of ids) data[id].parent_id = "0";
         }
     }
     
@@ -589,7 +587,7 @@ class InternalSession extends SessionBase {
         }
         var json = JSON.stringify(data, null, "  ");
 
-        var fullpath = path.join(this.save_dir, filename);
+        var fullpath = path.join(this.saves_dir, filename);
         await fs.writeFile(fullpath, json);
         
         while (this.#autosaves.length > core.conf["main.autosaves_limit"]) {
@@ -598,7 +596,7 @@ class InternalSession extends SessionBase {
     }
 
     async delete_save(filename) {
-        var f = path.join(this.save_dir, filename);
+        var f = path.join(this.saves_dir, filename);
         try { await fs.unlink(f); } catch { }
     }
 
@@ -607,10 +605,10 @@ class InternalSession extends SessionBase {
         var curr = this.fix_data(this.$);
         var prev;
         var history = [];
-        var files = (await utils.readdir_stats(this.save_dir).catch(()=>[])).sort((a,b)=>b.stat.mtime-a.stat.mtime);
+        var files = (await utils.readdir_stats(this.saves_dir).catch(()=>[])).sort((a,b)=>b.stat.mtime-a.stat.mtime);
         for (var f of files) {
             var data;
-            var fullpath = path.join(this.save_dir, f.filename);
+            var fullpath = path.join(this.saves_dir, f.filename);
             try {
                 data = JSON.parse(await fs.readFile(fullpath, "utf8"));
             } catch (e) {
@@ -658,30 +656,31 @@ class InternalSession extends SessionBase {
         }
 
         $ = utils.deep_copy($);
+        // $ = utils.deep_assign(PROPS.__get_defaults(), $);
         
-        $.volume_target = utils.clamp($.volume_target, 0, 200);
-        if (isNaN($.volume_target)) $.volume_target = 100;
+        // $.volume_target = utils.clamp($.volume_target, 0, 200);
+        // if (isNaN($.volume_target)) $.volume_target = 100;
 
         if (!$.access_control) $.access_control = {};
         app.fix_access_control($.access_control);
 
         for (var id in $.playlist) {
-            var item = $.playlist[id];
-            var filename = app.fix_filename(item.filename || "");
-            if (filename === "livestreamer://logo") filename = "livestreamer://empty";
-
-            var parent_id = item.parent || item.parent_id;
+            var {filename,parent_id,index,track_index,props,upload} = $.playlist[id];
+            filename = app.fix_filename(filename || "");
+            // if (filename === "livestreamer://logo") filename = "livestreamer://empty";
             if (!parent_id || !(parent_id in $.playlist)) parent_id = "0";
-            var props = item.props || item.extra || {};
-            var track_index = item.track_index || item.track || 0;
-            var index = item.index || 0;
+            props = props || {};
+            track_index = track_index || 0;
+            index = index || 0;
+            upload = upload || null;
             cleanup_prop(props, PROPS.playlist.enumerable_props.props.props, (k,v,p)=>(v==null) || !p);
-
-            $.playlist[id] = {id,filename,parent_id,index,track_index,props};
+            $.playlist[id] = {id,filename,parent_id,index,track_index,props,upload};
         }
 
         cleanup_prop($, PROPS, (k,v,p)=>(p && p.save === false));
         cleanup_prop($.player_default_override, PLAYER_PROPS, (k,v,p)=>!p || v === p.default || p.save === false);
+        
+        this.#fix_circular_playlist_items($.playlist);
 
         return $;
     }
@@ -701,6 +700,7 @@ class InternalSession extends SessionBase {
     }
 
     async playlist_play(id, opts) {
+        id = id ?? this.$.playlist_id;
         opts = Object.assign({
             start: 0,
             allow_null: false,
@@ -709,10 +709,10 @@ class InternalSession extends SessionBase {
         var item = this.get_playlist_item(id);
 
         if (this.is_running && this.is_item_playlist(id) && !item.props.playlist_mode) {
-            item = this.get_adjacent_playlist_item(id, 1, true);
+            item = this.get_playlist_next_item(id);
         }
         if (id != "-1" && !item && !opts.allow_null) {
-            item = this.get_flat_playlist("0", true)[0];
+            item = this.get_flat_playlist("0").filter(i=>!this.is_item_playlist(i.id))[0];
         }
         if (this.is_running && item && item.filename === "livestreamer://exit") {
             var parent = this.get_playlist_item(item.parent_id)
@@ -731,7 +731,8 @@ class InternalSession extends SessionBase {
                     if (item.props.function === "handover") {
                         let session_id = item.props.function_handover_session;
                         this.$.playlist_id = null;
-                        this.stream.attach(session_id);
+                        if (session_id == this.id) this.stop_stream();
+                        else this.stream.attach(session_id);
                     } else if (item.props.function === "stop") {
                         await this.stream.stop();
                         this.$.playlist_id = null;
@@ -751,13 +752,9 @@ class InternalSession extends SessionBase {
         }
     }
 
-    playlist_get_next_item() {
-        return this.get_adjacent_playlist_item(this.$.playlist_id, 1);
-    }
-
     playlist_next() {
-        var next = this.playlist_get_next_item();
-        return this.playlist_play(next ? next.id : null, {allow_null:true})
+        var next = this.get_playlist_next_item();
+        return this.playlist_play(next ? next.id : null, {allow_null:true});
     }
 
     is_item_playlist(id) {
@@ -781,7 +778,6 @@ class InternalSession extends SessionBase {
             if (item) item.props[name] = value;
         }
         if (this.is_running) {
-        // this.$.player[name] = val;
             await this.mpv.set_property(name, value); // , current
         }
     }
@@ -808,13 +804,13 @@ const PER_FILE_CLASS = class extends PropertyCollection {
     loop_file = {
         default: false,
     };
-    video_track = {
+    vid_override = {
         default: null,
     };
-    audio_track = {
+    aid_override = {
         default: null,
     };
-    subtitle_track = {
+    sid_override = {
         default: null,
     };
     audio_delay = {
@@ -846,7 +842,7 @@ const PER_FILE_CLASS = class extends PropertyCollection {
         options: [
             ["dynaudnorm1", `dynaudnorm=f=500:p=0.9:m=8.0:g=7`],
             ["dynaudnorm2", `dynaudnorm=f=250:p=0.9:m=8.0:g=5`],
-            ["loudnorm", `loudnorm=:dual_mono=true`],
+            ["loudnorm", `loudnorm=dual_mono=true`],
         ],
     };
     audio_visualization = {

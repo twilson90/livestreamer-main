@@ -12,10 +12,12 @@ class Client extends ClientBase {
 
     init() {
         app.$.clients[this.id] = this.$;
+        
         var session_id = this.url.searchParams.get("session_id");
         if (session_id) this.attach_to(session_id);
         var $ = utils.deep_copy(app.$);
         $.conf = {
+            ["auth"]: core.auth,
             ["debug"]: core.debug,
             ["media-server.name"]: core.conf["media-server.name"],
             ["media-server.rtmp_port"]: core.conf["media-server.rtmp_port"],
@@ -47,6 +49,10 @@ class Client extends ClientBase {
     async save_file(dir, file, data) {
         var fullpath = await app.evaluate_filename(dir, file).catch(e=>core.logger.error(e.message));
         if (fullpath) await fs.writeFile(fullpath, data);
+    }
+    destroy() {
+        super.destroy();
+        delete app.$.clients[this.id];
     }
 }
 

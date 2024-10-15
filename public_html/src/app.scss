@@ -589,6 +589,10 @@ button, input[type=button], input[type=submit] {
 			gap: 3px;
 		}
 	}
+	.player-chapters {
+		overflow-x: hidden;
+		max-height: 1.4em;
+	}
 	.player-inline{
 		display:flex;
 		align-items: center;
@@ -973,7 +977,7 @@ button, input[type=button], input[type=submit] {
 .session-tab {
 	box-shadow: none !important;
 	color: #000;
-	text-decoration: none !important;
+	text-decoration: none;
 	cursor: pointer;
 	display: flex;
 	flex: 0 1 auto;
@@ -1008,6 +1012,9 @@ button, input[type=button], input[type=submit] {
 			display:block;
 		}
 	}
+	/* &.owned {
+		text-decoration: underline;
+	} */
 	&.active, &.live {
 		font-weight: bold;
 		overflow-x: visible;
@@ -1029,6 +1036,10 @@ button, input[type=button], input[type=submit] {
 	}
 	&:focus {
 		outline: 0 !important;
+	}
+	.icons {
+		display:flex;
+		gap: 0.25rem;
 	}
 }
 .session-control-buttons>* {
@@ -1133,7 +1144,6 @@ button, input[type=button], input[type=submit] {
 		}
 	}
 	&:hover .logs-bar-wrapper {
-		// visibility: visible;
 		opacity:1;
 	}
 	.logs {
@@ -1184,11 +1194,43 @@ button, input[type=button], input[type=submit] {
 			}
 		}
 	}
+	&:not([data-show-info]) [data-level=info] {
+		display:none;
+	}
+	&:not([data-show-warn]) [data-level=warn] {
+		display:none;
+	}
+	&:not([data-show-error]) [data-level=error] {
+		display:none;
+	}
+	&:not([data-show-debug]) [data-level=debug] {
+		display:none;
+	}
+	&:not([data-show-times]) .time {
+		display:none;
+	}
+	&:not([data-show-dates]) .date {
+		display:none;
+	}
 }
 #pl-reload {
 	flex: 0 1 auto;
 }
 .chart-wrapper {
+	&>*:not(:last-child){
+		border-bottom: 1px solid var(--border-color);
+	}
+	.tabs {
+		display:flex;
+		&>* {
+			display:flex;
+			flex:1;
+			padding:2px;
+			min-height:auto;
+			align-items: center;
+			justify-content: center;
+		}
+	}
 	.chart-inner {
 		height: 120px;
 		position: relative;
@@ -1205,7 +1247,7 @@ button, input[type=button], input[type=submit] {
 			padding:4px;
 		}
 		&:not(:empty) {
-			margin: 0 -1px -1px -1px;
+			margin: -1px;
 		}
 		body:not([data-show_encoder_info]) & {
 			display:none;
@@ -1465,7 +1507,7 @@ ul.list-menu {
 					min-width: 20px;
 					padding: 0 3px;
 					text-align: center;
-					font-family: monospace;
+					// font-family: monospace;
 				}
 			}
 			.icon {
@@ -2964,4 +3006,14 @@ figure {
     padding: 5px;
 		font-size: 80%;
   }
+}
+.border {
+	border:1px solid var(--border-color);
+}
+.stream-info {
+	&>*:not(:last-child) {
+		&:after {
+			content: " | ";
+		}
+	}
 }

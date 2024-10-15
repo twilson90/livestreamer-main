@@ -1,6 +1,6 @@
 import fs from "fs-extra";
 import path from "node:path";
-import { DataNode } from "@livestreamer/core";
+import { core, DataNode } from "@livestreamer/core";
 import { app } from "./internal.js";
 
 class Target extends DataNode {
@@ -57,16 +57,17 @@ class Target extends DataNode {
     async save() {
         if (!this.locked) {
             var data = {...this.$};
-            await fs.writeFile(path.resolve(app.targets_dir, this.id), JSON.stringify(data, null, 4));
+            await fs.writeFile(path.resolve(core.targets_dir, this.id), JSON.stringify(data, null, 4));
         }
     }
     
     async destroy() {
-        delete app.targets[this.id];
-        if (!this.locked) {
-            await fs.unlink(path.resolve(app.targets_dir, this.id)).catch(()=>{});
-        }
         super.destroy();
+        delete app.targets[this.id];
+        delete app.$.targets[this.id];
+        if (!this.locked) {
+            await fs.unlink(path.resolve(core.targets_dir, this.id)).catch(()=>{});
+        }
     }
 }
 

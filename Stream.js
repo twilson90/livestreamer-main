@@ -5,9 +5,9 @@ import { SessionBase, InternalSession, ExternalSession, app } from "./internal.j
 
 const default_fps = 30;
 const TICK_RATE = 30;
-const MAX_SPEED_HISTORY = 60 * 1000;
 const WARNING_MPV_LOG_SIZE = 1 * 1024 * 1024 * 1024;
 const MAX_MPV_LOG_SIZE = 8 * 1024 * 1024 * 1024;
+const EDL_TRACK_TYPES = ["video", "audio", "sub"];
 
 const ALBUMART_FILENAMES = Object.fromEntries([
     "albumart", "album", "cover", "front", "albumartsmall", "folder", ".folder", "thumb",
@@ -60,7 +60,7 @@ class Stream extends DataNode {
     mpv;
     /** @type {FFMPEGWrapper} */
     ffmpeg;
-    /** @type {Record<string,StreamTarget>} */
+    /** @type {Record<PropertyKey,StreamTarget>} */
     stream_targets = {};
     hosts = {};
     internal_stream_paths = [];
@@ -72,11 +72,8 @@ class Stream extends DataNode {
         Object.assign(this.$, {
             state: State.STOPPED,
         });
-        app.streams[this.id] = this;
         this.logger = new Logger("stream");
-        this.logger.on("log",(log)=>{
-            (this.session||session).logger.log(log);
-        })
+        this.logger.on("log", (log)=>(this.session||session).logger.log(log))
         this.attach(session);
     }
 
@@ -97,9 +94,10 @@ class Stream extends DataNode {
 
         this.$.title = this.$.title || this.session.name; // this.session.$.default_stream_title || 
         this.$.start_time = Date.now();
-        this.$.speed_history = {};
+        this.$.graphs = {};
         this.$.stream_targets = {};
         this.$.internal_stream_paths = [];
+        this.$.bitrate = 0;
         
         let stream_method = settings.method;
         let outputs = [];
@@ -121,7 +119,7 @@ class Stream extends DataNode {
             if (!outputs.length) error = `No outputs specified`;
         } else if (stream_method == "file") {
             try {
-                let filename = await app.evaluate_filename(app.files_dir, this.$.filename).catch(e=>this.logger.error(e.message));
+                let filename = await app.evaluate_filename(core.files_dir, this.$.filename).catch(e=>this.logger.error(e.message));
                 this.$.filename_evaluated = path.basename(filename);
                 if (filename) outputs.push(filename);
             } catch (e) {
@@ -278,15 +276,20 @@ class Stream extends DataNode {
             this.ffmpeg.logger.on("log", (log)=>{
                 this.logger.log(log);
             });
-            this.ffmpeg.start(ffmpeg_args);
-            if (this.session instanceof ExternalSession) {
-                this.ffmpeg.on("info", (info)=>{
-                    this.register_speed("upstream", info.speed);
-                })
-            }
+            this.ffmpeg.on("info", (info)=>{
+                this.$.bitrate = info.bitrate
+                this.register_graph_point(`trans:bitrate`, this.time_running, info.bitrate);
+                if (this.session instanceof ExternalSession) {
+                    this.register_graph_point(`upstream:speed`, this.time_running, info.speed);
+                }
+            })
             this.ffmpeg.on("end", ()=>{
                 this.stop();
             });
+            this.ffmpeg.start(ffmpeg_args);
+            // this.ffmpeg.on("line", (line)=>{
+            //     this.logger.info(line);
+            // });
         }
 
         if (this.session instanceof InternalSession) {
@@ -335,10 +338,12 @@ class Stream extends DataNode {
                 `--ocontinue-on-fail`,
                 "--end-on-eof=yes",
             );
-            if (this.is_realtime) mpv_args.push("--orealtime");
-
+            if (this.is_realtime) {
+                mpv_args.push("--orealtime");
+            }
             if (this.$.method === "gui") {
                 mpv_args.push(
+                    `--osc=${this.$.osc?"yes":"no"}`,
                     // `--script-opts-append=livestreamer-capture-mode=1`,
                     "--force-window",
                     // `--interpolation=yes`,
@@ -458,11 +463,11 @@ class Stream extends DataNode {
 
             if (this.mpv.allowed_mpv_props["output-pts"]) {
                 this.mpv.on("speed",(speed)=>{
-                    this.register_speed("trans", speed); // f
+                    this.register_graph_point(`trans:speed`, this.time_running, speed);
                 });
-            } else {
+            } else if (this.ffmpeg) {
                 this.ffmpeg.on("info", (info)=>{
-                    this.register_speed("trans", info.speed_alt); // f
+                    this.register_graph_point(`trans:speed`, this.time_running, info.speed_alt);
                 });
             }
         }
@@ -488,14 +493,14 @@ class Stream extends DataNode {
         }
 
         if (stream_method == "ffplay") {
-            let mpv_viewer = utils.execa(core.conf["core.mpv_executable"], ["-"], {buffer:false});
-            this.ffmpeg.process.stdout.pipe(mpv_viewer.stdin);
-            mpv_viewer.stdin.on("error", this.logger.error);
+            let ffplay = utils.execa("ffplay", ["-"], {buffer:false});
+            this.ffmpeg.process.stdout.pipe(ffplay.stdin);
+            ffplay.stdin.on("error", this.logger.error);
             this.ffmpeg.on("end", ()=>{
-                mpv_viewer.kill()
+                ffplay.kill()
             });
-            mpv_viewer.on("close", ()=>{
-                this.ffmpeg.process.stdout.unpipe(mpv_viewer.stdin);
+            ffplay.on("close", ()=>{
+                this.ffmpeg.process.stdout.unpipe(ffplay.stdin);
                 this.mpv.quit();
             });
         }
@@ -573,7 +578,9 @@ class Stream extends DataNode {
             let t1 = Date.now();
             this.logger.info(`MPV terminated in ${(t1-t0)/1000} secs.`);
         }
-        this.ffmpeg.destroy();
+        if (this.ffmpeg) {
+            this.ffmpeg.destroy();
+        }
 
         this.$.state = State.STOPPED;
 
@@ -588,33 +595,12 @@ class Stream extends DataNode {
 
     async destroy() {
         await this.stop();
-        delete app.streams[this.id];
         super.destroy();
     }
 
-    speed_history_keys = {};
-    register_speed(id, speed) {
-        if (!this.speed_history_keys[id]) this.speed_history_keys[id] = 0;
-        if (!this.$.speed_history[id]) this.$.speed_history[id] = {};
-        this.$.speed_history[id][this.speed_history_keys[id]++] = [this.time_running, speed];
-        this.trim_speed_history();
-    }
-    trim_speed_history() {
-        var t = this.time_running;
-        var garbage = new Set();
-        for (var id in this.$.speed_history) {
-            for (var k in this.$.speed_history[id]) {
-                if (t > this.$.speed_history[id][k][0]+MAX_SPEED_HISTORY) garbage.add(k);
-                else break;
-            }
-            for (var k of garbage) {
-                delete this.$.speed_history[id][k];
-            }
-            if (utils.is_empty(this.$.speed_history[id])) {
-                delete this.$.speed_history[id];
-            }
-            garbage.clear();
-        }
+    register_graph_point(key, x, y) {
+        var d = this.$.graphs[key] = this.$.graphs[key] ?? {min:0,max:0,data:{}};
+        d.data[d.max++] = [x, y];
     }
     
     /** @param {SessionBase} session */
@@ -655,12 +641,7 @@ class Stream extends DataNode {
     async try_start_playlist() {
         let session = this.session;
         if (session instanceof InternalSession && this.state === State.STARTED) {
-            var id = session.$.playlist_id;
-            if (id == -1) {
-                var first_item = session.get_flat_playlist()[0]
-                if (first_item) id = first_item.id;
-            }
-            await session.playlist_play(id, { start: session.$.time });
+            await session.playlist_play(undefined, { start: session.$.time });
         }
     }
 }
@@ -690,7 +671,7 @@ class StreamTarget extends DataNode {
         var hostname = `${host}:${stream.hosts[host]++}`;
         // this.ffmpeg.on("line", console.log);
         this.ffmpeg.on("info", (info)=>{
-            stream.register_speed(hostname, info.speed);
+            stream.register_graph_point(`${hostname}:speed`, this.stream.time_running, info.speed);
         });
         this.ffmpeg.logger.on("log",(log)=>{
             if (log.level !== Logger.DEBUG) this.logger.log(log);
@@ -710,7 +691,7 @@ class StreamTarget extends DataNode {
         if (this.#state === State.STARTED) return;
         this.#state = State.STARTED;
         this.ffmpeg.start([
-            // `-re`,
+            // `-re`, // maybe use?
             "-i", this.stream.outputs[0],
             "-c", "copy",
             "-f", "flv",
@@ -855,13 +836,15 @@ class MPVSessionWrapper extends MPVWrapper {
     #mpv_last_speed_check = Date.now();
     #mpv_last_pts = 0;
     #tick_interval;
-    #ticks = 0;
+    #long_tick_interval;
+    #current_props_override = {};
+    #mpv_expected_props = {};
+    #mpv_load_props = {};
+    allowed_mpv_args = {};
+    allowed_mpv_props = {};
     width = 0;
     height = 0;
     $ = new utils.Observer();
-    #current_props_override = {};
-    allowed_mpv_args = {};
-    allowed_mpv_props = {};
 
     get is_encoding() { return !!this.$.props.o; }
     /** @type {InternalSession} */
@@ -879,6 +862,7 @@ class MPVSessionWrapper extends MPVWrapper {
         this.height = this.options.height;
 
         this.stream = stream;
+        this.curr_volume = 100;
         
         Object.assign(this.$, {
             playing: false,
@@ -972,6 +956,7 @@ class MPVSessionWrapper extends MPVWrapper {
 
         this.on("before-quit", ()=>{
             clearInterval(this.#tick_interval);
+            clearInterval(this.#long_tick_interval);
         });
         
         this.on("log-message", (log)=>{
@@ -1008,20 +993,18 @@ class MPVSessionWrapper extends MPVWrapper {
         
         this.on("file-loaded", async (e)=>{
             this.$.loaded = true;
-            // let current_item = this.session.get_current_playlist_item();
-            /* for (var k in this.last_load_opts) {
-                this.set_property(k, this.last_load_opts[k]).catch(()=>{});
-            } */
-        })
+            Object.assign(this.#mpv_expected_props, this.#mpv_load_props);
+        });
 
         this.on("seek", (e)=>{
+            this.$.playing = false;
             this.$.seeking = true;
         });
 
         this.on("playback-restart", (e)=>{
+            this.$.playing = true;
             this.$.seeks++;
             this.$.seeking = false;
-            this.$.playing = true;
         });
 
         /* this.on("on_after_end_file", (e)=>{
@@ -1030,25 +1013,41 @@ class MPVSessionWrapper extends MPVWrapper {
             }
         }); */
 
-        this.on("property-change", (e)=>{
-            if (e.name === "time-pos" && e.data != null) {
+        this.on("property-change", async (e)=>{
+            let {name, data} = e;
+            if (name === "time-pos" && data != null) {
                 // fixes issue with rubberbanding time-pos after special seek
                 if (this.$.loaded) {
-                    let t = this.$.special_start_time + (e.data || 0);
-                    this.$.time = t;
+                    let t = data || 0;
+                    this.$.time = this.$.special_start_time + t;
                 }
-            // } else if (e.name === "duration" && !this.$.is_special && e.data != null) {
-                // this.$.duration = (e.data || 0);
-            // } else if (e.name === "pause") {
-            //     this.$.paused = !!e.data;
-            } else if (e.name === "eof-reached") {
-                if (e.data) {
+            } else if (name === "eof-reached") {
+                if (data) {
                     this.logger.info("eof-reached");
                     if (this.$.props.loop_file) this.seek(0);
                     else this.load_next();
                 }
             }
-            this.$.props[e.name] = e.data;
+            if (name in this.#mpv_expected_props && this.#mpv_expected_props[name] !== data) {
+                this.emit("user-property-change", e);
+                this.#mpv_expected_props[name] = data;
+            }
+            this.$.props[name] = data;
+        });
+        
+        this.on("user-property-change", async (e)=>{
+            let {name, data} = e;
+            if (name === "volume") {
+                this.session.$.volume_target = data / this.$.props.volume_multiplier;
+            }
+            // too confusing...
+            /* else if (["sid", "aid"].includes(name)) {
+                let override_key = `${name}_override`;
+                let auto_key = `${name}_auto`;
+                if (data == "auto") return;
+                if (this.$.props[override_key] == null && data == this.$.props[auto_key]) return;
+                this.$.props[override_key] = (data == this.$.props[auto_key]) ? null : data;
+            } */
         });
         
         this.on("quit", async ()=>{
@@ -1065,7 +1064,8 @@ class MPVSessionWrapper extends MPVWrapper {
 
         this.#mpv_last_pts = 0;
         this.#mpv_last_speed_check = Date.now();
-        this.#tick_interval = setInterval(()=>this.tick(), 1000/TICK_RATE);
+        this.#tick_interval = setInterval(()=>this.#tick(), 1000/TICK_RATE);
+        this.#long_tick_interval = setInterval(()=>this.#long_tick(), 1000);
     }
 
     load_next() {
@@ -1085,29 +1085,186 @@ class MPVSessionWrapper extends MPVWrapper {
     reload(reload_props=true) {
         return this.loadfile(this.session.get_playlist_item(this.loaded_item.id), { start: this.$.time, reload_props, pause:this.$.props.pause });
     }
+        
+    /** @param {{offset:number, duration:number, media_type:string}} opts */
+    async #process(item, opts) {
+        opts = Object.assign({}, opts);
+        let is_root = item === this.loaded_item;
+        item = fix_item(item);
+        let duration = opts.duration || 0;
+        let offset = opts.offset || 0;
+        let is_playlist = item.filename && this.session.is_item_playlist(item.id);
+        let mi = await app.probe_media(item.filename);
+        let exists = mi.exists;
+        let is_image = mi.duration <= 0.04;
+        let filename = item.filename;
+        var duration_override = Number.MAX_SAFE_INTEGER;
+        var use_duration_override = false;
+
+        if (is_playlist && (item.props.playlist_mode || !is_root)) {
+            exists = true;
+            let is_2track = item.props.playlist_mode == 2;
+            let edl = new EDL();
+            let tracks = [];
+            let playlist_tracks = this.session.get_playlist_tracks(item.id);
+            
+            for (var i = 0; i < playlist_tracks.length; i++) {
+                let track = {
+                    entries: [],
+                    duration: 0
+                };
+                if (is_2track) {
+                    track.type = EDL_TRACK_TYPES[i];
+                }
+                let o = offset;
+                for (let item of playlist_tracks[i]) {
+                    if (item.filename == "livestreamer://exit") {
+                        duration_override = Math.min(duration_override, track.duration);
+                        use_duration_override = true;
+                    }
+                    let opts = {};
+                    if (track.type) opts.media_type = track.type;
+                    opts.offset = o;
+                    let tmp = await this.#process(item, opts);
+                    let fade_in = utils.round_precise(+item.props.fade_in || 0, 3);
+                    let fade_out = utils.round_precise(+item.props.fade_out || 0, 3);
+                    if (fade_in) {
+                        if (!is_2track || i == 0) this.loaded_item.fades.push(["v", "in", o, fade_in])
+                        if (!is_2track || i == 1) this.loaded_item.fades.push(["a", "in", o, fade_in])
+                    }
+                    track.duration += tmp.duration;
+                    o += tmp.duration;
+                    if (fade_out) {
+                        if (!is_2track || i == 0) this.loaded_item.fades.push(["v", "out", o-fade_out, fade_out])
+                        if (!is_2track || i == 1) this.loaded_item.fades.push(["a", "out", o-fade_out, fade_out])
+                    }
+                    if (tmp.duration > 0) {
+                        track.entries.push(new EDLEntry(EDL.escape(tmp.filename), {
+                            length: tmp.duration.toFixed(3)
+                        }));
+                    }
+                }
+                tracks.push(track);
+            }
+
+            var min_duration = Math.min(...tracks.map((t)=>t.duration));
+            var max_duration = Math.max(...tracks.map((t)=>t.duration));
+            if (item.props.playlist_end_on_shortest_track) {
+                duration = min_duration;
+            } else {
+                duration = max_duration;
+            }
+            if (use_duration_override) {
+                duration = duration_override;
+            }
+
+            offset += duration;
+
+            for (let track of tracks) {
+                if (is_2track) {
+                    let pad_duration = max_duration - track.duration;
+                    // add padding to track if necessary
+                    if (pad_duration > 0.05) {
+                        if (track.type == "audio" && item.props.playlist_revert_to_video_track_audio && tracks[0].duration > tracks[1].duration) {
+                            let tmp_filename = new EDL(tracks[0].entries).toString();
+                            track.entries.push(new EDLEntry(EDL.escape(tmp_filename), {
+                                start: (tracks[1].duration).toFixed(3),
+                                length: (tracks[0].duration - tracks[1].duration).toFixed(3)
+                            }));
+                        } else {
+                            let tmp = await this.#process(null, {duration: pad_duration, media_type: track.type, offset});
+                            track.entries.push(new EDLEntry(EDL.escape(tmp.filename), {
+                                length: pad_duration.toFixed(3)
+                            }));
+                        }
+                    }
+                    if (track.entries.length && track.type) {
+                        edl.append(
+                            "!new_stream",
+                            new EDLEntry("!delay_open", {
+                                media_type: track.type
+                            })
+                        );
+                    }
+                }
+                edl.append(...track.entries);
+            }
+            
+            if (edl.length) {
+                duration = duration || edl.duration;
+                filename = edl.toString();
+            }
+
+        } else if (!is_root) {
+            // files, nulls and whatnot
+            if (!exists || is_image) filename = null;
+            let stream_map = {};
+            let edl = new EDL();
+            edl.append("!no_chapters");
+            if (!duration) {
+                duration = (item.props.clip_end - item.props.clip_start) || item.props.title_duration || item.props.empty_duration || mi.duration;
+            }
+            if (duration) {
+                if (mi && mi.streams) {
+                    for (let s of mi.streams) stream_map[s.type] = !s.albumart;
+                }
+                let required_stream_types = opts.media_type ? [opts.media_type] : ["video","audio"];
+                for (let t of required_stream_types) {
+                    if (!stream_map[t]) {
+                        let null_filename;
+                        if (t === "audio") null_filename = app.null_audio_path;
+                        else if (t === "video") null_filename = app.null_video_path;
+                        if (null_filename) {
+                            var alt_filename = path.relative(this.cwd, null_filename); // significantly shortens path hopefully
+                            if (alt_filename.length < null_filename) null_filename = alt_filename;
+                            edl.append(
+                                "!new_stream",
+                                ...EDL.repeat(null_filename, {end:app.null_stream_duration, duration:duration})
+                            );
+                        }
+                    }
+                }
+                if (edl.length > 1) {
+                    if (filename) {
+                        edl.append("!new_stream");
+                        edl.append(new EDLEntry(EDL.escape(filename), {
+                            length:duration.toFixed(3)
+                        }));
+                    }
+                    filename = edl.toString();
+                }
+            }
+        }
+        
+        if (!duration) duration = (mi && mi.duration) || 0;
+
+        if (!is_image) {
+            if (item.props.clip_start || item.props.clip_loops || item.props.clip_end || item.props.clip_offset || item.props.clip_duration || !is_root) {
+                let opts = {
+                    start: item.props.clip_start,
+                    end: item.props.clip_end || duration,
+                    loops: item.props.clip_loops,
+                    offset: item.props.clip_offset,
+                    duration: item.props.clip_duration,
+                };
+                let temp_edl = EDL.repeat(filename, opts);
+                duration = temp_edl.duration;
+                filename = temp_edl.toString();
+            }
+        }
+
+        return {filename, duration};
+    }
 
     // /** @param {InternalSession.PlaylistItem} item */
     async loadfile(item, opts) {
-
-        const fix_item = (item)=>{
-            if (typeof item !== "object" || item === null) item = { filename: item || null };
-            if (!item.id) item.id = utils.uuidb64();
-            if (!item.props) item.props = {};
-            return item;
-        }
 
         opts = Object.assign({
             reload_props: true,
         }, opts);
 
         let last_id = this.loaded_item && this.loaded_item.id;
-        let last_props = this.$.props;
-
-        this.$.playing = false;
-        this.$.seekable_ranges = [];
-        this.$.preloaded = false;
-        this.$.loaded = false;
-        this.$.props = {};
+        let last_props = utils.deep_copy(this.$.props);
 
         // this.$.current_item_on_load = utils.deep_copy(item);
         // this.$.current_descendents_on_load = utils.deep_copy(this.get_playlist_items(id, null, true));
@@ -1135,7 +1292,7 @@ class MPVSessionWrapper extends MPVWrapper {
                 props[k] = item.props[k];
             }
         } else {
-            props = last_props
+            props = last_props;
         }
         if (last_id !== item.id) {
             this.#current_props_override = {};
@@ -1143,184 +1300,12 @@ class MPVSessionWrapper extends MPVWrapper {
         for (let k in this.#current_props_override) {
             props[k] = this.#current_props_override[k];
         }
-
-        let edl_track_types = ["video", "audio", "sub"];
         
-        /** @param {{offset:number, duration:number, media_type:string}} opts */
-        const process = async (item, opts)=>{
-            opts = Object.assign({}, opts);
-            let is_root = item === this.loaded_item;
-            item = fix_item(item);
-            let duration = opts.duration || 0;
-            let offset = opts.offset || 0;
-            let is_playlist = item.filename && this.session.is_item_playlist(item.id);
-            let mi = await app.probe_media(item.filename);
-            let exists = mi.exists;
-            let is_image = mi.duration <= 0.04;
-            let filename = item.filename;
-            var duration_override = Number.MAX_SAFE_INTEGER;
-            var use_duration_override = false;
-
-            if (is_playlist && (item.props.playlist_mode || !is_root)) {
-                exists = true;
-                let is_2track = item.props.playlist_mode == 2;
-                let edl = new EDL();
-                let tracks = [];
-                let playlist_tracks = this.session.get_playlist_tracks(item.id);
-                
-                for (var i = 0; i < playlist_tracks.length; i++) {
-                    let track = {
-                        entries: [],
-                        duration: 0
-                    };
-                    if (is_2track) {
-                        track.type = edl_track_types[i];
-                    }
-                    let o = offset;
-                    for (let item of playlist_tracks[i]) {
-                        if (item.filename == "livestreamer://exit") {
-                            duration_override = Math.min(duration_override, track.duration);
-                            use_duration_override = true;
-                        }
-                        let opts = {};
-                        if (track.type) opts.media_type = track.type;
-                        opts.offset = o;
-                        let tmp = await process(item, opts);
-                        let fade_in = utils.round_precise(+item.props.fade_in || 0, 3);
-                        let fade_out = utils.round_precise(+item.props.fade_out || 0, 3);
-                        if (fade_in) {
-                            if (!is_2track || i == 0) this.loaded_item.fades.push(["v", "in", o, fade_in])
-                            if (!is_2track || i == 1) this.loaded_item.fades.push(["a", "in", o, fade_in])
-                        }
-                        track.duration += tmp.duration;
-                        o += tmp.duration;
-                        if (fade_out) {
-                            if (!is_2track || i == 0) this.loaded_item.fades.push(["v", "out", o-fade_out, fade_out])
-                            if (!is_2track || i == 1) this.loaded_item.fades.push(["a", "out", o-fade_out, fade_out])
-                        }
-                        if (tmp.duration > 0) {
-                            track.entries.push(new EDLEntry(EDL.escape(tmp.filename), {
-                                length: tmp.duration.toFixed(3)
-                            }));
-                        }
-                    }
-                    tracks.push(track);
-                }
-
-                var min_duration = Math.min(...tracks.map((t)=>t.duration));
-                var max_duration = Math.max(...tracks.map((t)=>t.duration));
-                if (item.props.playlist_end_on_shortest_track) {
-                    duration = min_duration;
-                } else {
-                    duration = max_duration;
-                }
-                if (use_duration_override) {
-                    duration = duration_override;
-                }
-
-                offset += duration;
-
-                for (let track of tracks) {
-                    if (is_2track) {
-                        let pad_duration = max_duration - track.duration;
-                        // add padding to track if necessary
-                        if (pad_duration > 0.05) {
-                            if (track.type == "audio" && item.props.playlist_revert_to_video_track_audio && tracks[0].duration > tracks[1].duration) {
-                                let tmp_filename = new EDL(tracks[0].entries).toString();
-                                track.entries.push(new EDLEntry(EDL.escape(tmp_filename), {
-                                    start: (tracks[1].duration).toFixed(3),
-                                    length: (tracks[0].duration - tracks[1].duration).toFixed(3)
-                                }));
-                            } else {
-                                let tmp = await process(null, {duration: pad_duration, media_type: track.type, offset});
-                                track.entries.push(new EDLEntry(EDL.escape(tmp.filename), {
-                                    length: pad_duration.toFixed(3)
-                                }));
-                            }
-                        }
-                        if (track.entries.length && track.type) {
-                            edl.append(
-                                "!new_stream",
-                                new EDLEntry("!delay_open", {
-                                    media_type: track.type
-                                })
-                            );
-                        }
-                    }
-                    edl.append(...track.entries);
-                }
-                
-                if (edl.length) {
-                    duration = duration || edl.duration;
-                    filename = edl.toString();
-                }
-
-            } else if (!is_root) {
-                // files, nulls and whatnot
-                if (!exists || is_image) filename = null;
-                let stream_map = {};
-                let edl = new EDL();
-                edl.append("!no_chapters");
-                if (!duration) {
-                    duration = (item.props.clip_end - item.props.clip_start) || item.props.title_duration || item.props.empty_duration || mi.duration;
-                }
-                if (duration) {
-                    if (mi && mi.streams) {
-                        for (let s of mi.streams) stream_map[s.type] = !s.albumart;
-                    }
-                    let required_stream_types = opts.media_type ? [opts.media_type] : ["video","audio"];
-                    for (let t of required_stream_types) {
-                        if (!stream_map[t]) {
-                            let null_filename;
-                            if (t === "audio") null_filename = app.null_audio_path;
-                            else if (t === "video") null_filename = app.null_video_path;
-                            if (null_filename) {
-                                var alt_filename = path.relative(this.cwd, null_filename); // significantly shortens path hopefully
-                                if (alt_filename.length < null_filename) null_filename = alt_filename;
-                                edl.append(
-                                    "!new_stream",
-                                    ...EDL.repeat(null_filename, {end:app.null_stream_duration, duration:duration})
-                                );
-                            }
-                        }
-                    }
-                    if (edl.length > 1) {
-                        if (filename) {
-                            edl.append("!new_stream");
-                            edl.append(new EDLEntry(EDL.escape(filename), {
-                                length:duration.toFixed(3)
-                            }));
-                        }
-                        filename = edl.toString();
-                    }
-                }
-            }
-            
-            if (!duration) duration = (mi && mi.duration) || 0;
-
-            if (!is_image) {
-                if (item.props.clip_start || item.props.clip_loops || item.props.clip_end || item.props.clip_offset || item.props.clip_duration || !is_root) {
-                    let opts = {
-                        start: item.props.clip_start,
-                        end: item.props.clip_end || duration,
-                        loops: item.props.clip_loops,
-                        offset: item.props.clip_offset,
-                        duration: item.props.clip_duration,
-                    };
-                    let temp_edl = EDL.repeat(filename, opts);
-                    duration = temp_edl.duration;
-                    filename = temp_edl.toString();
-                }
-            }
-    
-            return {filename, duration};
-        };
-    
-        let {filename, duration} = await process(item);
+        let {filename, duration} = await this.#process(item);
 
         this.logger.debug(filename);
 
-        if (!filename) filename = "livestreamer://empty"
+        if (!filename) filename = "livestreamer://empty";
 
         let ls_path, is_intertitle, is_rtmp, is_empty, is_macro;
         let is_image = mi.duration <= 0.04;
@@ -1419,9 +1404,10 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
 
         const register_streams = (...new_streams)=>{
             for (let s of new_streams) {
-                s = utils.deep_copy(s);
                 s.id = streams.length;
                 if (s.type == "video") {
+                    // some track have 0 duration.
+                    // if (s.duration != undefined && s.duration <= 0.04) s.albumart = true;
                     s.type_id = ++num_videos;
                 } else if (s.type == "audio") {
                     s.type_id = ++num_audios;
@@ -1433,16 +1419,17 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
         }
 
         const register_file_streams = async (file, type) =>{
-            let mi = await app.probe_media(file);
-            var albumart = mi.duration <= 0.04;
-            if (mi.streams) {
-                var streams = filter_streams(mi.streams, type);
-                if (streams.length) {
-                    if (albumart) streams = streams.map(s=>({...s, albumart:true}));
-                    register_streams(...streams);
-                    return true;
-                }
+            let mi = utils.deep_copy(await app.probe_media(file));
+            if (!mi.streams) return;
+            var streams = filter_streams(mi.streams, type);
+            if (!streams.length) return;
+            for (var id = 0; id<streams.length; id++) {
+                let s = streams[id];
+                let filename = `${path.basename(file)}:${id+1}`;
+                s.title = [s.title, filename].filter(s=>s).join(" | ");
             }
+            register_streams(...streams);
+            return true;
         }
 
         if (mi.streams) {
@@ -1455,9 +1442,14 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
             register_streams({type:"subtitle"});
         }
 
-        let vid = fix_stream_id(props.video_track, streams, "video");
-        let aid = fix_stream_id(props.audio_track, streams, "audio");
-        let sid = fix_stream_id(props.subtitle_track, streams, "subtitle");
+        var get_default_stream_id = (type)=>{
+            var default_stream = utils.get_default_stream(streams.filter(s=>s.type==type), type);
+            return default_stream ? default_stream.type_id : false;
+        }
+
+        let vid_auto = get_default_stream_id("video");
+        let aid_auto = get_default_stream_id("audio");
+        let sid_auto = get_default_stream_id("subtitle");
 
         let video_files = [];
         let audio_files = [];
@@ -1486,12 +1478,15 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
                 data = [EDL.repeat(filename,  {start, end, duration}).toString(), "select", video_name, "eng", "no"];
             }
             if (mi.streams) {
-                var new_streams = mi.streams.filter(s=>s.type=="video").map(s=>({...s, external:true, albumart}));
-                if (new_streams.length) {
-                    vid = num_videos + 1;
-                    register_streams(...new_streams);
+                /** @type {object[]} */
+                let streams = utils.deep_copy(mi.streams);
+                // video-add also adds audio and subs... we must register them
+                var first_video_stream = streams.find(s=>s.type === "video");
+                if (first_video_stream) {
+                    first_video_stream.albumart = albumart;
+                    vid_auto = num_videos + 1; // select first video track added
                 }
-                // video-add also adds audio and subs... but should be OK to ignore them
+                register_streams(...streams);
                 on_load_commands.push(["video-add", ...data]);
             }
         }
@@ -1499,14 +1494,14 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
             var n = num_subtitles;
             if (await register_file_streams(filename, "subtitle")) {
                 subtitle_files.push(filename);
-                sid = n+1;
+                sid_auto = n+1;
             }
         };
         const add_audio = async (filename)=>{
             var n = num_audios;
             if (await register_file_streams(filename, "audio")) {
                 audio_files.push(filename);
-                aid = n+1;
+                aid_auto = n+1;
             }
         };
 
@@ -1535,13 +1530,6 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
                     external_artworks.push(path.join(dir, f))
                 }
             }
-        }
-
-        if (props.subtitle_file) {
-            await add_subtitle(props.subtitle_file);
-        }
-        if (props.audio_file) {
-            await add_audio(props.audio_file);
         }
 
         let fix_background_file = async (f)=>{
@@ -1589,7 +1577,7 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
                 let external_artwork_stream = streams.find(s=>s.type==="video" && s.externals.albumart)
                 if (background_mode == "embedded") artwork_stream = embedded_artwork_stream
                 if (background_mode == "external") artwork_stream = external_artwork_stream || embedded_artwork_stream;
-                if (artwork_stream) vid = artwork_stream.type_id;
+                if (artwork_stream) vid_auto = artwork_stream.type_id;
                 else background_mode = "logo";
             }
             if (background_mode == "file") {
@@ -1597,13 +1585,24 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
             } else if (background_mode == "logo") {
                 await add_video(path.resolve(core.conf["main.logo_path"]));
             } else if (background_mode == "color") {
-                vid = 0;
+                // vid_auto = 0; // ?
             }
         }
 
-        if (is_intertitle || (!num_videos && num_subtitles)) {
-            sid = 1; // select sub if no video exists
+        if (props.subtitle_file) {
+            await add_subtitle(props.subtitle_file);
         }
+        if (props.audio_file) {
+            await add_audio(props.audio_file);
+        }
+
+        if (is_intertitle || (!num_videos && num_subtitles)) {
+            sid_auto = 1; // select sub if no video exists
+        }
+
+        let vid = fix_stream_id(props.vid_override ?? vid_auto, streams, "video");
+        let aid = fix_stream_id(props.aid_override ?? aid_auto, streams, "audio");
+        let sid = fix_stream_id(props.sid_override ?? sid_auto, streams, "subtitle");
 
         // -------------------------------------------------
         
@@ -1625,6 +1624,7 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
                     `[vid${vid||1}]scale=${this.width}x${this.height}:force_original_aspect_ratio=decrease[img1]`,
                     `[bg1][img1]${overlay_center}`
                 )
+                // vid = "generated";
             }
             if (show_waveform) {
                 let wave_w = Math.min(1280, this.width) // cap it at 1280 or it lags.
@@ -1641,9 +1641,10 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
                     `[ai]dynaudnorm,${showwaves},fps=${fps}[wf1]`,
                     `[img2][wf1]${overlay_center}`
                 );
+                // aid = "generated";
             }
         }
-    
+        
         if (!aid) {
             is_special = true;
             ao.push("anullsrc=cl=stereo:r=48000");
@@ -1661,7 +1662,6 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
         let special_start_time = 0
         if (seekable && start_time && is_special) {
             special_start_time = start_time;
-            // duration -= start_time;
             start_time = 0;
         }
         
@@ -1677,13 +1677,6 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
         };
 
         filename = try_edlify(filename);
- 
-        this.$.time = 0;
-        this.$.is_special = is_special;
-        this.$.seekable = seekable;
-        this.$.special_start_time = special_start_time;
-        this.$.duration = duration;
-        this.$.streams = streams;
 
         props.pause = !!opts.pause;
         props.start = start_time;
@@ -1698,6 +1691,7 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
         // ---------------------
         // edl fades
         {
+            let [w,h] = [this.width, this.height];
             let ass;
             for (let [type,dir,offset,dur] of this.loaded_item.fades) {
                 offset = Math.max(0, offset - (special_start_time || 0));
@@ -1706,8 +1700,8 @@ Dialogue: 0,${start},${end},livestreamer-default,,0,0,0,,${text}`;
                     if (!ass) {
                         ass =
 `[Script Info]
-PlayResX: 1280
-PlayResY: 720
+PlayResX: ${w}
+PlayResY: ${h}
 
 [V4+ Styles]
 Format: Name,PrimaryColour,Alignment,Encoding
@@ -1727,7 +1721,7 @@ Format: Start,End,Style,Text`+"\n";
                     let start = offset - o;
                     let end = offset + dur;
                     let f = `{\\fade(${alphas},${fade.map(f=>Math.round(f*1000)).join(",")})}`;
-                    let c = `{\\p1}m 0 0 l 1280 0 1280 720 0 720{\\p0}`;
+                    let c = `{\\p1}m 0 0 l ${w} 0 ${w} ${h} 0 ${h}{\\p0}`;
                     ass += `Dialogue: ${ass_time(start*1000)},${ass_time(end*1000)},F1,${f+c}\n`;
                 } else if (type.startsWith("a")) {
                     this.loaded_item.af_graph.push(`afade=enable='between(t,${offset},${offset+dur})':t=${dir}:st=${offset}:d=${dur}`);
@@ -1759,99 +1753,91 @@ Format: Start,End,Style,Text`+"\n";
         for (var f of audio_files) {
             on_load_commands.push(["audio-add", try_edlify(f.filename), "select", f.name]);
         }
-        
-        props.vid = vid;
-        props.aid = aid;
-        props.sid = sid;
 
+        props.vid_auto = vid_auto;
+        props.sid_auto = sid_auto;
+        props.aid_auto = aid_auto;
+
+        /////////////////////////////////////////////////
+        //                THE BIG APPLY                //
+        /////////////////////////////////////////////////
+
+        this.$.playing = false;
+        this.$.loaded = false;
+        this.$.seekable_ranges = [];
+        this.$.time = start_time;
+        this.$.duration = duration;
+        this.$.special_start_time = special_start_time;
+        this.$.is_special = is_special;
+        this.$.seekable = seekable;
+        this.$.streams = streams;
+
+        this.$.props = props;
+        this.#mpv_load_props = {};
         for (var k in props) {
             this.set_property(k, props[k]);
         }
-        
         this.rebuild_filters();
         this.rebuild_deinterlace();
         this.update_volume(true);
 
-        let mpv_props = {};
-        for (var k in this.$.props) {
-            if (this.allowed_mpv_props[k]) mpv_props[k] = this.$.props[k];
-        }
-
-        this.$.preloaded = true;
-
-        await this.on_load_promise(this.lua_message("loadfile", filename, mpv_props, on_load_commands));
-        
-        // await this.on_load_promise();
+        if (vid != null) this.#mpv_load_props.vid = vid || false;
+        if (aid != null) this.#mpv_load_props.aid = aid || false;
+        if (sid != null) this.#mpv_load_props.sid = sid || false;
+        if (this.$.seekable) this.#mpv_load_props.start = String(start_time);
+        await this.on_load_promise(this.lua_message("loadfile", filename, this.#mpv_load_props, on_load_commands));
 
         return filename;
     }
 
-    async set_property(k, v, current_file_override=false) {
-        let changed = this.$.props[k] != v;
-        
-        this.$.props[k] = v;
+    async set_property(key, value, current_file_override=false) {
+        let changed = this.$.props[key] != value;
+        this.$.props[key] = value;
+        let mpv_key = key, mpv_value = value;
+
         if (current_file_override) {
-            /* if (v == null) delete this.#current_props_override[k];
-            else */
-            this.#current_props_override[k] = v;
+            this.#current_props_override[key] = value;
         }
 
-        if (k === "time") {
-            if (this.$.preloaded) {
-                this.seek(v);
-            } else {
-                k = "start";
-            }
+        var reload = false;
+
+        if (key === "start" || key === "end") {
+            mpv_value = String(value);
+        } else if (key === "deinterlace_mode") {
+            this.deinterlace_dirty = true;
+        } else if (key === "audio_channels" || key === "volume_normalization" || key.startsWith("crop_")) { // || k === "force_fps"
+            this.filters_dirty = true;
+        } else if (key === "audio_visualization") {
+            reload = true;
+        } else if (key === "aspect_ratio") {
+            mpv_key = "video-aspect-override";
+        } else if (key === "audio_delay") {
+            if (this.is_encoding) this.filters_dirty = true;
+            else mpv_key = "audio-delay";
+        } else if (key === "sub_delay") {
+            mpv_key = "sub-delay";
+        } else if (key === "sub_scale") {
+            mpv_key = "sub-scale";
+        } else if (key === "sub_pos") {
+            mpv_key = "sub-pos";
+        } else if (key === "audio_pitch_correction") {
+            mpv_key = "audio-pitch-correction";
+        } else if (key === "vid_override" || key === "aid_override" || key === "sid_override") {
+            reload = true;
         }
         
-        if (!this.$.seekable && k === "start") return;
-
-        if (k === "start" || k === "end") {
-            v = String(v);
+        if (this.allowed_mpv_props[mpv_key]) {
+            this.#mpv_expected_props[mpv_key] = mpv_value;
         }
-
-        const reload = ()=>{
-            if (changed && this.$.preloaded) {
-                setImmediate(()=>{
-                    this.reload(false);
-                });
-            }
+        if (!this.$.loaded) {
+            this.#mpv_load_props[mpv_key] = mpv_value;
+            return;
         }
-
-        if (k === "deinterlace_mode") {
-            this.deinterlace_dirty = true;
-        } else if (k === "audio_channels" || k === "volume_normalization" || k.startsWith("crop_")) { // || k === "force_fps"
-            this.filters_dirty = true;
-        } else if (k === "audio_visualization") {
-            reload();
-        } else if (k === "aspect_ratio") {
-            k = "video-aspect-override";
-        // } else if (k === "loop_file") {
-        //     k = "loop-file";
-        } else if (k === "audio_delay") {
-            if (this.is_encoding) this.filters_dirty = true;
-            else k = "audio-delay";
-            // k = "audio-delay";
-            // reload();
-        } else if (k === "sub_delay") {
-            k = "sub-delay";
-        } else if (k === "sub_scale") {
-            k = "sub-scale";
-        } else if (k === "sub_pos") {
-            k = "sub-pos";
-        } else if (k === "audio_pitch_correction") {
-            k = "audio-pitch-correction";
-        } else if (k === "video_track" || k === "audio_track" || k === "subtitle_track") {
-            reload();
-        } else if (k === "speed") {
-            v = 1;
+        if (reload && changed) {
+            return this.reload(false);
         }
-        //  else if (k === "paused") {
-        //     k = "pause";
-        // }
-        this.$.props[k] = v;
-        if (this.$.preloaded && this.allowed_mpv_props[k]) {
-            return super.set_property(k, v);
+        if (this.allowed_mpv_props[mpv_key]) {
+            return super.set_property(mpv_key, mpv_value);
         }
     }
 
@@ -1864,94 +1850,88 @@ Format: Start,End,Style,Text`+"\n";
     update_volume(immediate = false) {
         let target_volume = this.session.$.volume_target * this.$.props.volume_multiplier;
         let curr_volume = this.$.props.volume ?? 100;
-        if (curr_volume != target_volume) {
-            let inc = this.session.$.volume_speed;
-            if (inc == 0 || immediate) {
-                curr_volume = target_volume;
-            } else {
-                if (curr_volume < target_volume) {
-                    curr_volume = Math.min(curr_volume + inc, target_volume);
-                } else if (curr_volume > target_volume) {
-                    curr_volume = Math.max(curr_volume - inc, target_volume);
-                }
+        this.set_property("volume_target", target_volume);
+        // if (curr_volume == target_volume) return;
+        let inc = this.session.$.volume_speed;
+        if (inc == 0 || immediate) {
+            curr_volume = target_volume;
+        } else {
+            if (curr_volume < target_volume) {
+                curr_volume = Math.min(curr_volume + inc, target_volume);
+            } else if (curr_volume > target_volume) {
+                curr_volume = Math.max(curr_volume - inc, target_volume);
             }
-            this.set_property("volume", curr_volume);
         }
+        this.curr_volume = curr_volume;
+        this.set_property("volume", curr_volume);
     }
 
-    async tick() {
-
+    async #tick() {
         /* if (this.do_reload) {
             this.do_reload = false;
             this.reload(false);
         } */
-
         if (this.filters_dirty) {
             this.rebuild_filters();
         }
         if (this.deinterlace_dirty) {
             this.rebuild_deinterlace();
         }
-
         if (this.$.playing) {
-
             this.update_volume();
-            
-            if (this.#ticks % TICK_RATE == 0) {
+        }
+    }
 
-                this.session.$.time = this.$.time;
+    async #long_tick() {
+        this.session.$.time = this.$.time;
 
-                let ts = Date.now();
-                if (this.$.props["output-pts"]) {
-                    let diff_pts = (this.$.props["output-pts"] - this.#mpv_last_pts) * 1000;
-                    let diff_ts = ts - this.#mpv_last_speed_check;
-                    let speed = (diff_pts / diff_ts);
-                    if (isNaN(speed) || speed < 0) speed = 0;
-                    // let f = this.$["output-frames"];
-                    this.speed = speed;
-                    this.emit("speed", speed);
-                }
-                this.#mpv_last_pts = this.$.props["output-pts"];
-                this.#mpv_last_speed_check = ts;
+        let ts = Date.now();
+        if (this.$.props["output-pts"]) {
+            let diff_pts = (this.$.props["output-pts"] - this.#mpv_last_pts) * 1000;
+            let diff_ts = ts - this.#mpv_last_speed_check;
+            let speed = (diff_pts / diff_ts);
+            if (isNaN(speed) || speed < 0) speed = 0;
+            // let f = this.$["output-frames"];
+            this.speed = speed;
+            this.emit("speed", speed);
+        }
+        this.#mpv_last_pts = this.$.props["output-pts"];
+        this.#mpv_last_speed_check = ts;
 
-                (async ()=>{
-                    let new_ranges;
-                    let demuxer_cache_state = (await this.get_property("demuxer-cache-state").catch(()=>null));
-                    // console.log(demuxer_cache_state);
-                    if (demuxer_cache_state) {
-                        new_ranges = demuxer_cache_state["seekable-ranges"];
-                    }
-                    if (JSON.stringify(new_ranges) != JSON.stringify(this.$.seekable_ranges)) {
-                        this.$.seekable_ranges = new_ranges || [];
-                    }
-                })();
+        (async ()=>{
+            let new_ranges;
+            let demuxer_cache_state = (await this.get_property("demuxer-cache-state").catch(()=>null));
+            // console.log(demuxer_cache_state);
+            if (demuxer_cache_state) {
+                new_ranges = demuxer_cache_state["seekable-ranges"];
+            }
+            if (JSON.stringify(new_ranges) != JSON.stringify(this.$.seekable_ranges)) {
+                this.$.seekable_ranges = new_ranges || [];
+            }
+        })();
 
-                if (!this.is_encoding) {
-                    let interpolation_mode = this.session.$.interpolation_mode || false;
-                    let curr_val = this.$.props.interpolation;
-                    let new_val = curr_val;
-                    if (interpolation_mode == "auto") {
-                        let df = this.session.$.auto_interpolation_rate || 30;
-                        let vf = this.$.props["estimated-vf-fps"];
-                        if (vf) {
-                            if (vf < df) {
-                                let r =  df % vf;
-                                new_val = r > 0.1;
-                            } else {
-                                new_val = false
-                            }
-                        }
+        if (!this.is_encoding) {
+            let interpolation_mode = this.session.$.interpolation_mode || false;
+            let curr_val = this.$.props.interpolation;
+            let new_val = curr_val;
+            if (interpolation_mode == "auto") {
+                let df = this.session.$.auto_interpolation_rate || 30;
+                let vf = this.$.props["estimated-vf-fps"];
+                if (vf) {
+                    if (vf < df) {
+                        let r =  df % vf;
+                        new_val = r > 0.1;
                     } else {
-                        new_val = interpolation_mode;
-                    }
-                    if (curr_val != new_val) {
-                        this.set_property("interpolation", new_val);
+                        new_val = false
                     }
                 }
+            } else {
+                new_val = interpolation_mode;
+            }
+            if (curr_val != new_val) {
+                this.set_property("interpolation", new_val);
             }
         }
-
-        this.#ticks++;
     }
 
     rebuild_deinterlace() {
@@ -2047,7 +2027,7 @@ Format: Start,End,Style,Text`+"\n";
 
         let has_2_channels = (()=>{
             var streams = this.$.streams;
-            return (get_stream_by_id(this.$.props.audio_track, streams, "audio") || get_stream_by_id("auto", streams, "audio") || {}).channels == 2;
+            return (get_stream_by_id(this.$.props.aid, streams, "audio") || get_stream_by_id("auto", streams, "audio") || {}).channels == 2;
         })();
 
         let ac = this.$.props.audio_channels;
@@ -2095,6 +2075,13 @@ Format: Start,End,Style,Text`+"\n";
         this.set_property("af", af);
         this.set_property("vf", vf);
     }
+}
+
+const fix_item = (item)=>{
+    if (typeof item !== "object" || item === null) item = { filename: item || null };
+    if (!item.id) item.id = utils.uuidb64();
+    if (!item.props) item.props = {};
+    return item;
 }
 
 function filter_streams(streams, type) {
